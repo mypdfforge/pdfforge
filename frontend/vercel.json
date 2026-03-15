@@ -1,8 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "https://mypdfforge.onrender.com/api/$1"
+      "source": "/api/:path*",
+      "destination": "https://mypdfforge.onrender.com/api/:path*"
     }
   ]
 }
