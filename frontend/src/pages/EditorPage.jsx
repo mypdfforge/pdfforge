@@ -18,7 +18,8 @@ function PreviewModal({ sessionId, sections, onClose }) {
     const load = async () => {
       setLoading(true); setError('')
       try {
-        const { data } = await axios.post(`/api/export/${sessionId}/preview-edited`, { blocks: sections })
+        const BASE = import.meta.env.VITE_API_URL || 'https://mypdfforge.onrender.com/api'
+        const { data } = await axios.post(`${BASE}/export/${sessionId}/preview-edited`, { blocks: sections })
         if (!cancelled) { setPages(data.pages); setLoading(false) }
       } catch(e) {
         if (!cancelled) { setError('Preview failed. Is backend running?'); setLoading(false) }
