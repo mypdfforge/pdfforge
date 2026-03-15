@@ -79,6 +79,7 @@ Remember: ONLY suggest replacements for existing lines. Return JSON array only."
             headers={
                 "Content-Type":      "application/json",
                 "anthropic-version": "2023-06-01",
+                "x-api-key":         os.environ.get("ANTHROPIC_API_KEY", ""),
             },
             method="POST"
         )
