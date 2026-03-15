@@ -1,0 +1,27 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:      #0d0d14;
+  --bg2:     #13131e;
+  --bg3:     #191926;
+  --bg4:     #1f1f2e;
+  --border:  #252538;
+  --border2: #2e2e48;
+  --accent:  #6c63ff;
+  --accent2: #9d97ff;
+  --green:   #3ecf8e;
+  --gold:    #f5a623;
+  --red:     #e5534b;
+  --pink:    #e879f9;
+  --text:    #eeeef5;
+  --text2:   #9898b8;
+  --text3:   #5a5a78;
+}
+body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; -webkit-font-smoothing:antialiased; }
+::-webkit-scrollbar { width:5px; height:5px; }
+::-webkit-scrollbar-track { background:var(--bg2); }
+::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+@keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+.fade-up { animation:fadeUp 0.4s ease forwards; }
+.spin { animation:spin 0.7s linear infinite; }

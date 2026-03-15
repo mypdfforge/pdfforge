@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+backend/venv/
+backend/.env
+backend/services/NotoSans-*.ttf
+*.tmp
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.pdf
+*.zip
+*.docx
+*.xlsx
+*.pptx
+/tmp/
