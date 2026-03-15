@@ -2,7 +2,7 @@ import axios from 'axios'
 
 // In production, VITE_API_URL is set to your Render backend URL
 // In development, Vite proxy forwards /api to localhost:8000
-const BASE = import.meta.env.VITE_API_URL || '/api'
+const BASE = import.meta.env.VITE_API_URL || 'https://mypdfforge.onrender.com/api'
 
 const api = axios.create({ baseURL: BASE })
 
