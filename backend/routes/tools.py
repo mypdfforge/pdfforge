@@ -107,6 +107,32 @@ async def rotate(file: UploadFile = File(...), degrees: int = Form(90), pages: s
     doc.save(out); doc.close()
     return FileResponse(out, media_type="application/pdf", filename="rotated.pdf")
 
+# ── ROTATE VISUAL (per-page rotation map) ─────────────────────────────
+@router.post("/rotate-visual")
+async def rotate_visual(
+    file: UploadFile = File(...),
+    rotations: str = Form(...),
+):
+    import json
+    try:
+        rotation_map = json.loads(rotations)
+    except:
+        raise HTTPException(400, "Invalid rotations JSON")
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, "input.pdf")
+    out = os.path.join(tmp, "rotated.pdf")
+    with open(src, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    doc = fitz.open(src)
+    for page in doc:
+        page_num = str(page.number + 1)
+        if page_num in rotation_map:
+            deg = int(rotation_map[page_num]) % 360
+            doc[page.number].set_rotation(deg)
+    doc.save(out, garbage=4, deflate=True)
+    doc.close()
+    return FileResponse(out, media_type="application/pdf", filename="rotated.pdf")
+
 # ── DELETE PAGES ───────────────────────────────────────────────────────
 @router.post("/delete-pages")
 async def delete_pages(file: UploadFile = File(...), pages: str = Form(...)):
