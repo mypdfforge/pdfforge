@@ -1,5 +1,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:root {
+
+/* ── Dark theme (default) ── */
+:root, [data-theme="dark"] {
   --bg:      #0d0d14;
   --bg2:     #13131e;
   --bg3:     #191926;
@@ -13,10 +15,30 @@
   --red:     #e5534b;
   --pink:    #e879f9;
   --text:    #eeeef5;
-  --text2:   #c8c8e0;
-  --text3:   #9898b8;
+  --text2:   #d0d0e8;
+  --text3:   #b0b0cc;
 }
-body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; -webkit-font-smoothing:antialiased; }
+
+/* ── Light theme ── */
+[data-theme="light"] {
+  --bg:      #f5f5fa;
+  --bg2:     #ffffff;
+  --bg3:     #eeeef5;
+  --bg4:     #e5e5ef;
+  --border:  #dcdce8;
+  --border2: #c8c8d8;
+  --accent:  #6c63ff;
+  --accent2: #5550cc;
+  --green:   #16a066;
+  --gold:    #d48a00;
+  --red:     #d63a33;
+  --pink:    #c050d8;
+  --text:    #111118;
+  --text2:   #333344;
+  --text3:   #555566;
+}
+
+body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; -webkit-font-smoothing:antialiased; transition: background 0.2s, color 0.2s; }
 ::-webkit-scrollbar { width:5px; height:5px; }
 ::-webkit-scrollbar-track { background:var(--bg2); }
 ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:3px; }
@@ -25,3 +47,26 @@ body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); 
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 .fade-up { animation:fadeUp 0.4s ease forwards; }
 .spin { animation:spin 0.7s linear infinite; }
+
+input, select, textarea {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+input:focus, select:focus { border-color: var(--accent); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; border-radius: 8px; border: none;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: all 0.15s; font-family: inherit;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { opacity: 0.9; }
+.btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border) !important; }
+.btn-ghost:hover { border-color: var(--accent) !important; color: var(--accent2); }

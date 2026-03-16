@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
+import TopBar from '../components/TopBar'
 import {
-  ArrowLeft, Upload, Loader2, CheckCircle, AlertCircle,
+  Upload, Loader2, CheckCircle, AlertCircle,
   Type, Image as ImageIcon, Bold, Italic, Underline, ChevronDown
 } from 'lucide-react'
 import axios from 'axios'
@@ -87,7 +88,7 @@ function PageRangeControl({ onChange }) {
   )
 }
 
-export default function WatermarkToolPage({ onBack }) {
+export default function WatermarkToolPage({ onBack, dark, onToggleTheme }) {
   const [file,       setFile]       = useState(null)
   const [imageFile,  setImageFile]  = useState(null)
   const [mode,       setMode]       = useState('text')
@@ -178,14 +179,7 @@ export default function WatermarkToolPage({ onBack }) {
 
   return (
     <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column' }}>
-      <header style={{ height:'52px', padding:'0 24px', display:'flex', alignItems:'center', gap:'12px', borderBottom:'1px solid var(--border)', background:'rgba(13,13,20,0.97)', backdropFilter:'blur(12px)', position:'sticky', top:0, zIndex:50 }}>
-        <button onClick={onBack} style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'13px', color:'var(--text2)', background:'none', border:'1px solid var(--border)', borderRadius:'8px', padding:'5px 12px', cursor:'pointer' }}>
-          <ArrowLeft size={13}/> Back
-        </button>
-        <div style={{ width:'1px', height:'16px', background:'var(--border)' }}/>
-        <span style={{ fontWeight:700, color:'var(--text)' }}>◈ Add Watermark</span>
-        <span style={{ color:'var(--text3)', fontSize:'13px' }}>Text or image watermark with live preview</span>
-      </header>
+      <TopBar onBack={onBack} title="◈ Add Watermark" subtitle="Text or image watermark with live preview" dark={dark} onToggleTheme={onToggleTheme}/>
 
       <div style={{ display:'flex', flex:1, height:'calc(100vh - 52px)', overflow:'hidden' }}>
         <div style={{ width:'340px', flexShrink:0, borderRight:'1px solid var(--border)', overflowY:'auto', padding:'18px', display:'flex', flexDirection:'column', gap:'12px' }}>

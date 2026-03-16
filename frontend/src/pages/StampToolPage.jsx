@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { ArrowLeft, Upload, Loader2, CheckCircle, RefreshCw } from 'lucide-react'
+import { Upload, Loader2, CheckCircle, RefreshCw } from 'lucide-react'
+import TopBar from '../components/TopBar'
 import axios from 'axios'
 import { downloadBlob } from '../utils/api'
 
@@ -16,7 +17,7 @@ const STAMP_COLORS = {
   REJECTED:'#dd0000', FINAL:'#0033cc', COPY:'#3333bb',
 }
 
-export default function StampToolPage({ onBack }) {
+export default function StampToolPage({ onBack, dark, onToggleTheme }) {
   const [file,       setFile]       = useState(null)
   const [label,      setLabel]      = useState('APPROVED')
   const [customText, setCustomText] = useState('')
@@ -80,14 +81,7 @@ export default function StampToolPage({ onBack }) {
   return (
     <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column' }}>
 
-      {/* Header */}
-      <header style={{ height:'60px', padding:'0 24px', display:'flex', alignItems:'center', gap:'14px', borderBottom:'1px solid var(--border)', background:'rgba(13,13,20,0.97)', backdropFilter:'blur(12px)', position:'sticky', top:0, zIndex:50 }}>
-        <button onClick={onBack} style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'13px', color:'var(--text2)', background:'none', border:'1px solid var(--border)', borderRadius:'8px', padding:'5px 12px', cursor:'pointer' }}>
-          <ArrowLeft size={13}/> Back
-        </button>
-        <div style={{ width:'1px', height:'18px', background:'var(--border)' }}/>
-        <span style={{ fontSize:'16px', fontWeight:700, color:'var(--text)' }}>◆ Add Stamp</span>
-      </header>
+      <TopBar onBack={onBack} title="◆ Add Stamp" subtitle="Stamp APPROVED, DRAFT, CONFIDENTIAL and more" dark={dark} onToggleTheme={onToggleTheme}/>
 
       <div style={{ display:'flex', flex:1, height:'calc(100vh - 60px)', overflow:'hidden' }}>
 
