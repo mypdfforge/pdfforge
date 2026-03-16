@@ -128,20 +128,118 @@ async def compress(file: UploadFile = File(...)):
     doc.save(out, garbage=4, deflate=True, clean=True); doc.close()
     return FileResponse(out, media_type="application/pdf", filename="compressed.pdf")
 
-# ── WATERMARK (FIXED) ──────────────────────────────────────────────────
+# ── WATERMARK HELPERS ──────────────────────────────────────────────────
+def _resolve_text(text: str, page_num: int) -> str:
+    from datetime import date
+    text = text.replace("{{date}}", date.today().strftime("%Y-%m-%d"))
+    text = text.replace("{{page_number}}", str(page_num))
+    return text
+
+def _parse_page_range(page_range: str, total: int):
+    """Return list of 0-based page indices."""
+    page_range = page_range.strip().lower()
+    if page_range == "all":
+        return list(range(total))
+    if page_range == "odd":
+        return [i for i in range(total) if (i+1) % 2 == 1]
+    if page_range == "even":
+        return [i for i in range(total) if (i+1) % 2 == 0]
+    # custom: e.g. "1-3, 5, 7"
+    indices = set()
+    for part in page_range.split(","):
+        part = part.strip()
+        if "-" in part:
+            try:
+                a, b = part.split("-")
+                for n in range(int(a)-1, min(int(b), total)):
+                    indices.add(n)
+            except: pass
+        elif part.isdigit():
+            n = int(part) - 1
+            if 0 <= n < total:
+                indices.add(n)
+    return sorted(indices)
+
+def _hex_to_rgb(hex_color: str):
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) == 3:
+        hex_color = "".join(c*2 for c in hex_color)
+    r, g, b = int(hex_color[0:2],16), int(hex_color[2:4],16), int(hex_color[4:6],16)
+    return (r/255, g/255, b/255)
+
+def _apply_watermark_enhanced(page, text, font_size, rotation_deg, opacity, position, color_rgb, bold, italic):
+    """Draw watermark at a specific position or tiled."""
+    pw, ph = page.rect.width, page.rect.height
+    mat = fitz.Matrix(rotation_deg)
+    shape = page.new_shape()
+
+    if position == "tile":
+        # Draw tiled watermarks
+        spacing_x = pw / 3
+        spacing_y = ph / 4
+        for row in range(-1, 5):
+            for col in range(-1, 4):
+                cx = col * spacing_x + spacing_x / 2
+                cy = row * spacing_y + spacing_y / 2
+                shape.insert_text(
+                    fitz.Point(cx, cy), text,
+                    fontsize=font_size,
+                    color=color_rgb,
+                    morph=(fitz.Point(cx, cy), fitz.Matrix(45)),
+                )
+    else:
+        # Position-based placement
+        margin = 60
+        pos_map = {
+            "top-left":       (margin,        font_size + margin),
+            "top-center":     (pw/2,           font_size + margin),
+            "top-right":      (pw - margin,    font_size + margin),
+            "middle-left":    (margin,         ph/2),
+            "middle-center":  (pw/2,           ph/2),
+            "middle-right":   (pw - margin,    ph/2),
+            "bottom-left":    (margin,         ph - margin),
+            "bottom-center":  (pw/2,           ph - margin),
+            "bottom-right":   (pw - margin,    ph - margin),
+        }
+        cx, cy = pos_map.get(position, (pw/2, ph/2))
+        shape.insert_text(
+            fitz.Point(cx, cy), text,
+            fontsize=font_size,
+            color=color_rgb,
+            morph=(fitz.Point(cx, cy), mat),
+        )
+
+    shape.commit(overlay=True)
+
+# ── WATERMARK ──────────────────────────────────────────────────────────
 @router.post("/watermark")
 async def watermark(
     file: UploadFile = File(...),
+    mode: str = Form("text"),
     text: str = Form("CONFIDENTIAL"),
     opacity: str = Form("0.25"),
     rotation: str = Form("45"),
     font_size: str = Form("52"),
+    font: str = Form("Helvetica"),
+    bold: str = Form("false"),
+    italic: str = Form("false"),
+    underline: str = Form("false"),
+    color: str = Form("#a0a0a0"),
+    position: str = Form("middle-center"),
+    layer: str = Form("over"),
+    page_range: str = Form("all"),
+    image: Optional[UploadFile] = File(None),
 ):
     try:
         rot = float(rotation)
         fs  = int(float(font_size))
+        op  = float(opacity)
     except:
-        rot, fs = 45.0, 52
+        rot, fs, op = 45.0, 52, 0.25
+
+    color_rgb = _hex_to_rgb(color)
+    # Apply opacity by blending towards white
+    color_rgb = tuple(1 - (1 - c) * op for c in color_rgb)
 
     tmp = tempfile.mkdtemp()
     src = os.path.join(tmp, "input.pdf")
@@ -150,8 +248,38 @@ async def watermark(
         with open(src, "wb") as f:
             shutil.copyfileobj(file.file, f)
         doc = fitz.open(src)
-        for page in doc:
-            _apply_watermark_text(page, text, fs, rot)
+        pages = _parse_page_range(page_range, doc.page_count)
+        overlay = layer != "under"
+
+        for n in pages:
+            if not (0 <= n < doc.page_count): continue
+            page = doc[n]
+            if mode == "image" and image:
+                img_path = os.path.join(tmp, "wm_image")
+                with open(img_path, "wb") as f:
+                    image.file.seek(0)
+                    shutil.copyfileobj(image.file, f)
+                pw, ph = page.rect.width, page.rect.height
+                wm_w, wm_h = 200, 100
+                margin = 40
+                pos_map = {
+                    "top-left":      fitz.Rect(margin, margin, margin+wm_w, margin+wm_h),
+                    "top-center":    fitz.Rect((pw-wm_w)/2, margin, (pw+wm_w)/2, margin+wm_h),
+                    "top-right":     fitz.Rect(pw-wm_w-margin, margin, pw-margin, margin+wm_h),
+                    "middle-left":   fitz.Rect(margin, (ph-wm_h)/2, margin+wm_w, (ph+wm_h)/2),
+                    "middle-center": fitz.Rect((pw-wm_w)/2, (ph-wm_h)/2, (pw+wm_w)/2, (ph+wm_h)/2),
+                    "middle-right":  fitz.Rect(pw-wm_w-margin, (ph-wm_h)/2, pw-margin, (ph+wm_h)/2),
+                    "bottom-left":   fitz.Rect(margin, ph-wm_h-margin, margin+wm_w, ph-margin),
+                    "bottom-center": fitz.Rect((pw-wm_w)/2, ph-wm_h-margin, (pw+wm_w)/2, ph-margin),
+                    "bottom-right":  fitz.Rect(pw-wm_w-margin, ph-wm_h-margin, pw-margin, ph-margin),
+                    "tile":          fitz.Rect((pw-wm_w)/2, (ph-wm_h)/2, (pw+wm_w)/2, (ph+wm_h)/2),
+                }
+                rect = pos_map.get(position, pos_map["middle-center"])
+                page.insert_image(rect, filename=img_path, overlay=overlay)
+            else:
+                resolved = _resolve_text(text, n+1)
+                _apply_watermark_enhanced(page, resolved, fs, rot, op, position, color_rgb, bold=="true", italic=="true")
+
         doc.save(out, garbage=4, deflate=True)
         doc.close()
     except Exception as e:
@@ -269,22 +397,58 @@ async def stamp_preview(
 @router.post("/watermark/preview")
 async def watermark_preview(
     file: UploadFile = File(...),
+    mode: str = Form("text"),
     text: str = Form("CONFIDENTIAL"),
     opacity: str = Form("0.25"),
     rotation: str = Form("45"),
     font_size: str = Form("52"),
+    font: str = Form("Helvetica"),
+    bold: str = Form("false"),
+    italic: str = Form("false"),
+    color: str = Form("#a0a0a0"),
+    position: str = Form("middle-center"),
+    layer: str = Form("over"),
+    image: Optional[UploadFile] = File(None),
 ):
-    opacity = float(opacity); rotation = int(rotation); font_size = int(font_size)
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,"input.pdf")
-    with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
+    try:
+        op  = float(opacity)
+        rot = float(rotation)
+        fs  = int(float(font_size))
+    except:
+        op, rot, fs = 0.25, 45.0, 52
+
+    color_rgb = _hex_to_rgb(color)
+    color_rgb = tuple(1 - (1 - c) * op for c in color_rgb)
+
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, "input.pdf")
+    with open(src, "wb") as f:
+        shutil.copyfileobj(file.file, f)
     doc = fitz.open(src)
-    page = doc[0]; pw,ph = page.rect.width, page.rect.height
-    tw = len(text)*font_size*0.5; x=(pw-tw)/2; y=ph/2+font_size/2
-    _apply_watermark_text(page, text, font_size, rotation)
-    mat = fitz.Matrix(0.7,0.7)
+    page = doc[0]
+
+    if mode == "image" and image:
+        img_path = os.path.join(tmp, "wm_image")
+        with open(img_path, "wb") as f:
+            shutil.copyfileobj(image.file, f)
+        pw, ph = page.rect.width, page.rect.height
+        wm_w, wm_h = 200, 100
+        margin = 40
+        pos_map = {
+            "middle-center": fitz.Rect((pw-wm_w)/2, (ph-wm_h)/2, (pw+wm_w)/2, (ph+wm_h)/2),
+            "tile":          fitz.Rect((pw-wm_w)/2, (ph-wm_h)/2, (pw+wm_w)/2, (ph+wm_h)/2),
+        }
+        rect = pos_map.get(position, fitz.Rect((pw-wm_w)/2, (ph-wm_h)/2, (pw+wm_w)/2, (ph+wm_h)/2))
+        page.insert_image(rect, filename=img_path, overlay=True)
+    else:
+        resolved = _resolve_text(text, 1)
+        _apply_watermark_enhanced(page, resolved, fs, rot, op, position, color_rgb, bold=="true", italic=="true")
+
+    mat = fitz.Matrix(0.7, 0.7)
     pix = page.get_pixmap(matrix=mat, alpha=False)
     b64 = base64.b64encode(pix.tobytes("png")).decode()
-    doc.close(); shutil.rmtree(tmp,ignore_errors=True)
+    doc.close()
+    shutil.rmtree(tmp, ignore_errors=True)
     return JSONResponse({"preview": f"data:image/png;base64,{b64}"})
 
 # ── PAGE NUMBERS ───────────────────────────────────────────────────────
