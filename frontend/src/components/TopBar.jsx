@@ -12,14 +12,19 @@ const CATEGORIES = [
 
 export default function TopBar({ onBack, title, subtitle, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const searchRef = useRef(null)
+
   useEffect(() => {
     const h = (e) => { if ((e.ctrlKey||e.metaKey) && e.key==='k') { e.preventDefault(); searchRef.current?.focus() } }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [])
+
   const bg = dark ? 'rgba(13,13,20,0.97)' : 'rgba(245,245,250,0.97)'
+
   return (
     <header style={{ background:bg, backdropFilter:'blur(12px)', borderBottom:'1px solid var(--border)', position:'sticky', top:0, zIndex:50 }}>
+
+      {/* ── Row 1: logo/back + right controls ── */}
       <div style={{ height:'52px', padding:'0 24px', display:'flex', alignItems:'center', gap:'12px' }}>
         {onBack ? (
           <>
@@ -45,25 +50,45 @@ export default function TopBar({ onBack, title, subtitle, dark, onToggleTheme, o
           {dark ? <Sun size={15}/> : <Moon size={15}/>}
         </button>
       </div>
+
+      {/* ── Row 2: categories + search (sticky, no overlap) ── */}
       {showCategories && (
-        <div style={{ borderTop:'1px solid var(--border)', background:bg, padding:'0 24px', display:'flex', alignItems:'center', gap:'4px', overflowX:'auto', scrollbarWidth:'none' }}>
+        <div style={{ borderTop:'1px solid var(--border)', background:bg, padding:'0 16px', display:'flex', alignItems:'center', overflowX:'auto', scrollbarWidth:'none', WebkitOverflowScrolling:'touch' }}>
+
+          <style>{`
+            .topbar-scroll::-webkit-scrollbar { display:none }
+            .cat-pill { background:none; border:none; border-bottom:2px solid transparent; padding:10px 14px; font-size:13px; font-weight:600; color:#b0b0cc; cursor:pointer; white-space:nowrap; flex-shrink:0; transition:color 0.15s, border-color 0.15s; }
+            .cat-pill:hover { color:#ffffff; border-bottom-color:rgba(108,99,255,0.45); }
+            .cat-pill.active { color:#ffffff; border-bottom-color:#6c63ff; }
+            .search-box { background:transparent; border:1px solid transparent; border-radius:999px; padding:5px 28px 5px 30px; font-size:13px; font-weight:500; color:#ffffff; outline:none; width:190px; transition:all 0.18s; font-family:inherit; }
+            .search-box::placeholder { color:#7070a0; }
+            .search-box:hover { border-color:rgba(108,99,255,0.4); box-shadow:0 0 0 3px rgba(108,99,255,0.1); }
+            .search-box:focus { border-color:#6c63ff; background:var(--bg3); box-shadow:0 0 0 3px rgba(108,99,255,0.2); }
+          `}</style>
+
           {CATEGORIES.map(c => (
-            <button key={c.id} onClick={() => onCategoryChange?.(c.id)}
-              style={{ flexShrink:0, fontSize:'13px', fontWeight:600, padding:'10px 16px', background:'none', border:'none',
-                borderBottom:`2px solid ${activeCategory===c.id ? '#6c63ff' : 'transparent'}`,
-                color: activeCategory===c.id ? '#ffffff' : '#b0b0cc',
-                cursor:'pointer', transition:'all 0.15s', whiteSpace:'nowrap' }}>
+            <button key={c.id} className={`cat-pill${activeCategory===c.id?' active':''}`} onClick={() => onCategoryChange?.(c.id)}>
               {c.label}
             </button>
           ))}
-          <div style={{ width:'1px', height:'18px', background:'var(--border)', flexShrink:0, margin:'0 6px' }}/>
+
+          {/* Divider */}
+          <div style={{ width:'1px', height:'18px', background:'var(--border)', flexShrink:0, margin:'0 8px' }}/>
+
+          {/* Search — right next to last category */}
           <div style={{ position:'relative', display:'flex', alignItems:'center', flexShrink:0 }}>
-            <Search size={13} color="#b0b0cc" style={{ position:'absolute', left:'10px', pointerEvents:'none' }}/>
-            <input ref={searchRef} value={search||''} onChange={e=>onSearch?.(e.target.value)} placeholder="Search tools… (Ctrl+K)"
-              style={{ background:'transparent', border:'1px solid transparent', borderRadius:'999px', padding:'6px 28px 6px 30px', fontSize:'13px', fontWeight:500, color:'#ffffff', outline:'none', width:'200px', transition:'all 0.15s' }}
-              onFocus={e=>{e.target.style.borderColor='var(--accent)';e.target.style.background='var(--bg3)'}}
-              onBlur={e=>{e.target.style.borderColor='transparent';e.target.style.background='transparent'}}/>
-            {search && <button onClick={()=>onSearch?.('')} style={{ position:'absolute', right:'8px', background:'none', border:'none', color:'#b0b0cc', cursor:'pointer', fontSize:'16px', lineHeight:1 }}>×</button>}
+            <Search size={13} color="#7070a0" style={{ position:'absolute', left:'11px', pointerEvents:'none' }}/>
+            <input
+              ref={searchRef}
+              className="search-box"
+              value={search||''}
+              onChange={e => onSearch?.(e.target.value)}
+              placeholder="Search tools…  Ctrl+K"
+            />
+            {search && (
+              <button onClick={() => onSearch?.('')}
+                style={{ position:'absolute', right:'10px', background:'none', border:'none', color:'#b0b0cc', cursor:'pointer', fontSize:'16px', lineHeight:1 }}>×</button>
+            )}
           </div>
         </div>
       )}
