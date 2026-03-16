@@ -17,7 +17,7 @@ const STAMP_COLORS = {
   REJECTED:'#dd0000', FINAL:'#0033cc', COPY:'#3333bb',
 }
 
-export default function StampToolPage({ onBack, dark, onToggleTheme }) {
+export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const [file,       setFile]       = useState(null)
   const [label,      setLabel]      = useState('APPROVED')
   const [customText, setCustomText] = useState('')
@@ -81,7 +81,7 @@ export default function StampToolPage({ onBack, dark, onToggleTheme }) {
   return (
     <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column' }}>
 
-      <TopBar onBack={onBack} title="◆ Add Stamp" subtitle="Stamp APPROVED, DRAFT, CONFIDENTIAL and more" dark={dark} onToggleTheme={onToggleTheme}/>
+      <TopBar onBack={onBack} title="◆ Add Stamp" subtitle="Stamp APPROVED, DRAFT, CONFIDENTIAL and more" dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome} showCategories={showCategories} activeCategory={activeCategory} onCategoryChange={onCategoryChange} search={search} onSearch={onSearch}/>
 
       <div style={{ display:'flex', flex:1, height:'calc(100vh - 60px)', overflow:'hidden' }}>
 

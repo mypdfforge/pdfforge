@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
+import CategoryBar from '../components/CategoryBar'
 import {
   Upload, Loader2, CheckCircle, AlertCircle,
   Type, Image as ImageIcon, Bold, Italic, Underline, ChevronDown
@@ -88,7 +89,7 @@ function PageRangeControl({ onChange }) {
   )
 }
 
-export default function WatermarkToolPage({ onBack, dark, onToggleTheme }) {
+export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const [file,       setFile]       = useState(null)
   const [imageFile,  setImageFile]  = useState(null)
   const [mode,       setMode]       = useState('text')
@@ -179,7 +180,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme }) {
 
   return (
     <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column' }}>
-      <TopBar onBack={onBack} title="◈ Add Watermark" subtitle="Text or image watermark with live preview" dark={dark} onToggleTheme={onToggleTheme}/>
+      <TopBar onBack={onBack} title="◈ Add Watermark" subtitle="Text or image watermark with live preview" dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome} showCategories={showCategories} activeCategory={activeCategory} onCategoryChange={onCategoryChange} search={search} onSearch={onSearch}/>
 
       <div style={{ display:'flex', flex:1, height:'calc(100vh - 52px)', overflow:'hidden' }}>
         <div style={{ width:'340px', flexShrink:0, borderRight:'1px solid var(--border)', overflowY:'auto', padding:'18px', display:'flex', flexDirection:'column', gap:'12px' }}>
