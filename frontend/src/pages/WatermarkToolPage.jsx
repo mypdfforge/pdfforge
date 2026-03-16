@@ -1,7 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
-import CategoryBar from '../components/CategoryBar'
 import {
   Upload, Loader2, CheckCircle, AlertCircle,
   Type, Image as ImageIcon, Bold, Italic, Underline, ChevronDown

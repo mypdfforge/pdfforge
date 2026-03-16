@@ -4,6 +4,7 @@ import EditorPage       from './pages/EditorPage'
 import ToolPage         from './pages/ToolPage'
 import StampToolPage    from './pages/StampToolPage'
 import WatermarkToolPage from './pages/WatermarkToolPage'
+import CropToolPage     from './pages/CropToolPage'
 import './index.css'
 
 export default function App() {
@@ -31,6 +32,7 @@ export default function App() {
     if (id === 'editor')    return setPage({ type:'editor' })
     if (id === 'stamp')     return setPage({ type:'stamp' })
     if (id === 'watermark') return setPage({ type:'watermark' })
+    if (id === 'crop')      return setPage({ type:'crop' })
     setPage({ type:'tool', toolId: id })
   }
 
@@ -45,6 +47,7 @@ export default function App() {
   if (page.type === 'editor')    return <EditorPage    onBack={goHome} dark={dark} onToggleTheme={toggleTheme} onGoHome={goHome} showCategories={false}/>
   if (page.type === 'stamp')     return <StampToolPage onBack={goHome} {...shared}/>
   if (page.type === 'watermark') return <WatermarkToolPage onBack={goHome} {...shared}/>
+  if (page.type === 'crop')      return <CropToolPage  onBack={goHome} {...shared}/>
   if (page.type === 'tool')      return <ToolPage toolId={page.toolId} onBack={goHome} onSelectTool={handleTool} {...shared}/>
   return <Dashboard onSelectTool={handleTool} initialCategory={lastCategory} {...shared}/>
 }

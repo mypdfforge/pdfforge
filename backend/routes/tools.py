@@ -617,7 +617,7 @@ async def duplicate_page(file: UploadFile = File(...), page: int = Form(1)):
     doc.save(out); doc.close()
     return FileResponse(out, media_type="application/pdf", filename="duplicated.pdf")
 
-# ── CROP ───────────────────────────────────────────────────────────────
+# ── CROP (simple margins) ──────────────────────────────────────────────
 @router.post("/crop")
 async def crop(file: UploadFile = File(...), left: float=Form(0), top: float=Form(0), right: float=Form(0), bottom: float=Form(0)):
     tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"cropped.pdf")
@@ -626,6 +626,51 @@ async def crop(file: UploadFile = File(...), left: float=Form(0), top: float=For
     for page in doc:
         r=page.rect; page.set_cropbox(fitz.Rect(r.x0+left, r.y0+top, r.x1-right, r.y1-bottom))
     doc.save(out); doc.close()
+    return FileResponse(out, media_type="application/pdf", filename="cropped.pdf")
+
+# ── CROP VISUAL (per-page drag crop) ───────────────────────────────────
+@router.post("/crop-visual")
+async def crop_visual(
+    file: UploadFile = File(...),
+    crops: str = Form(...),   # JSON: { "1": {left,top,right,bottom}, "2": {...}, ... }
+):
+    import json
+    try:
+        crop_data = json.loads(crops)
+    except:
+        raise HTTPException(400, "Invalid crops JSON")
+
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, "input.pdf")
+    out = os.path.join(tmp, "cropped.pdf")
+
+    with open(src, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    doc = fitz.open(src)
+
+    for page in doc:
+        page_num = str(page.number + 1)
+        if page_num not in crop_data:
+            continue
+        c = crop_data[page_num]
+        left   = float(c.get("left",   0))
+        top    = float(c.get("top",    0))
+        right  = float(c.get("right",  0))
+        bottom = float(c.get("bottom", 0))
+        r = page.rect
+        new_rect = fitz.Rect(
+            r.x0 + left,
+            r.y0 + top,
+            r.x1 - right,
+            r.y1 - bottom,
+        )
+        # Clamp to valid bounds
+        if new_rect.width > 10 and new_rect.height > 10:
+            page.set_cropbox(new_rect)
+
+    doc.save(out, garbage=4, deflate=True)
+    doc.close()
     return FileResponse(out, media_type="application/pdf", filename="cropped.pdf")
 
 # ══════════════════════════════════════════════════════════════════════

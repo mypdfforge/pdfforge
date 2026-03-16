@@ -171,7 +171,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
   const isMerge        = toolId === 'merge'
   const showSplit      = !cfg.noPreview
 
-  const DropZone = () => (
+  const dropZoneJSX = (
     <div {...getRootProps()} style={{ background:isDragActive?'rgba(91,91,214,0.06)':'var(--bg2)', border:`1px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'10px', padding:'24px 16px', textAlign:'center', cursor:'pointer', transition:'all 0.15s' }}>
       <input {...getInputProps()}/>
       <Upload size={16} color="var(--accent2)" style={{ display:'block', margin:'0 auto 7px' }}/>
@@ -181,7 +181,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
     </div>
   )
 
-  const Controls = () => (
+  const controlsJSX = (
     <div style={{ padding:'18px', display:'flex', flexDirection:'column', gap:'12px', overflowY:'auto', height:'100%' }}>
       {guide && cfg.guide && (
         <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'11px 13px', display:'flex', alignItems:'flex-start', gap:'8px' }}>
@@ -190,7 +190,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           <button onClick={()=>setGuide(false)} style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer' }}><X size={12}/></button>
         </div>
       )}
-      <DropZone/>
+      {dropZoneJSX}
       {!isMerge && files.length>0 && (
         <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'8px 12px' }}>
           {files.map((f,i) => (
@@ -269,7 +269,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           </div>
           {/* Center controls */}
           <div style={{ width:'300px', flexShrink:0, borderRight:'1px solid var(--border)', overflow:'hidden' }}>
-            <Controls/>
+            {controlsJSX}
           </div>
           {/* Right preview */}
           <div style={{ flex:1, overflow:'hidden' }}>
@@ -286,7 +286,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
               <button onClick={()=>setGuide(false)} style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer' }}><X size={13}/></button>
             </div>
           )}
-          <DropZone/>
+          {dropZoneJSX}
           {files.length>0 && (
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'8px 14px' }}>
               {files.map((f,i) => (
