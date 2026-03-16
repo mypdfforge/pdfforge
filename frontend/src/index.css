@@ -13,8 +13,8 @@
   --red:     #e5534b;
   --pink:    #e879f9;
   --text:    #eeeef5;
-  --text2:   #9898b8;
-  --text3:   #5a5a78;
+  --text2:   #c8c8e0;
+  --text3:   #9898b8;
 }
 body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; -webkit-font-smoothing:antialiased; }
 ::-webkit-scrollbar { width:5px; height:5px; }
