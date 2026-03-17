@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react'
-import Dashboard        from './pages/Dashboard'
-import EditorPage       from './pages/EditorPage'
-import ToolPage         from './pages/ToolPage'
-import StampToolPage    from './pages/StampToolPage'
-import WatermarkToolPage from './pages/WatermarkToolPage'
-import CropToolPage     from './pages/CropToolPage'
-import RotateToolPage   from './pages/RotateToolPage'
+import Dashboard          from './pages/Dashboard'
+import EditorPage         from './pages/EditorPage'
+import ToolPage           from './pages/ToolPage'
+import StampToolPage      from './pages/StampToolPage'
+import WatermarkToolPage  from './pages/WatermarkToolPage'
+import PageNumberToolPage from './pages/PageNumberToolPage'
+import CropToolPage       from './pages/CropToolPage'
+import RotateToolPage     from './pages/RotateToolPage'
+import OrganizePDFPage    from './pages/OrganizePDFPage'
+import SignPDFPage        from './pages/SignPDFPage'
+import OCRToolPage        from './pages/OCRToolPage'
+import TranslateToolPage  from './pages/TranslateToolPage'
 import './index.css'
 
 export default function App() {
@@ -33,8 +38,13 @@ export default function App() {
     if (id === 'editor')    return setPage({ type:'editor' })
     if (id === 'stamp')     return setPage({ type:'stamp' })
     if (id === 'watermark') return setPage({ type:'watermark' })
+    if (id === 'pagenums')  return setPage({ type:'pagenums' })
     if (id === 'crop')      return setPage({ type:'crop' })
     if (id === 'rotate')    return setPage({ type:'rotate' })
+    if (id === 'organize')  return setPage({ type:'organize' })
+    if (id === 'sign')      return setPage({ type:'sign' })
+    if (id === 'ocr')       return setPage({ type:'ocr' })
+    if (id === 'translate') return setPage({ type:'translate' })
     setPage({ type:'tool', toolId: id })
   }
 
@@ -46,11 +56,16 @@ export default function App() {
     search, onSearch: setSearch,
   }
 
-  if (page.type === 'editor')    return <EditorPage    onBack={goHome} dark={dark} onToggleTheme={toggleTheme} onGoHome={goHome} showCategories={false}/>
-  if (page.type === 'stamp')     return <StampToolPage onBack={goHome} {...shared}/>
-  if (page.type === 'watermark') return <WatermarkToolPage onBack={goHome} {...shared}/>
-  if (page.type === 'crop')      return <CropToolPage  onBack={goHome} {...shared}/>
-  if (page.type === 'rotate')    return <RotateToolPage onBack={goHome} {...shared}/>
+  if (page.type === 'editor')    return <EditorPage         onBack={goHome} dark={dark} onToggleTheme={toggleTheme} onGoHome={goHome} showCategories={false}/>
+  if (page.type === 'stamp')     return <StampToolPage      onBack={goHome} {...shared}/>
+  if (page.type === 'watermark') return <WatermarkToolPage  onBack={goHome} {...shared}/>
+  if (page.type === 'pagenums')  return <PageNumberToolPage onBack={goHome} {...shared}/>
+  if (page.type === 'crop')      return <CropToolPage       onBack={goHome} {...shared}/>
+  if (page.type === 'rotate')    return <RotateToolPage     onBack={goHome} {...shared}/>
+  if (page.type === 'organize')  return <OrganizePDFPage    onBack={goHome} {...shared}/>
+  if (page.type === 'sign')      return <SignPDFPage        onBack={goHome} {...shared}/>
+  if (page.type === 'ocr')       return <OCRToolPage        onBack={goHome} {...shared}/>
+  if (page.type === 'translate') return <TranslateToolPage  onBack={goHome} {...shared}/>
   if (page.type === 'tool')      return <ToolPage toolId={page.toolId} onBack={goHome} onSelectTool={handleTool} {...shared}/>
   return <Dashboard onSelectTool={handleTool} initialCategory={lastCategory} {...shared}/>
 }

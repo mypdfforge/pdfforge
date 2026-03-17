@@ -901,3 +901,369 @@ async def pdf_to_pdfa(file: UploadFile = File(...)):
              encryption=fitz.PDF_ENCRYPT_NONE)
     doc.close()
     return FileResponse(out, media_type="application/pdf", filename="converted_pdfa.pdf")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# NEW TOOLS
+# ══════════════════════════════════════════════════════════════════════
+
+# ── ORGANIZE PDF ───────────────────────────────────────────────────────
+@router.post("/organize")
+async def organize_pdf(
+    file:         UploadFile = File(...),
+    instructions: str        = Form(...),   # JSON: [{orig_idx, rotation, blank}]
+):
+    """
+    Reorder, rotate, and/or delete pages. Insert blank pages.
+    instructions = JSON array where each element is:
+      { "orig_idx": int,   # 0-based index in original PDF (-1 for blank)
+        "rotation": int,   # additional rotation degrees (0/90/180/270)
+        "blank":    bool   # if true, insert a blank white page }
+    """
+    import json
+    try:
+        steps = json.loads(instructions)
+    except Exception:
+        raise HTTPException(400, "Invalid instructions JSON")
+
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, "input.pdf")
+    out = os.path.join(tmp, "organized.pdf")
+    try:
+        with open(src, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        src_doc = fitz.open(src)
+        result  = fitz.open()
+
+        for step in steps:
+            blank    = step.get("blank", False)
+            orig_idx = int(step.get("orig_idx", -1))
+            rotation = int(step.get("rotation", 0)) % 360
+
+            if blank:
+                # Insert a blank A4 page
+                pw = src_doc[0].rect.width  if src_doc.page_count > 0 else 595
+                ph = src_doc[0].rect.height if src_doc.page_count > 0 else 842
+                result.new_page(width=pw, height=ph)
+            elif 0 <= orig_idx < src_doc.page_count:
+                result.insert_pdf(src_doc, from_page=orig_idx, to_page=orig_idx)
+                # Apply extra rotation to the newly inserted page
+                if rotation:
+                    last = result.page_count - 1
+                    existing = result[last].rotation
+                    result[last].set_rotation((existing + rotation) % 360)
+
+        result.save(out, garbage=4, deflate=True)
+        result.close()
+        src_doc.close()
+    except Exception as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(500, f"Organize failed: {str(e)}")
+
+    return FileResponse(out, media_type="application/pdf", filename="organized.pdf")
+
+
+# ── SIGN PDF ───────────────────────────────────────────────────────────
+@router.post("/sign")
+async def sign_pdf(
+    file:      UploadFile = File(...),
+    signature: str        = Form(...),   # base64 PNG data-URL
+    x:         str        = Form("50"),
+    y:         str        = Form("50"),
+    width:     str        = Form("200"),
+    height:    str        = Form("80"),
+    page:      str        = Form("1"),
+):
+    """
+    Embed a base64-encoded PNG signature image onto a specific page
+    at the given position and size (all in PDF points).
+    """
+    import re as _re
+
+    try:
+        px     = float(x);      py  = float(y)
+        pw_sig = float(width);  ph_sig = float(height)
+        pg_num = max(1, int(page))
+    except ValueError:
+        raise HTTPException(400, "Invalid numeric parameters")
+
+    # Strip data-URL prefix: "data:image/png;base64,<data>"
+    b64_match = _re.match(r"data:image/[^;]+;base64,(.+)", signature, _re.DOTALL)
+    if not b64_match:
+        raise HTTPException(400, "signature must be a base64 data-URL")
+    img_bytes = base64.b64decode(b64_match.group(1))
+
+    tmp = tempfile.mkdtemp()
+    src      = os.path.join(tmp, "input.pdf")
+    sig_path = os.path.join(tmp, "sig.png")
+    out      = os.path.join(tmp, "signed.pdf")
+    try:
+        with open(src, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        with open(sig_path, "wb") as f:
+            f.write(img_bytes)
+
+        doc    = fitz.open(src)
+        pg_idx = min(pg_num - 1, doc.page_count - 1)
+        page_obj = doc[pg_idx]
+
+        rect = fitz.Rect(px, py, px + pw_sig, py + ph_sig)
+        page_obj.insert_image(rect, filename=sig_path, overlay=True)
+
+        doc.save(out, garbage=4, deflate=True)
+        doc.close()
+    except Exception as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(500, f"Sign failed: {str(e)}")
+
+    return FileResponse(out, media_type="application/pdf", filename="signed.pdf")
+
+
+# ── OCR PDF ────────────────────────────────────────────────────────────
+@router.post("/ocr")
+async def ocr_pdf(
+    file:        UploadFile = File(...),
+    language:    str        = Form("eng"),
+    output_mode: str        = Form("searchable"),  # 'searchable' | 'text'
+):
+    """
+    OCR a scanned PDF using pytesseract + Pillow.
+    - output_mode='searchable' : returns a new PDF with invisible text layer
+    - output_mode='text'       : returns JSON {"text": "..."}
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+        import io
+    except ImportError:
+        raise HTTPException(500, "pytesseract / Pillow not installed. Run: pip install pytesseract pillow")
+
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, "input.pdf")
+    out = os.path.join(tmp, "ocr_output.pdf")
+    try:
+        with open(src, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        doc = fitz.open(src)
+        mat = fitz.Matrix(2.0, 2.0)   # 2× scale → ~144 dpi — good for OCR
+
+        if output_mode == "text":
+            # ── Plain text extraction ──
+            all_text = []
+            for page in doc:
+                pix  = page.get_pixmap(matrix=mat, alpha=False)
+                img  = Image.open(io.BytesIO(pix.tobytes("png")))
+                text = pytesseract.image_to_string(img, lang=language)
+                all_text.append(text)
+            doc.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+            return JSONResponse({"text": "\n\n--- Page Break ---\n\n".join(all_text)})
+
+        else:
+            # ── Searchable PDF ──
+            # Strategy: render each page as image, run OCR to get hOCR,
+            # then overlay invisible text on the original page.
+            for pg_idx, page in enumerate(doc):
+                pix  = page.get_pixmap(matrix=mat, alpha=False)
+                img  = Image.open(io.BytesIO(pix.tobytes("png")))
+
+                # Get word-level data with bounding boxes
+                data = pytesseract.image_to_data(
+                    img, lang=language,
+                    output_type=pytesseract.Output.DICT,
+                )
+
+                pw, ph = page.rect.width, page.rect.height
+                img_w, img_h = img.size
+                scale_x = pw / img_w
+                scale_y = ph / img_h
+
+                for i, word in enumerate(data["text"]):
+                    word = word.strip()
+                    if not word:
+                        continue
+                    conf = int(data["conf"][i])
+                    if conf < 20:   # skip low-confidence words
+                        continue
+                    x = data["left"][i]   * scale_x
+                    y = data["top"][i]    * scale_y
+                    w = data["width"][i]  * scale_x
+                    h = data["height"][i] * scale_y
+
+                    # Insert invisible text (opacity=0 via alpha on a white rect trick)
+                    # We use a tiny font and make color match background (white)
+                    # The text is still selectable / searchable
+                    fs = max(4.0, h * 0.85)
+                    try:
+                        page.insert_text(
+                            fitz.Point(x, y + h),
+                            word,
+                            fontsize=fs,
+                            color=(1, 1, 1),   # white = invisible on white page
+                            overlay=True,
+                        )
+                    except Exception:
+                        pass  # skip problematic words
+
+            doc.save(out, garbage=4, deflate=True)
+            doc.close()
+
+    except Exception as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(500, f"OCR failed: {str(e)}")
+
+    return FileResponse(out, media_type="application/pdf", filename="ocr_searchable.pdf")
+
+
+# ── TRANSLATE PDF ──────────────────────────────────────────────────────
+@router.post("/translate")
+async def translate_pdf(
+    file:        UploadFile = File(...),
+    source_lang: str        = Form("auto"),
+    target_lang: str        = Form("en"),
+):
+    """
+    Translate all text in a PDF using argostranslate — 100% offline,
+    no API key, no rate limits, runs entirely on the server.
+
+    Setup (one-time, already in requirements.txt):
+        pip install argostranslate
+
+    Language packs are downloaded automatically on first use per language
+    pair and cached on disk. Subsequent calls use the cached model.
+    """
+    try:
+        import argostranslate.package
+        import argostranslate.translate
+    except ImportError:
+        raise HTTPException(
+            500,
+            "argostranslate not installed. Add 'argostranslate' to requirements.txt"
+        )
+
+    # ── Ensure the language pack is installed ──────────────────────────
+    def _ensure_language_pack(src: str, tgt: str):
+        """Download and install the src→tgt language pack if not present."""
+        # Check if already installed
+        installed = argostranslate.translate.get_installed_languages()
+        installed_codes = {lang.code for lang in installed}
+
+        src_code = src if src != "auto" else None
+
+        # Try to find if translation is already possible
+        if src_code and src_code in installed_codes and tgt in installed_codes:
+            for lang in installed:
+                if lang.code == src_code:
+                    for t in lang.translations_to:
+                        if t.to_lang.code == tgt:
+                            return  # already installed
+
+        # Need to download — fetch package index
+        try:
+            argostranslate.package.update_package_index()
+            available = argostranslate.package.get_available_packages()
+            for pkg in available:
+                if pkg.from_code == (src_code or "en") and pkg.to_code == tgt:
+                    pkg.install()
+                    return
+                # Also try installing tgt→en as a bridge if direct not found
+            # Fallback: try en→tgt
+            for pkg in available:
+                if pkg.from_code == "en" and pkg.to_code == tgt:
+                    pkg.install()
+                    return
+        except Exception as e:
+            raise HTTPException(500, f"Failed to download language pack: {e}")
+
+    # ── Translate a single string ──────────────────────────────────────
+    def _translate_text(text: str, src: str, tgt: str) -> str:
+        text = text.strip()
+        if not text or len(text) < 2:
+            return text
+        try:
+            installed = argostranslate.translate.get_installed_languages()
+            src_code  = src if src != "auto" else "en"
+
+            src_lang = next((l for l in installed if l.code == src_code), None)
+            if not src_lang:
+                return text
+
+            translation = src_lang.get_translation(
+                next((l for l in installed if l.code == tgt), None)
+            )
+            if not translation:
+                return text
+            return translation.translate(text)
+        except Exception:
+            return text  # fall back to original on any error
+
+    # ── Ensure pack is ready before processing ──────────────────────────
+    try:
+        _ensure_language_pack(source_lang, target_lang)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Language pack setup failed: {e}")
+
+    # ── Process the PDF ────────────────────────────────────────────────
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, "input.pdf")
+    out = os.path.join(tmp, "translated.pdf")
+    try:
+        with open(src, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        doc = fitz.open(src)
+
+        for page in doc:
+            blocks = page.get_text(
+                "dict", flags=fitz.TEXT_PRESERVE_WHITESPACE
+            )["blocks"]
+
+            for block in blocks:
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        original = span.get("text", "").strip()
+                        if not original or len(original) < 2:
+                            continue
+
+                        translated = _translate_text(original, source_lang, target_lang)
+                        if not translated or translated == original:
+                            continue
+
+                        bbox      = fitz.Rect(span["bbox"])
+                        fontsize  = max(4.0, span.get("size", 11))
+                        color_int = span.get("color", 0)
+                        r = ((color_int >> 16) & 0xFF) / 255
+                        g = ((color_int >>  8) & 0xFF) / 255
+                        b = ( color_int        & 0xFF) / 255
+
+                        # White-out original text, draw translated text
+                        page.draw_rect(bbox, color=None, fill=(1, 1, 1), overlay=True)
+                        try:
+                            page.insert_textbox(
+                                bbox,
+                                translated,
+                                fontsize=fontsize,
+                                color=(r, g, b),
+                                align=0,
+                                overlay=True,
+                            )
+                        except Exception:
+                            pass   # skip problem spans
+
+        doc.save(out, garbage=4, deflate=True)
+        doc.close()
+
+    except Exception as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(500, f"Translation failed: {str(e)}")
+
+    return FileResponse(
+        out,
+        media_type="application/pdf",
+        filename=f"translated_{target_lang}.pdf"
+    )
