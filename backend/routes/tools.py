@@ -1023,20 +1023,51 @@ async def sign_pdf(
 @router.post("/ocr")
 async def ocr_pdf(
     file:        UploadFile = File(...),
-    language:    str        = Form("eng"),
+    language:    str        = Form("en"),
     output_mode: str        = Form("searchable"),  # 'searchable' | 'text'
 ):
     """
-    OCR a scanned PDF using pytesseract + Pillow.
-    - output_mode='searchable' : returns a new PDF with invisible text layer
+    OCR a scanned PDF using easyocr — 100% Python, no system packages needed.
+    - output_mode='searchable' : returns PDF with invisible text layer
     - output_mode='text'       : returns JSON {"text": "..."}
+    Supports: en, fr, de, es, it, pt, ru, ch_sim, ja, ko, ar
     """
     try:
-        import pytesseract
+        import easyocr
+        import numpy as np
         from PIL import Image
         import io
     except ImportError:
-        raise HTTPException(500, "pytesseract / Pillow not installed. Run: pip install pytesseract pillow")
+        raise HTTPException(
+            500,
+            "easyocr not installed. Add 'easyocr==1.7.1' to requirements.txt"
+        )
+
+    # Map frontend language codes to easyocr language codes
+    LANG_MAP = {
+        "eng": "en", "en": "en",
+        "fra": "fr", "fr": "fr",
+        "deu": "de", "de": "de",
+        "spa": "es", "es": "es",
+        "ita": "it", "it": "it",
+        "por": "pt", "pt": "pt",
+        "rus": "ru", "ru": "ru",
+        "chi_sim": "ch_sim", "zh": "ch_sim",
+        "jpn": "ja",  "ja": "ja",
+        "kor": "ko",  "ko": "ko",
+        "ara": "ar",  "ar": "ar",
+    }
+    lang_code = LANG_MAP.get(language, "en")
+
+    # easyocr always needs English alongside CJK languages
+    reader_langs = [lang_code] if lang_code == "en" else ["en", lang_code]
+    # Remove duplicates
+    reader_langs = list(dict.fromkeys(reader_langs))
+
+    try:
+        reader = easyocr.Reader(reader_langs, gpu=False)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to initialize OCR engine: {e}")
 
     tmp = tempfile.mkdtemp()
     src = os.path.join(tmp, "input.pdf")
@@ -1046,65 +1077,57 @@ async def ocr_pdf(
             shutil.copyfileobj(file.file, f)
 
         doc = fitz.open(src)
-        mat = fitz.Matrix(2.0, 2.0)   # 2× scale → ~144 dpi — good for OCR
+        mat = fitz.Matrix(2.0, 2.0)   # 2x scale ~144dpi — good for OCR
 
         if output_mode == "text":
-            # ── Plain text extraction ──
             all_text = []
             for page in doc:
-                pix  = page.get_pixmap(matrix=mat, alpha=False)
-                img  = Image.open(io.BytesIO(pix.tobytes("png")))
-                text = pytesseract.image_to_string(img, lang=language)
-                all_text.append(text)
+                pix     = page.get_pixmap(matrix=mat, alpha=False)
+                img     = Image.open(io.BytesIO(pix.tobytes("png")))
+                img_np  = np.array(img)
+                results = reader.readtext(img_np, detail=0, paragraph=True)
+                all_text.append(" ".join(results))
             doc.close()
             shutil.rmtree(tmp, ignore_errors=True)
-            return JSONResponse({"text": "\n\n--- Page Break ---\n\n".join(all_text)})
+            return JSONResponse({
+                "text": "\n\n--- Page Break ---\n\n".join(all_text)
+            })
 
         else:
-            # ── Searchable PDF ──
-            # Strategy: render each page as image, run OCR to get hOCR,
-            # then overlay invisible text on the original page.
-            for pg_idx, page in enumerate(doc):
-                pix  = page.get_pixmap(matrix=mat, alpha=False)
-                img  = Image.open(io.BytesIO(pix.tobytes("png")))
+            # Searchable PDF — overlay invisible text
+            for page in doc:
+                pix    = page.get_pixmap(matrix=mat, alpha=False)
+                img    = Image.open(io.BytesIO(pix.tobytes("png")))
+                img_np = np.array(img)
 
-                # Get word-level data with bounding boxes
-                data = pytesseract.image_to_data(
-                    img, lang=language,
-                    output_type=pytesseract.Output.DICT,
-                )
-
-                pw, ph = page.rect.width, page.rect.height
+                pw, ph   = page.rect.width, page.rect.height
                 img_w, img_h = img.size
-                scale_x = pw / img_w
-                scale_y = ph / img_h
+                scale_x  = pw / img_w
+                scale_y  = ph / img_h
 
-                for i, word in enumerate(data["text"]):
-                    word = word.strip()
-                    if not word:
-                        continue
-                    conf = int(data["conf"][i])
-                    if conf < 20:   # skip low-confidence words
-                        continue
-                    x = data["left"][i]   * scale_x
-                    y = data["top"][i]    * scale_y
-                    w = data["width"][i]  * scale_x
-                    h = data["height"][i] * scale_y
+                # detail=1 returns [[bbox, text, confidence]]
+                results = reader.readtext(img_np, detail=1)
 
-                    # Insert invisible text (opacity=0 via alpha on a white rect trick)
-                    # We use a tiny font and make color match background (white)
-                    # The text is still selectable / searchable
+                for (bbox, word, conf) in results:
+                    if conf < 0.2 or not word.strip():
+                        continue
+                    # bbox is [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
+                    x1 = bbox[0][0] * scale_x
+                    y1 = bbox[0][1] * scale_y
+                    x2 = bbox[2][0] * scale_x
+                    y2 = bbox[2][1] * scale_y
+                    h  = y2 - y1
                     fs = max(4.0, h * 0.85)
                     try:
                         page.insert_text(
-                            fitz.Point(x, y + h),
+                            fitz.Point(x1, y2),
                             word,
                             fontsize=fs,
-                            color=(1, 1, 1),   # white = invisible on white page
+                            color=(1, 1, 1),   # white = invisible
                             overlay=True,
                         )
                     except Exception:
-                        pass  # skip problematic words
+                        pass
 
             doc.save(out, garbage=4, deflate=True)
             doc.close()
