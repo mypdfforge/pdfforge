@@ -1,7 +1,6 @@
 import axios from 'axios'
 
-// Your Cloudflare Worker URL (update this after deploying the Worker)
-const BRAIN_URL = import.meta.env.VITE_BRAIN_URL || 'https://pdfforge-brain.YOUR-SUBDOMAIN.workers.dev'
+const BRAIN_URL = import.meta.env.VITE_BRAIN_URL || 'https://pdfforge-brain.mypdfforge.workers.dev'
 
 const HF_NODES = [
   'https://mypdfforge-pdfforge-node-1.hf.space',
