@@ -1,9 +1,8 @@
 import axios from 'axios'
 
-const BRAIN_URL  = import.meta.env.VITE_BRAIN_URL  || 'http://YOUR_ORACLE_IP:8000'
-const RENDER_URL = import.meta.env.VITE_API_URL     || 'https://mypdfforge.onrender.com'
+// Your Cloudflare Worker URL (update this after deploying the Worker)
+const BRAIN_URL = import.meta.env.VITE_BRAIN_URL || 'https://pdfforge-brain.YOUR-SUBDOMAIN.workers.dev'
 
-// ── Keep all 5 HF nodes warm (prevent HuggingFace from sleeping them) ──
 const HF_NODES = [
   'https://mypdfforge-pdfforge-node-1.hf.space',
   'https://mypdfforge-pdfforge-node-2.hf.space',
@@ -18,23 +17,11 @@ if (typeof window !== 'undefined') {
   })
 }
 
-const brain  = axios.create({ baseURL: BRAIN_URL })
-const render = axios.create({ baseURL: RENDER_URL })
-
-// ── Smart routing: Oracle Brain first, Render as fallback ──────────────
-async function smartPost(path, form, options = {}) {
-  try {
-    return await brain.post(path, form, { timeout: 120000, ...options })
-  } catch (e) {
-    console.warn(`Brain unreachable, falling back to Render for ${path}`)
-    return await render.post(path, form, { timeout: 120000, ...options })
-  }
-}
+const brain = axios.create({ baseURL: BRAIN_URL })
 
 export const _post = (path, form) =>
-  smartPost(path, form, { responseType: 'blob' })
+  brain.post(path, form, { responseType: 'blob', timeout: 120000 })
 
-// ── PDF Tool Exports ───────────────────────────────────────────────────
 export const mergePDFs      = (files)               => { const f=new FormData(); files.forEach(x=>f.append('files',x)); return _post('/api/tools/merge',f) }
 export const splitPDF       = (file,p)              => { const f=new FormData(); f.append('file',file); f.append('pages',p); return _post('/api/tools/split',f) }
 export const rotatePDF      = (file,d,p)            => { const f=new FormData(); f.append('file',file); f.append('degrees',d); f.append('pages',p); return _post('/api/tools/rotate',f) }
@@ -53,11 +40,9 @@ export const pdfToPptx      = (file)                => { const f=new FormData();
 export const pdfToXlsx      = (file)                => { const f=new FormData(); f.append('file',file); return _post('/api/tools/pdf-to-xlsx',f) }
 export const pdfToPdfa      = (file)                => { const f=new FormData(); f.append('file',file); return _post('/api/tools/pdf-to-pdfa',f) }
 
-// ── Upload & Export (always go to Brain/Oracle) ────────────────────────
-export const uploadPDF = (file)        => { const f=new FormData(); f.append('file',file); return brain.post('/api/upload',f) }
-export const exportPDF = (sid,blocks)  => brain.post(`/api/export/${sid}`,{blocks},{responseType:'blob'})
+export const uploadPDF = (file)       => { const f=new FormData(); f.append('file',file); return brain.post('/api/upload',f) }
+export const exportPDF = (sid,blocks) => brain.post(`/api/export/${sid}`,{blocks},{responseType:'blob'})
 
-// ── Download helper ────────────────────────────────────────────────────
 export const downloadBlob = (data, filename, type='application/pdf') => {
   const url = URL.createObjectURL(new Blob([data],{type}))
   const a   = document.createElement('a')
