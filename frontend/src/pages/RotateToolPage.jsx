@@ -4,6 +4,7 @@ import { Upload, Loader2, CheckCircle, AlertCircle, Download, RotateCw, RotateCc
 import TopBar from '../components/TopBar'
 import axios from 'axios'
 import { downloadBlob } from '../utils/api'
+import { getThumbnailsProgressive } from '../utils/thumbCache'
 
 export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const [file,      setFile]      = useState(null)
@@ -23,13 +24,18 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
   useEffect(() => {
     if (!file) return
     setLoading(true)
-    const form = new FormData(); form.append('file', file)
-    axios.post('/api/tools/thumbnails', form)
-      .then(r => {
-        setPages(r.data.thumbnails.map(t => ({ id: t.page, img: t.img, width: t.width, height: t.height, rotation: 0 })))
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
+    setPages([])
+    let first = true
+    getThumbnailsProgressive(file, (thumb) => {
+      if (first) { setLoading(false); first = false }  // hide spinner after page 1
+      if (thumb.img) {  // skip placeholders for unrendered pages
+        setPages(prev => [...prev, {
+          id: thumb.page, img: thumb.img,
+          width: thumb.width, height: thumb.height, rotation: 0
+        }])
+      }
+    }, 8)
+    .catch(() => setLoading(false))
   }, [file])
 
   // ── Selection helpers ──

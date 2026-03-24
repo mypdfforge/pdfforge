@@ -7,3 +7,7 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: OCR_SPACE_API_KEY
+        value: K82287391888957
+      - key: MISTRAL_API_KEY
+        value:Kg779HWHH41Mp3U4QxQcKmHUBrfBiizI

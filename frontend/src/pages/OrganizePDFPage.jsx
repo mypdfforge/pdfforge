@@ -1,9 +1,11 @@
 import React, { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
-import { Upload, Loader2, CheckCircle, AlertCircle, RotateCw, Trash2, Plus } from 'lucide-react'
+import { Upload, Loader2, CheckCircle, AlertCircle, Plus } from 'lucide-react'
 import axios from 'axios'
 import { downloadBlob } from '../utils/api'
+import { getThumbnailsProgressive } from '../utils/thumbCache'
+import VirtualPageGrid from '../components/VirtualPageGrid'
 
 export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const [file,      setFile]      = useState(null)
@@ -17,20 +19,23 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
 
   const onDrop = useCallback(async accepted => {
     const f = accepted[0]
-    setFile(f); setErrMsg(''); setLoading(true)
+    setFile(f); setErrMsg(''); setLoading(true); setPages([])
     try {
-      const form = new FormData(); form.append('file', f)
-      const { data } = await axios.post('/api/tools/thumbnails', form)
-      setPages(data.thumbnails.map((t, i) => ({
-        id: `p-${i}-${Date.now()}`,
-        thumb: t.img,
-        rotation: 0,
-        blank: false,
-        origIdx: i,
-      })))
+      let first = true
+      await getThumbnailsProgressive(f, (thumb, idx) => {
+        if (first) { setLoading(false); first = false }
+        setPages(prev => [...prev, {
+          id: `p-${idx}-${Date.now()}`,
+          thumb: thumb.img,
+          rotation: 0,
+          blank: false,
+          origIdx: idx,
+        }])
+      }, 5)
     } catch (e) {
-      setErrMsg('Failed to load PDF: ' + (e.response?.data?.detail || e.message))
-    } finally { setLoading(false) }
+      setErrMsg('Failed to load PDF: ' + e.message)
+      setLoading(false)
+    }
   }, [])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -156,106 +161,17 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
             </div>
           ) : (
             /* Thumbnail grid */
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px' }}>
-              {pages.map((pg, i) => (
-                <div key={pg.id}
-                  draggable
-                  onDragStart={() => handleDragStart(i)}
-                  onDragEnter={() => handleDragEnter(i)}
-                  onDragEnd={handleDragEnd}
-                  onDragOver={e => e.preventDefault()}
-                  onMouseEnter={() => setHoverId(pg.id)}
-                  onMouseLeave={() => setHoverId(null)}
-                  style={{
-                    position: 'relative', cursor: 'grab',
-                    width: '140px', flexShrink: 0,
-                    transition: 'transform 0.15s',
-                    transform: hoverId === pg.id ? 'translateY(-3px)' : 'none',
-                  }}>
-
-                  {/* Thumbnail */}
-                  <div style={{
-                    width: '140px', height: '180px', borderRadius: '10px', overflow: 'hidden',
-                    border: `2px solid ${hoverId === pg.id ? 'var(--accent)' : 'var(--border)'}`,
-                    background: 'var(--bg3)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'border-color 0.15s',
-                    boxShadow: hoverId === pg.id ? '0 8px 24px rgba(108,99,255,0.2)' : '0 2px 8px rgba(0,0,0,0.3)',
-                  }}>
-                    {pg.blank ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'var(--text3)' }}>
-                        <div style={{ width: '60px', height: '80px', background: '#fff', borderRadius: '4px', border: '1px solid var(--border)' }} />
-                        <span style={{ fontSize: '10px' }}>Blank Page</span>
-                      </div>
-                    ) : (
-                      <img src={pg.thumb} alt={`Page ${i + 1}`}
-                        style={{
-                          width: '100%', height: '100%', objectFit: 'contain',
-                          transform: `rotate(${pg.rotation}deg)`,
-                          transition: 'transform 0.25s',
-                        }} />
-                    )}
-                  </div>
-
-                  {/* Hover action buttons */}
-                  {hoverId === pg.id && (
-                    <div style={{
-                      position: 'absolute', top: '8px', right: '8px',
-                      display: 'flex', flexDirection: 'column', gap: '5px',
-                    }}>
-                      {!pg.blank && (
-                        <button onClick={() => rotatePage(pg.id)}
-                          title="Rotate 90°"
-                          style={{
-                            width: '28px', height: '28px', borderRadius: '7px', border: 'none',
-                            background: 'rgba(108,99,255,0.85)', color: '#fff', cursor: 'pointer',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            backdropFilter: 'blur(4px)',
-                          }}>
-                          <RotateCw size={13} />
-                        </button>
-                      )}
-                      <button onClick={() => deletePage(pg.id)}
-                        title="Delete page"
-                        style={{
-                          width: '28px', height: '28px', borderRadius: '7px', border: 'none',
-                          background: 'rgba(229,83,75,0.85)', color: '#fff', cursor: 'pointer',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          backdropFilter: 'blur(4px)',
-                        }}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Page label */}
-                  <div style={{ textAlign: 'center', marginTop: '7px' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text3)', fontWeight: 600 }}>
-                      {pg.blank ? '+ Blank' : `Page ${i + 1}`}
-                    </span>
-                    {pg.rotation !== 0 && (
-                      <span style={{ fontSize: '10px', color: 'var(--accent2)', marginLeft: '5px' }}>
-                        {pg.rotation}°
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {/* Add blank page card */}
-              <div onClick={addBlank}
-                style={{
-                  width: '140px', height: '180px', borderRadius: '10px',
-                  border: '2px dashed var(--border)', background: 'transparent',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer', color: 'var(--text3)', gap: '8px', transition: 'all 0.15s',
-                  flexShrink: 0,
-                }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent2)' }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text3)' }}>
-                <Plus size={22} />
-                <span style={{ fontSize: '11px', fontWeight: 600 }}>Add Blank</span>
-              </div>
-            </div>
+            <VirtualPageGrid
+                pages={pages}
+                hoverId={hoverId}
+                onHover={setHoverId}
+                onDragStart={handleDragStart}
+                onDragEnter={handleDragEnter}
+                onDragEnd={handleDragEnd}
+                onRotate={rotatePage}
+                onDelete={deletePage}
+                onAddBlank={addBlank}
+              />
           )}
         </div>
       </div>
