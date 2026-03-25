@@ -4,6 +4,7 @@ import TopBar from '../components/TopBar'
 import { Upload, Loader2, CheckCircle, AlertCircle, Trash2, PenTool, Type, Image as ImageIcon } from 'lucide-react'
 import axios from 'axios'
 import { downloadBlob } from '../utils/api'
+import { getThumbnailsProgressive } from '../utils/thumbCache'
 
 const HANDWRITING_FONTS = [
   { name: 'Dancing Script', css: "'Dancing Script', cursive", url: 'https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&display=swap' },
@@ -168,7 +169,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
   const [loading,   setLoading]   = useState(false)
   const [tab,       setTab]       = useState('draw')
   const [sigData,   setSigData]   = useState(null)   // base64 PNG
-  const [sigPos,    setSigPos]    = useState({ x: 60, y: 60 })
+  const [sigPos,    setSigPos]    = useState({ x: null, y: null })  // null = auto-center on first load
   const [sigSize,   setSigSize]   = useState({ w: 180, h: 60 })
   const [page,      setPage]      = useState(1)
   const [totalPages,setTotalPages]= useState(1)
@@ -178,16 +179,21 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
   const resizing    = useRef(false)
   const dragStart   = useRef(null)
   const previewRef  = useRef(null)
+  const imgRef       = useRef(null)
 
   const onDrop = useCallback(async accepted => {
     const f = accepted[0]; setFile(f); setErrMsg(''); setLoading(true)
     try {
-      const form = new FormData(); form.append('file', f)
-      const { data } = await axios.post('/api/tools/thumbnails', form)
-      setPreview(data.thumbnails[0]?.img || null)
-      setTotalPages(data.thumbnails.length)
-    } catch (e) { setErrMsg('Failed to load PDF') }
-    finally { setLoading(false) }
+      let firstPage = true
+      await getThumbnailsProgressive(f, (thumb) => {
+        if (firstPage && thumb.img) {
+          setPreview(thumb.img)
+          setLoading(false)   // show preview after page 1
+          firstPage = false
+        }
+        setTotalPages(thumb.page)
+      }, 8)
+    } catch (e) { setErrMsg('Failed to load PDF'); setLoading(false) }
   }, [])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -207,9 +213,16 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
   }
   const onMouseMove = e => {
     if (dragging.current && dragStart.current) {
-      const dx = e.clientX - dragStart.current.mx
-      const dy = e.clientY - dragStart.current.my
-      setSigPos({ x: dragStart.current.px + dx, y: dragStart.current.py + dy })
+      const dx  = e.clientX - dragStart.current.mx
+      const dy  = e.clientY - dragStart.current.my
+      const img = imgRef.current
+      // Clamp to image bounds so signature stays on page
+      const maxX = img ? img.offsetWidth  - sigSize.w : 9999
+      const maxY = img ? img.offsetHeight - sigSize.h : 9999
+      setSigPos({
+        x: Math.max(0, Math.min(maxX, dragStart.current.px + dx)),
+        y: Math.max(0, Math.min(maxY, dragStart.current.py + dy)),
+      })
     }
     if (resizing.current && dragStart.current) {
       const dx = e.clientX - dragStart.current.mx
@@ -277,7 +290,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
           ) : (
             <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontSize: '13px', color: 'var(--text)' }}>📄 {file.name}</span>
-              <button onClick={() => { setFile(null); setPreview(null); setSigData(null) }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '18px' }}>×</button>
+              <button onClick={() => { setFile(null); setPreview(null); setSigData(null); setSigPos({ x: null, y: null }) }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '18px' }}>×</button>
             </div>
           )}
 
@@ -360,11 +373,22 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
                 {sigData ? 'Drag the signature to position it' : 'Create a signature to place it on the PDF'}
               </p>
               <div style={{ position: 'relative', display: 'inline-block' }}>
-                <img src={preview} alt="PDF preview"
+                <img
+                  ref={imgRef}
+                  src={preview} alt="PDF preview"
+                  onLoad={e => {
+                    // Auto-center signature on first load
+                    if (sigPos.x === null) {
+                      setSigPos({
+                        x: Math.round((e.target.offsetWidth  - 180) / 2),
+                        y: Math.round((e.target.offsetHeight - 60)  / 2),
+                      })
+                    }
+                  }}
                   style={{ maxWidth: '100%', maxHeight: '70vh', boxShadow: '0 8px 48px rgba(0,0,0,0.6)', borderRadius: '4px', background: '#fff', display: 'block' }} />
 
                 {/* Draggable signature overlay */}
-                {sigData && (
+                {sigData && sigPos.x !== null && (
                   <div
                     onMouseDown={onSigMouseDown}
                     style={{
