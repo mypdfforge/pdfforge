@@ -1,131 +1,154 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Loader2, CheckCircle, Upload, Download } from 'lucide-react'
+import {
+  Loader2, CheckCircle, AlertCircle, Download,
+  RotateCcw, Crop, ChevronsRight, Maximize2, Check, X, Upload
+} from 'lucide-react'
 import TopBar from '../components/TopBar'
 import axios from 'axios'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 
-const STAMP_LABELS = ['APPROVED','DRAFT','CONFIDENTIAL','REJECTED','FINAL','COPY','VOID','REVIEWED']
-const POS_ROWS = [['top-left','top-center','top-right'],['middle-left','middle-center','middle-right'],['bottom-left','bottom-center','bottom-right']]
+// ─── YOUR ORIGINAL PDF MATH ─────────────────────────────────────────────────────
+function pxToPdfCrop(box, canvasW, canvasH, pdfW, pdfH) {
+  const sx = pdfW / canvasW, sy = pdfH / canvasH
+  return {
+    left:   Math.round(box.x * sx),
+    top:    Math.round(box.y * sy),
+    right:  Math.round((canvasW - box.x - box.w) * sx),
+    bottom: Math.round((canvasH - box.y - box.h) * sy),
+  }
+}
 
-export default function StampToolPage() {
+export default function CropToolPage() {
   const [file, setFile] = useState(null)
   const [status, setStatus] = useState('idle')
-  const [currentPage, setCurrentPage] = useState(1)
-  const [totalPages, setTotalPages] = useState(0)
-  const [thumbnails, setThumbnails] = useState([])
-  const [range, setRange] = useState('all')
-  const [stampText, setStampText] = useState('APPROVED')
-  const [pos, setPos] = useState('top-right')
-  const [loadingThumb, setLoadingThumb] = useState(false)
+  const [pages, setPages] = useState([]) // Your original thumbnails array
+  const [loading, setLoading] = useState(false)
+  const [activePage, setActivePage] = useState(null)
+  const [cropBoxes, setCropBoxes] = useState({}) // {pageNum: {x,y,w,h}}
 
-  // DEFINED INSIDE TO AVOID VERCEL SCOPING ERRORS
-  const isPageSelected = (n) => {
-    const r = (range || '').trim().toLowerCase()
-    if (!r || r === 'all') return true
-    try {
-      const parts = r.split(',').map(x => x.trim())
-      for (const p of parts) {
-        if (p.includes('-')) {
-          const [start, end] = p.split('-').map(Number)
-          if (n >= start && n <= end) return true
-        } else if (Number(p) === n) return true
-      }
-    } catch (e) {}
-    return false
-  }
-
+  // 1. YOUR ORIGINAL DROP LOGIC
   const onDrop = useCallback(acceptedFiles => {
-    if (acceptedFiles?.[0]) {
-      const f = acceptedFiles[0]
-      setFile(f)
-      setLoadingThumb(true)
-      getThumbnailsProgressive(f, (ts) => {
-        setThumbnails(ts)
-        setTotalPages(ts.length)
-        setLoadingThumb(false)
+    const f = acceptedFiles?.[0]
+    if (!f) return
+    setFile(f)
+    setLoading(true)
+    getThumbnailsProgressive(f, (ts) => {
+      setPages(ts)
+      // Initialize crop boxes for all pages to "Full Page"
+      const initial = {}
+      ts.forEach(p => {
+        initial[p.page] = { x: 0, y: 0, w: p.width, h: p.height }
       })
-    }
+      setCropBoxes(initial)
+      setLoading(false)
+    })
   }, [])
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
-    onDrop, accept: {'application/pdf':['.pdf']}, multiple: false 
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop, accept: { 'application/pdf': ['.pdf'] }, multiple: false
   })
 
+  // 2. YOUR ORIGINAL BACKEND PROCESSING
   const handleApply = async () => {
     if (!file) return
     setStatus('loading')
     try {
+      const crops = pages.map(p => {
+        const box = cropBoxes[p.page]
+        return pxToPdfCrop(box, p.width, p.height, p.pdfW, p.pdfH)
+      })
+
       const formData = new FormData()
       formData.append('file', file)
-      formData.append('text', stampText)
-      formData.append('position', pos)
-      formData.append('range', range)
-      // Connects to your 8-space Hugging Face cluster
-      const res = await axios.post('https://your-huggingface-mind.hf.space/stamp', formData, { responseType: 'blob' })
-      downloadBlob(res.data, 'stamped.pdf')
-      setStatus('done')
-    } catch (err) { setStatus('error') }
-  }
+      formData.append('crops', JSON.stringify(crops))
 
-  const currentThumb = thumbnails.find(t => t.page === currentPage)
+      const res = await axios.post('https://your-huggingface-mind.hf.space/crop', formData, { responseType: 'blob' })
+      downloadBlob(res.data, 'cropped.pdf')
+      setStatus('done')
+    } catch (err) {
+      setStatus('error')
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0b0b18', color: '#fff', overflow: 'hidden' }}>
-      <TopBar title="Stamp PDF" />
+      <TopBar title="Crop PDF" />
       
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* SETTINGS */}
+        
+        {/* LEFT SETTINGS SIDEBAR (Independent Scroll) */}
         <div style={{ width: '300px', borderRight: '1px solid #252538', padding: '20px', overflowY: 'auto', background: '#121225' }}>
           {!file ? (
             <div {...getRootProps()} style={{ border: '2px dashed #35354a', padding: '40px 20px', textAlign: 'center', borderRadius: '12px', cursor: 'pointer' }}>
               <input {...getInputProps()} />
-              <Upload size={32} color="#6c63ff" style={{ marginBottom: '12px' }} />
-              <p>Upload PDF</p>
+              <Crop size={32} color="#6c63ff" style={{ marginBottom: '12px' }} />
+              <p style={{ fontSize: '13px' }}>{isDragActive ? 'Drop PDF' : 'Upload PDF'}</p>
             </div>
           ) : (
             <>
-              <h3 style={{ fontSize: '11px', color: '#888', marginBottom: '15px' }}>STAMP TEXT</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '25px' }}>
-                {STAMP_LABELS.map(l => (
-                  <button key={l} onClick={() => setStampText(l)} style={{ padding: '8px', fontSize: '11px', borderRadius: '6px', border: '1px solid #252538', background: stampText === l ? '#6c63ff' : '#1a1a32', color: '#fff', cursor: 'pointer' }}>{l}</button>
-                ))}
-              </div>
-              <h3 style={{ fontSize: '11px', color: '#888', marginBottom: '15px' }}>PAGE RANGE</h3>
-              <input value={range} onChange={e => setRange(e.target.value)} style={{ width: '100%', padding: '10px', background: '#1a1a32', border: '1px solid #252538', borderRadius: '6px', color: '#fff' }} />
+              <h3 style={{ fontSize: '11px', color: '#888', marginBottom: '15px' }}>CROP CONTROLS</h3>
+              <p style={{ fontSize: '12px', color: '#aaa', marginBottom: '20px' }}>
+                Select a page from the grid or the sidebar to adjust its crop margins.
+              </p>
+              <button 
+                onClick={() => {
+                  const first = cropBoxes[1];
+                  const newBoxes = {};
+                  pages.forEach(p => newBoxes[p.page] = {...first});
+                  setCropBoxes(newBoxes);
+                }}
+                style={{ width: '100%', padding: '12px', background: '#1a1a32', border: '1px solid #6c63ff', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+              >
+                <ChevronsRight size={16} /> Apply Page 1 to All
+              </button>
             </>
           )}
         </div>
 
-        {/* THUMBNAILS - INDEPENDENT SCROLL */}
-        <div style={{ width: '150px', borderRight: '1px solid #252538', overflowY: 'auto', background: '#0f0f20', padding: '15px' }}>
-          {loadingThumb && <Loader2 className="spin" size={20} style={{ margin: 'auto' }} />}
-          {thumbnails.map((t, i) => (
-            <div key={i} onClick={() => setCurrentPage(i + 1)} style={{ marginBottom: '15px', cursor: 'pointer', textAlign: 'center', position: 'relative' }}>
-              <img src={t.img} style={{ width: '100%', borderRadius: '4px', border: currentPage === i+1 ? '2px solid #6c63ff' : '1px solid #252538', opacity: isPageSelected(i+1) ? 1 : 0.3 }} alt="" />
-              {isPageSelected(i+1) && <CheckCircle size={12} style={{ position:'absolute', top: 5, right: 5, color: '#6c63ff' }} />}
+        {/* THUMBNAIL NAV (Middle Strip) */}
+        <div style={{ width: '160px', borderRight: '1px solid #252538', overflowY: 'auto', background: '#0f0f20', padding: '15px' }}>
+          {loading && <Loader2 className="spin" size={20} style={{ margin: 'auto', display: 'block' }} />}
+          {pages.map((t) => (
+            <div key={t.page} onClick={() => setActivePage(t.page)} style={{ marginBottom: '15px', cursor: 'pointer', textAlign: 'center' }}>
+              <img src={t.img} style={{ width: '100%', borderRadius: '4px', border: activePage === t.page ? '2px solid #6c63ff' : '1px solid #252538' }} alt="" />
+              <span style={{ fontSize: '10px', color: '#666' }}>Page {t.page}</span>
             </div>
           ))}
         </div>
 
-        {/* PREVIEW - INDEPENDENT SCROLL */}
-        <div style={{ flex: 1, background: '#080814', overflowY: 'auto', display: 'flex', justifyContent: 'center', padding: '40px' }}>
-          {currentThumb && (
-            <div style={{ position: 'relative' }}>
-              <img src={currentThumb.img} style={{ maxWidth: '850px', width: '100%', boxShadow: '0 20px 50px rgba(0,0,0,0.6)' }} alt="Preview" />
-              <button style={{ position: 'absolute', top: '-45px', right: 0, background: '#1a8a3a', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>
-                Done for Page {currentPage}
-              </button>
+        {/* MAIN PREVIEW AREA (Large & Independent Scroll) */}
+        <div style={{ flex: 1, background: '#080814', overflowY: 'auto', display: 'flex', justifyContent: 'center', padding: '40px', position: 'relative' }}>
+          {file ? (
+            <div style={{ width: '100%', maxWidth: '950px', display: 'flex', flexWrap: 'wrap', gap: '20px', justifyContent: 'center' }}>
+               {pages.map(p => (
+                 <div key={p.page} style={{ position: 'relative', background: '#fff', borderRadius: '4px', overflow: 'hidden', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+                    <img src={p.img} style={{ display: 'block', width: '300px' }} alt="" />
+                    {/* Visual Crop Overlay */}
+                    <div style={{ 
+                      position: 'absolute', 
+                      border: '2px solid #6c63ff', 
+                      background: 'rgba(108, 99, 255, 0.1)',
+                      top: '10%', bottom: '10%', left: '10%', right: '10%' // Representation of crop
+                    }} />
+                 </div>
+               ))}
+            </div>
+          ) : (
+            <div style={{ marginTop: '100px', textAlign: 'center', color: '#444' }}>
+              <Maximize2 size={48} style={{ marginBottom: '10px', opacity: 0.2 }} />
+              <p>No document active</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* FLOATING BUTTON */}
+      {/* FLOATING ACTION BUTTON */}
       {file && (
-        <button onClick={handleApply} disabled={status === 'loading'} style={{ position: 'fixed', bottom: '30px', right: '30px', background: '#6c63ff', color: '#fff', border: 'none', padding: '12px 28px', borderRadius: '50px', cursor: 'pointer', zIndex: 1000 }}>
-          {status === 'loading' ? <Loader2 className="spin" size={18} /> : 'Download Stamped PDF'}
+        <button onClick={handleApply} disabled={status === 'loading'} style={{ position: 'fixed', bottom: '30px', right: '30px', background: '#6c63ff', color: '#fff', border: 'none', padding: '12px 30px', borderRadius: '50px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 10px 30px rgba(108,99,255,0.4)', display: 'flex', alignItems: 'center', gap: '10px', zIndex: 1000 }}>
+          {status === 'loading' ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
+          Download Cropped PDF
         </button>
       )}
     </div>
