@@ -8,6 +8,7 @@ import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
 import { clientExtract, clientDuplicatePage, clientDeletePages } from '../utils/pdfClient'
 import { clientPdfToImages, clientPdfToJpg } from '../utils/pdfToImageClient'
 import axios from 'axios'
+import { processPDF } from '../lib/pdfForge'
 
 const CONFIGS = {
   merge:        { title:'Merge PDFs',        desc:'Combine multiple PDFs into one.',       multi:true,  guide:'Upload 2+ PDFs. Drag arrows to reorder.', fields:[], action:(f)=>api.mergePDFs(f), out:'merged.pdf', clientSide:true },
@@ -412,11 +413,37 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
     if (!files.length) return
     setStatus('loading'); setErrMsg(''); setProgress(null)
     try {
-      const onProgress = (current, total) => setProgress({ current, total })
-      const res = await cfg.action(files, vals, onProgress)
-      if (!cfg.clientSide) {
-        api.downloadBlob(res.data, cfg.out, cfg.mime||'application/pdf')
+
+      // ── Tools routed to Cloudflare + HF worker grid ──────────
+      const GRID_TOOLS = ['compress', 'watermark', 'stamp', 'ocr']
+      if (GRID_TOOLS.includes(toolId)) {
+        const downloadUrl = await processPDF(
+          files[0],
+          toolId,
+          (p) => {
+            if (p.stage === 'uploading') {
+              setProgress({ current: p.done, total: p.total })
+            }
+          }
+        )
+        // Trigger browser download from the R2 URL
+        const a      = document.createElement('a')
+        a.href       = downloadUrl
+        a.download   = cfg.out
+        a.target     = '_blank'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+
+      } else {
+        // ── Everything else still goes to Render (unchanged) ────
+        const onProgress = (current, total) => setProgress({ current, total })
+        const res = await cfg.action(files, vals, onProgress)
+        if (!cfg.clientSide) {
+          api.downloadBlob(res.data, cfg.out, cfg.mime||'application/pdf')
+        }
       }
+
       setProgress(null)
       setStatus('done'); setTimeout(()=>setStatus('idle'), 3500)
     } catch(e) {
