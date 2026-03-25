@@ -8,6 +8,7 @@ import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
 import { clientExtract, clientDuplicatePage, clientDeletePages } from '../utils/pdfClient'
 import { clientPdfToImages, clientPdfToJpg } from '../utils/pdfToImageClient'
 import axios from 'axios'
+import { processPDF } from '../lib/pdfForge'
 
 const CONFIGS = {
   merge:        { title:'Merge PDFs',        desc:'Combine multiple PDFs into one.',       multi:true,  guide:'Upload 2+ PDFs. Drag arrows to reorder.', fields:[], action:(f)=>api.mergePDFs(f), out:'merged.pdf', clientSide:true },
@@ -41,6 +42,7 @@ const CONFIGS = {
 // ── Tools that get the new unified grid view ───────────────────────────
 const GRID_TOOLS = new Set(['split','extract','delete','duplicate'])
 
+<<<<<<< HEAD
 // ── MultiFileSidebar (unchanged) ───────────────────────────────────────
 function MultiFileSidebar({ files, onReorder, onRemove }) {
   return (
@@ -52,6 +54,24 @@ function MultiFileSidebar({ files, onReorder, onRemove }) {
           : files.map((f,i) => (
             <div key={i} style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'7px', padding:'7px 8px', display:'flex', alignItems:'center', gap:'6px' }}>
               <span style={{ fontSize:'14px' }}>📄</span>
+=======
+// ── MultiFileSidebar ──────────────────────────────────────────────────
+function MultiFileSidebar({ files, onReorder, onRemove, dropZoneJSX, onRun, status }) {
+  return (
+    <div style={{ height:'100%', display:'flex', flexDirection:'column' }}>
+      <div style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)', fontSize:'10px', fontWeight:700, color:'#b0b0cc', textTransform:'uppercase', letterSpacing:'.06em' }}>Files to merge ({files.length})</div>
+      <div style={{ flex:1, overflowY:'auto', padding:'10px', display:'flex', flexDirection:'column', gap:'8px' }}>
+        {dropZoneJSX}
+        {files.length === 0 ? (
+          <div style={{ textAlign:'center', padding:'12px', color:'#b0b0cc', fontSize:'12px' }}>
+            <div style={{ fontSize:'22px', marginBottom:'5px', opacity:0.2 }}>📄</div>
+            Drop 2+ PDFs above to merge
+          </div>
+        ) : (
+          files.map((f, i) => (
+            <div key={i} style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'7px', padding:'7px 8px', display:'flex', alignItems:'center', gap:'6px' }}>
+              <span style={{ fontSize:'13px' }}>📄</span>
+>>>>>>> ca46ded7371cddbc4005a85dbdc6abf72772763f
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ fontSize:'10px', color:'#ffffff', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</div>
                 <div style={{ fontSize:'9px', color:'#b0b0cc' }}>{(f.size/1024).toFixed(0)} KB</div>
@@ -63,7 +83,25 @@ function MultiFileSidebar({ files, onReorder, onRemove }) {
               <button onClick={()=>onRemove(i)} style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer', fontSize:'14px', lineHeight:1 }}>×</button>
             </div>
           ))
+<<<<<<< HEAD
         }
+=======
+        )}
+        {files.length >= 2 && (
+          <button onClick={onRun} disabled={status==='loading'}
+            style={{ width:'100%', padding:'10px', fontSize:'13px', fontWeight:600, borderRadius:'9px', border:'none',
+              cursor:status==='loading'?'not-allowed':'pointer', marginTop:'4px',
+              display:'flex', alignItems:'center', justifyContent:'center', gap:'7px',
+              background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)',
+              color:status==='loading'?'#d0d0e8':'#fff',
+              boxShadow:status!=='loading'?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
+            {status==='loading'?'Merging…':status==='done'?'✓ Downloaded!':'Merge '+files.length+' PDFs'}
+          </button>
+        )}
+        {files.length === 1 && (
+          <p style={{ fontSize:'11px', color:'#b0b0cc', textAlign:'center', margin:0 }}>Add at least one more PDF</p>
+        )}
+>>>>>>> ca46ded7371cddbc4005a85dbdc6abf72772763f
       </div>
     </div>
   )
@@ -393,11 +431,45 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
     if (!files.length) return
     setStatus('loading'); setErrMsg(''); setProgress(null)
     try {
+<<<<<<< HEAD
       const onProgress = (current, total) => setProgress({ current, total })
       const res = await cfg.action(files, vals, onProgress)
       if (!cfg.clientSide) {
         api.downloadBlob(res.data, cfg.out, cfg.mime||'application/pdf')
       }
+=======
+
+      // ── Tools routed to Cloudflare + HF worker grid ──────────
+      const GRID_TOOLS = ['compress', 'watermark', 'stamp', 'ocr']
+      if (GRID_TOOLS.includes(toolId)) {
+        const downloadUrl = await processPDF(
+          files[0],
+          toolId,
+          (p) => {
+            if (p.stage === 'uploading') {
+              setProgress({ current: p.done, total: p.total })
+            }
+          }
+        )
+        // Trigger browser download from the R2 URL
+        const a      = document.createElement('a')
+        a.href       = downloadUrl
+        a.download   = cfg.out
+        a.target     = '_blank'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+
+      } else {
+        // ── Everything else still goes to Render (unchanged) ────
+        const onProgress = (current, total) => setProgress({ current, total })
+        const res = await cfg.action(files, vals, onProgress)
+        if (!cfg.clientSide) {
+          api.downloadBlob(res.data, cfg.out, cfg.mime||'application/pdf')
+        }
+      }
+
+>>>>>>> ca46ded7371cddbc4005a85dbdc6abf72772763f
       setProgress(null)
       setStatus('done'); setTimeout(()=>setStatus('idle'), 3500)
     } catch(e) {
@@ -526,7 +598,11 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           {/* ── Left controls panel ── */}
           <div style={{ width:'280px', flexShrink:0, borderRight:'1px solid var(--border)', overflow:'hidden' }}>
             {isMerge
+<<<<<<< HEAD
               ? <MultiFileSidebar files={files} onReorder={setFiles} onRemove={i=>setFiles(p=>p.filter((_,j)=>j!==i))}/>
+=======
+              ? <MultiFileSidebar files={files} onReorder={setFiles} onRemove={i=>setFiles(p=>p.filter((_,j)=>j!==i))} dropZoneJSX={dropZoneJSX} onRun={run} status={status}/>
+>>>>>>> ca46ded7371cddbc4005a85dbdc6abf72772763f
               : controlsJSX}
           </div>
 

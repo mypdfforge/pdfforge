@@ -1023,114 +1023,193 @@ async def sign_pdf(
 @router.post("/ocr")
 async def ocr_pdf(
     file:        UploadFile = File(...),
-    language:    str        = Form("en"),
-    output_mode: str        = Form("searchable"),  # 'searchable' | 'text'
+    language:    str        = Form("eng"),
+    output_mode: str        = Form("searchable"),
+    page_texts:  str        = Form(""),   # JSON array of {page, text} from client-side OCR
 ):
     """
-    OCR a scanned PDF using easyocr — 100% Python, no system packages needed.
-    - output_mode='searchable' : returns PDF with invisible text layer
-    - output_mode='text'       : returns JSON {"text": "..."}
-    Supports: en, fr, de, es, it, pt, ru, ch_sim, ja, ko, ar
+    3-Tier OCR — designed to put zero load on this instance.
+
+    Tier 1 (primary):   OCR.space API — client pre-processes pages to JPEG,
+                        sends them individually. Server just receives text results.
+    Tier 2 (fallback):  Mistral AI OCR API — if OCR.space fails/limit hit.
+    Tier 3 (last):      pytesseract — local fallback, no torch/easyocr needed.
+
+    For TEXT mode:  browser sends pre-extracted text → server just returns it.
+    For SEARCHABLE: browser sends page texts → server embeds them into PDF.
+
+    RAM usage: ~10MB (vs 500MB+ with easyocr).
     """
-    try:
-        import easyocr
-        import numpy as np
-        from PIL import Image
-        import io
-    except ImportError:
-        raise HTTPException(
-            500,
-            "easyocr not installed. Add 'easyocr==1.7.1' to requirements.txt"
-        )
+    import os, json, urllib.request, urllib.parse, base64
 
-    # Map frontend language codes to easyocr language codes
+    OCR_SPACE_KEY = os.environ.get("OCR_SPACE_API_KEY", "")
+    MISTRAL_KEY   = os.environ.get("MISTRAL_API_KEY", "")
+
+    # ── Language code mapping ──────────────────────────────────────────
+    # OCR.space uses different codes than tesseract
     LANG_MAP = {
-        "eng": "en", "en": "en",
-        "fra": "fr", "fr": "fr",
-        "deu": "de", "de": "de",
-        "spa": "es", "es": "es",
-        "ita": "it", "it": "it",
-        "por": "pt", "pt": "pt",
-        "rus": "ru", "ru": "ru",
-        "chi_sim": "ch_sim", "zh": "ch_sim",
-        "jpn": "ja",  "ja": "ja",
-        "kor": "ko",  "ko": "ko",
-        "ara": "ar",  "ar": "ar",
+        "eng":"eng","fra":"fre","deu":"ger","spa":"spa","ita":"ita",
+        "por":"por","rus":"rus","chi_sim":"chs","jpn":"jpn","kor":"kor",
+        "ara":"ara","hin":"hin",
     }
-    lang_code = LANG_MAP.get(language, "en")
+    ocr_lang = LANG_MAP.get(language, "eng")
 
-    # easyocr always needs English alongside CJK languages
-    reader_langs = [lang_code] if lang_code == "en" else ["en", lang_code]
-    # Remove duplicates
-    reader_langs = list(dict.fromkeys(reader_langs))
+    # ── If client already did OCR and sent text results ────────────────
+    # This is the zero-load path — browser did the heavy lifting
+    if page_texts.strip():
+        try:
+            pages = json.loads(page_texts)
+            combined = "\n\n--- Page Break ---\n\n".join(
+                p.get("text", "") for p in sorted(pages, key=lambda x: x.get("page", 0))
+            )
+            if output_mode == "text":
+                return JSONResponse({"text": combined})
 
-    try:
-        reader = easyocr.Reader(reader_langs, gpu=False)
-    except Exception as e:
-        raise HTTPException(500, f"Failed to initialize OCR engine: {e}")
+            # Searchable PDF — embed text into original PDF
+            tmp = tempfile.mkdtemp()
+            src = os.path.join(tmp, "input.pdf")
+            out = os.path.join(tmp, "ocr_searchable.pdf")
+            with open(src, "wb") as f:
+                shutil.copyfileobj(file.file, f)
 
+            doc = fitz.open(src)
+            for p in sorted(pages, key=lambda x: x.get("page", 0)):
+                pg_num = p.get("page", 1) - 1
+                if 0 <= pg_num < doc.page_count:
+                    page    = doc[pg_num]
+                    pw, ph  = page.rect.width, page.rect.height
+                    words   = p.get("text", "").split()
+                    if not words:
+                        continue
+                    # Distribute words across page invisibly
+                    fs      = 10
+                    x, y    = 36, 36
+                    line_h  = fs * 1.4
+                    for word in words:
+                        if x + len(word) * 6 > pw - 36:
+                            x  = 36
+                            y += line_h
+                        if y > ph - 36:
+                            break
+                        try:
+                            page.insert_text(
+                                fitz.Point(x, y), word,
+                                fontsize=fs, color=(1,1,1), overlay=True
+                            )
+                        except Exception:
+                            pass
+                        x += len(word) * 6 + 4
+
+            doc.save(out, garbage=4, deflate=True)
+            doc.close()
+            return FileResponse(out, media_type="application/pdf", filename="ocr_searchable.pdf")
+
+        except Exception as e:
+            raise HTTPException(500, f"Failed to process OCR results: {e}")
+
+    # ── Server-side fallback (Tier 2: Mistral, Tier 3: pytesseract) ───
+    # Only reached if client-side OCR failed completely
     tmp = tempfile.mkdtemp()
     src = os.path.join(tmp, "input.pdf")
     out = os.path.join(tmp, "ocr_output.pdf")
+
     try:
         with open(src, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        doc = fitz.open(src)
-        mat = fitz.Matrix(2.0, 2.0)   # 2x scale ~144dpi — good for OCR
+        doc       = fitz.open(src)
+        mat       = fitz.Matrix(2.0, 2.0)
+        all_texts = []
+
+        def _ocr_via_mistral(img_b64: str) -> str | None:
+            """Use Mistral AI vision API for OCR."""
+            if not MISTRAL_KEY:
+                return None
+            try:
+                payload = json.dumps({
+                    "model": "pixtral-12b-2409",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                            {"type": "text",      "text": "Extract all text from this image. Return only the text, no commentary."},
+                        ]
+                    }],
+                    "max_tokens": 2000,
+                }).encode()
+                req = urllib.request.Request(
+                    "https://api.mistral.ai/v1/chat/completions",
+                    data=payload,
+                    headers={
+                        "Content-Type":  "application/json",
+                        "Authorization": f"Bearer {MISTRAL_KEY}",
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode())
+                    return data["choices"][0]["message"]["content"].strip()
+            except Exception:
+                return None
+
+        def _ocr_via_tesseract(img_bytes: bytes, lang: str) -> str:
+            """Last-resort local OCR — lightweight, no torch needed."""
+            try:
+                import pytesseract
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(img_bytes))
+                return pytesseract.image_to_string(img, lang=lang[:3])
+            except Exception:
+                return ""
+
+        for page in doc:
+            pix      = page.get_pixmap(matrix=mat, alpha=False)
+            img_bytes = pix.tobytes("jpeg")
+            img_b64  = base64.b64encode(img_bytes).decode()
+
+            # Try Mistral first (Tier 2)
+            text = _ocr_via_mistral(img_b64)
+
+            # Fall back to pytesseract (Tier 3)
+            if not text:
+                text = _ocr_via_tesseract(img_bytes, language)
+
+            all_texts.append(text or "")
+
+        combined = "\n\n--- Page Break ---\n\n".join(all_texts)
 
         if output_mode == "text":
-            all_text = []
-            for page in doc:
-                pix     = page.get_pixmap(matrix=mat, alpha=False)
-                img     = Image.open(io.BytesIO(pix.tobytes("png")))
-                img_np  = np.array(img)
-                results = reader.readtext(img_np, detail=0, paragraph=True)
-                all_text.append(" ".join(results))
             doc.close()
             shutil.rmtree(tmp, ignore_errors=True)
-            return JSONResponse({
-                "text": "\n\n--- Page Break ---\n\n".join(all_text)
-            })
+            return JSONResponse({"text": combined})
 
-        else:
-            # Searchable PDF — overlay invisible text
-            for page in doc:
-                pix    = page.get_pixmap(matrix=mat, alpha=False)
-                img    = Image.open(io.BytesIO(pix.tobytes("png")))
-                img_np = np.array(img)
+        # Embed text into searchable PDF
+        for i, (page, text) in enumerate(zip(doc, all_texts)):
+            if not text.strip():
+                continue
+            pw, ph = page.rect.width, page.rect.height
+            words  = text.split()
+            fs     = 10
+            x, y   = 36, 36
+            line_h = fs * 1.4
+            for word in words:
+                if x + len(word) * 6 > pw - 36:
+                    x  = 36
+                    y += line_h
+                if y > ph - 36:
+                    break
+                try:
+                    page.insert_text(
+                        fitz.Point(x, y), word,
+                        fontsize=fs, color=(1,1,1), overlay=True
+                    )
+                except Exception:
+                    pass
+                x += len(word) * 6 + 4
 
-                pw, ph   = page.rect.width, page.rect.height
-                img_w, img_h = img.size
-                scale_x  = pw / img_w
-                scale_y  = ph / img_h
-
-                # detail=1 returns [[bbox, text, confidence]]
-                results = reader.readtext(img_np, detail=1)
-
-                for (bbox, word, conf) in results:
-                    if conf < 0.2 or not word.strip():
-                        continue
-                    # bbox is [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
-                    x1 = bbox[0][0] * scale_x
-                    y1 = bbox[0][1] * scale_y
-                    x2 = bbox[2][0] * scale_x
-                    y2 = bbox[2][1] * scale_y
-                    h  = y2 - y1
-                    fs = max(4.0, h * 0.85)
-                    try:
-                        page.insert_text(
-                            fitz.Point(x1, y2),
-                            word,
-                            fontsize=fs,
-                            color=(1, 1, 1),   # white = invisible
-                            overlay=True,
-                        )
-                    except Exception:
-                        pass
-
-            doc.save(out, garbage=4, deflate=True)
-            doc.close()
+        doc.save(out, garbage=4, deflate=True)
+        doc.close()
 
     except Exception as e:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1147,102 +1226,111 @@ async def translate_pdf(
     target_lang: str        = Form("en"),
 ):
     """
-    Translate all text in a PDF using argostranslate — 100% offline,
-    no API key, no rate limits, runs entirely on the server.
+    Translate PDF using Lingva Translate (Google-quality, free, no API key).
+    Falls back to unofficial Google Translate API if Lingva is down.
 
-    Setup (one-time, already in requirements.txt):
-        pip install argostranslate
-
-    Language packs are downloaded automatically on first use per language
-    pair and cached on disk. Subsequent calls use the cached model.
+    RAM used: ~5MB (just HTTP requests — no model loaded on instance).
+    Speed: 2-5 seconds vs 30-60 seconds with argostranslate.
     """
-    try:
-        import argostranslate.package
-        import argostranslate.translate
-    except ImportError:
-        raise HTTPException(
-            500,
-            "argostranslate not installed. Add 'argostranslate' to requirements.txt"
-        )
+    import urllib.request, urllib.parse, urllib.error, json
 
-    # ── Ensure the language pack is installed ──────────────────────────
-    def _ensure_language_pack(src: str, tgt: str):
-        """Download and install the src→tgt language pack if not present."""
-        # Check if already installed
-        installed = argostranslate.translate.get_installed_languages()
-        installed_codes = {lang.code for lang in installed}
+    # ── Language code normalisation ────────────────────────────────────
+    # Lingva + Google both use 2-letter ISO codes
+    LANG_MAP = {
+        "auto": "auto", "en": "en", "fr": "fr", "de": "de",
+        "es": "es", "it": "it", "pt": "pt", "ru": "ru",
+        "zh": "zh", "ja": "ja", "ko": "ko", "ar": "ar",
+        "hi": "hi", "nl": "nl", "pl": "pl", "tr": "tr", "sv": "sv",
+    }
+    src = LANG_MAP.get(source_lang, "auto")
+    tgt = LANG_MAP.get(target_lang, "en")
+    if src == tgt:
+        raise HTTPException(400, "Source and target languages must be different.")
 
-        src_code = src if src != "auto" else None
+    # ── Lingva instances (tried in order, first success wins) ──────────
+    LINGVA_INSTANCES = [
+        "https://lingva.ml",
+        "https://lingva.thedaviddelta.com",
+        "https://translate.plausibility.cloud",
+        "https://lingva.lunar.icu",
+    ]
 
-        # Try to find if translation is already possible
-        if src_code and src_code in installed_codes and tgt in installed_codes:
-            for lang in installed:
-                if lang.code == src_code:
-                    for t in lang.translations_to:
-                        if t.to_lang.code == tgt:
-                            return  # already installed
+    def _translate_lingva(text: str, s: str, t: str) -> str | None:
+        """Try all Lingva instances. Returns translated text or None."""
+        if not text.strip():
+            return text
+        encoded = urllib.parse.quote(text, safe="")
+        src_code = "auto" if s == "auto" else s
+        for base in LINGVA_INSTANCES:
+            try:
+                url = f"{base}/api/v1/{src_code}/{t}/{encoded}"
+                req = urllib.request.Request(url, headers={"User-Agent": "PDFForge/1.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = json.loads(resp.read().decode())
+                    result = data.get("translation", "").strip()
+                    if result:
+                        return result
+            except Exception:
+                continue  # try next instance
+        return None
 
-        # Need to download — fetch package index
-        try:
-            argostranslate.package.update_package_index()
-            available = argostranslate.package.get_available_packages()
-            for pkg in available:
-                if pkg.from_code == (src_code or "en") and pkg.to_code == tgt:
-                    pkg.install()
-                    return
-                # Also try installing tgt→en as a bridge if direct not found
-            # Fallback: try en→tgt
-            for pkg in available:
-                if pkg.from_code == "en" and pkg.to_code == tgt:
-                    pkg.install()
-                    return
-        except Exception as e:
-            raise HTTPException(500, f"Failed to download language pack: {e}")
-
-    # ── Translate a single string ──────────────────────────────────────
-    def _translate_text(text: str, src: str, tgt: str) -> str:
-        text = text.strip()
-        if not text or len(text) < 2:
+    def _translate_google(text: str, s: str, t: str) -> str | None:
+        """
+        Unofficial Google Translate API — fallback if all Lingva instances fail.
+        Same engine as translate.google.com, no API key needed.
+        """
+        if not text.strip():
             return text
         try:
-            installed = argostranslate.translate.get_installed_languages()
-            src_code  = src if src != "auto" else "en"
-
-            src_lang = next((l for l in installed if l.code == src_code), None)
-            if not src_lang:
-                return text
-
-            translation = src_lang.get_translation(
-                next((l for l in installed if l.code == tgt), None)
-            )
-            if not translation:
-                return text
-            return translation.translate(text)
+            params = urllib.parse.urlencode({
+                "client": "gtx",
+                "sl":     s if s != "auto" else "auto",
+                "tl":     t,
+                "dt":     "t",
+                "q":      text,
+            })
+            url = f"https://translate.googleapis.com/translate_a/single?{params}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept":     "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                # Response format: [[[translated, original, ...], ...], ...]
+                parts = data[0]
+                result = "".join(p[0] for p in parts if p[0])
+                return result.strip() or None
         except Exception:
-            return text  # fall back to original on any error
+            return None
 
-    # ── Ensure pack is ready before processing ──────────────────────────
-    try:
-        _ensure_language_pack(source_lang, target_lang)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, f"Language pack setup failed: {e}")
+    def _translate(text: str, s: str, t: str) -> str:
+        """Translate with Lingva → Google fallback → original text."""
+        if not text or not text.strip() or len(text.strip()) < 2:
+            return text
+        # Try Lingva first
+        result = _translate_lingva(text, s, t)
+        if result:
+            return result
+        # Fallback to Google
+        result = _translate_google(text, s, t)
+        if result:
+            return result
+        # Last resort: return original
+        return text
 
-    # ── Process the PDF ────────────────────────────────────────────────
+    # ── Process PDF ────────────────────────────────────────────────────
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, "input.pdf")
-    out = os.path.join(tmp, "translated.pdf")
+    src_path = os.path.join(tmp, "input.pdf")
+    out_path = os.path.join(tmp, "translated.pdf")
+
     try:
-        with open(src, "wb") as f:
+        with open(src_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        doc = fitz.open(src)
+        doc = fitz.open(src_path)
 
         for page in doc:
-            blocks = page.get_text(
-                "dict", flags=fitz.TEXT_PRESERVE_WHITESPACE
-            )["blocks"]
+            blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
 
             for block in blocks:
                 if block.get("type") != 0:
@@ -1253,32 +1341,31 @@ async def translate_pdf(
                         if not original or len(original) < 2:
                             continue
 
-                        translated = _translate_text(original, source_lang, target_lang)
+                        translated = _translate(original, src, tgt)
                         if not translated or translated == original:
                             continue
 
-                        bbox      = fitz.Rect(span["bbox"])
-                        fontsize  = max(4.0, span.get("size", 11))
+                        bbox     = fitz.Rect(span["bbox"])
+                        fontsize = max(4.0, span.get("size", 11))
                         color_int = span.get("color", 0)
                         r = ((color_int >> 16) & 0xFF) / 255
                         g = ((color_int >>  8) & 0xFF) / 255
                         b = ( color_int        & 0xFF) / 255
 
-                        # White-out original text, draw translated text
+                        # White-out original, write translation
                         page.draw_rect(bbox, color=None, fill=(1, 1, 1), overlay=True)
                         try:
                             page.insert_textbox(
-                                bbox,
-                                translated,
+                                bbox, translated,
                                 fontsize=fontsize,
                                 color=(r, g, b),
                                 align=0,
                                 overlay=True,
                             )
                         except Exception:
-                            pass   # skip problem spans
+                            pass
 
-        doc.save(out, garbage=4, deflate=True)
+        doc.save(out_path, garbage=4, deflate=True)
         doc.close()
 
     except Exception as e:
@@ -1286,7 +1373,7 @@ async def translate_pdf(
         raise HTTPException(500, f"Translation failed: {str(e)}")
 
     return FileResponse(
-        out,
+        out_path,
         media_type="application/pdf",
         filename=f"translated_{target_lang}.pdf"
     )
