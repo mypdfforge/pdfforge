@@ -85,130 +85,6 @@ function renderWatermark(imgSrc, s, canvasRef) {
 }
 
 export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
-<<<<<<< HEAD
-  const [file,       setFile]       = useState(null)
-  const [imageFile,  setImageFile]  = useState(null)
-  const [mode,       setMode]       = useState('text')
-  const [text,       setText]       = useState('CONFIDENTIAL')
-  const [font,       setFont]       = useState('Helvetica')
-  const [bold,       setBold]       = useState(false)
-  const [italic,     setItalic]     = useState(false)
-  const [underline,  setUnderline]  = useState(false)
-  const [color,      setColor]      = useState('#a0a0a0')
-  const [fontSize,   setFontSize]   = useState(52)
-  const [position,   setPosition]   = useState('middle-center')
-  const [tiled,      setTiled]      = useState(false)
-  const [opacity,    setOpacity]    = useState(0.25)
-  const [rotation,   setRotation]   = useState(45)
-  const [layer,      setLayer]      = useState('over')
-  const [pageRange,  setPageRange]  = useState('all')
-  const [preview,    setPreview]    = useState(null)
-  const [loading,    setLoading]    = useState(false)
-  const [state,      setState]      = useState('idle')
-  const [errMsg,     setErrMsg]     = useState('')
-  const [pageThumb,  setPageThumb]  = useState(null)   // page 1 base64 for canvas preview
-  const canvasRef   = useRef(null)
-  const debounceRef = useRef(null)
-
-  const onDrop = useCallback(a => {
-    const f = a[0]
-    setFile(f); setPreview(null); setErrMsg(''); setPageThumb(null)
-    getThumbnailsProgressive(f, (thumb) => {
-      if (thumb.img) setPageThumb(thumb.img)
-    }, 1)
-  }, [])
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept:{'application/pdf':['.pdf']}, maxFiles:1 })
-  const onImageDrop = useCallback(a => setImageFile(a[0]), [])
-  const { getRootProps: getImgProps, getInputProps: getImgInput } = useDropzone({ onDrop: onImageDrop, accept:{'image/*':['.png','.jpg','.jpeg','.svg']}, maxFiles:1 })
-
-  useEffect(() => {
-    if (!pageThumb) return
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => renderCanvasPreview(), 150)
-    return () => clearTimeout(debounceRef.current)
-  }, [pageThumb, mode, text, font, bold, italic, underline, color, fontSize, position, tiled, opacity, rotation, layer, imageFile])
-
-  const renderCanvasPreview = () => {
-    const canvas = canvasRef.current
-    if (!canvas || !pageThumb) return
-    const ctx = canvas.getContext('2d')
-    const img = new Image()
-    img.onload = () => {
-      canvas.width = img.width; canvas.height = img.height
-      ctx.drawImage(img, 0, 0)
-      const pw = img.width, ph = img.height
-
-      if (mode === 'image' && imageFile) {
-        const stamp = new Image()
-        stamp.onload = () => {
-          const sw = 200, sh = 100
-          const margin = 40
-          const posMap = {
-            'top-left':[(margin),(margin)],'top-center':[(pw-sw)/2,margin],'top-right':[pw-sw-margin,margin],
-            'middle-left':[margin,(ph-sh)/2],'middle-center':[(pw-sw)/2,(ph-sh)/2],'middle-right':[pw-sw-margin,(ph-sh)/2],
-            'bottom-left':[margin,ph-sh-margin],'bottom-center':[(pw-sw)/2,ph-sh-margin],'bottom-right':[pw-sw-margin,ph-sh-margin],
-          }
-          const [sx,sy] = tiled ? [(pw-sw)/2,(ph-sh)/2] : (posMap[position] || posMap['middle-center'])
-          ctx.globalAlpha = opacity
-          ctx.drawImage(stamp, sx, sy, sw, sh)
-          ctx.globalAlpha = 1
-          setPreview(canvas.toDataURL('image/jpeg', 0.85))
-        }
-        const url = URL.createObjectURL(imageFile)
-        stamp.onload = () => {
-          const sw=200,sh=100,margin=40
-          const posMap={'top-left':[margin,margin],'top-center':[(pw-sw)/2,margin],'top-right':[pw-sw-margin,margin],'middle-left':[margin,(ph-sh)/2],'middle-center':[(pw-sw)/2,(ph-sh)/2],'middle-right':[pw-sw-margin,(ph-sh)/2],'bottom-left':[margin,ph-sh-margin],'bottom-center':[(pw-sw)/2,ph-sh-margin],'bottom-right':[pw-sw-margin,ph-sh-margin]}
-          const [sx,sy]=tiled?[(pw-sw)/2,(ph-sh)/2]:(posMap[position]||posMap['middle-center'])
-          ctx.globalAlpha=opacity; ctx.drawImage(stamp,sx,sy,sw,sh); ctx.globalAlpha=1
-          URL.revokeObjectURL(url)
-          setPreview(canvas.toDataURL('image/jpeg',0.85))
-        }
-        stamp.src = url
-      } else if (text.trim()) {
-        // Parse hex color
-        const hex = color.replace('#','')
-        const r=parseInt(hex.slice(0,2),16)/255, g=parseInt(hex.slice(2,4),16)/255, b=parseInt(hex.slice(4,6),16)/255
-        ctx.globalAlpha = opacity
-        const fs = Math.round(fontSize * (pw / 595))
-        let fontStr = `${fs}px `
-        if (bold && italic) fontStr = `bold italic ${fs}px `
-        else if (bold) fontStr = `bold ${fs}px `
-        else if (italic) fontStr = `italic ${fs}px `
-        fontStr += (font === 'Times New Roman' ? 'serif' : font === 'Courier' ? 'monospace' : 'sans-serif')
-        ctx.font = fontStr
-        ctx.fillStyle = `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`
-        ctx.textBaseline = 'middle'
-        const resolved = text.replace('{{date}}', new Date().toISOString().slice(0,10)).replace('{{page_number}}', '1')
-        const tw = ctx.measureText(resolved).width
-        const margin = 60
-        const posMap = {
-          'top-left':[margin,margin+fs/2],'top-center':[pw/2,margin+fs/2],'top-right':[pw-margin,margin+fs/2],
-          'middle-left':[margin,ph/2],'middle-center':[pw/2,ph/2],'middle-right':[pw-margin,ph/2],
-          'bottom-left':[margin,ph-margin],'bottom-center':[pw/2,ph-margin],'bottom-right':[pw-margin,ph-margin],
-        }
-        if (tiled) {
-          ctx.textAlign = 'center'
-          const spacingX = pw/3, spacingY = ph/4
-          ctx.save()
-          for (let row=-1;row<5;row++) for (let col=-1;col<4;col++) {
-            const cx=col*spacingX+spacingX/2, cy=row*spacingY+spacingY/2
-            ctx.save(); ctx.translate(cx,cy); ctx.rotate(45*Math.PI/180)
-            ctx.fillText(resolved,0,0); ctx.restore()
-          }
-          ctx.restore()
-        } else {
-          let [cx,cy] = posMap[position] || posMap['middle-center']
-          ctx.textAlign = position.includes('center') ? 'center' : position.includes('right') ? 'right' : 'left'
-          ctx.save(); ctx.translate(cx,cy); ctx.rotate(rotation*Math.PI/180)
-          ctx.fillText(resolved,0,0); ctx.restore()
-        }
-        ctx.globalAlpha = 1
-        setPreview(canvas.toDataURL('image/jpeg', 0.85))
-      }
-    }
-    img.src = pageThumb
-  }
-=======
   const [file,        setFile]         = useState(null)
   const [pages,       setPages]        = useState([])       // [{page,img,width,height}]
   const [activePage,  setActivePage]   = useState(1)
@@ -245,14 +121,10 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
 
   const onImgDrop=useCallback(accepted=>{const f=accepted[0];setImageFile(f);const r=new FileReader();r.onload=e=>setImageDataUrl(e.target.result);r.readAsDataURL(f)},[])
   const {getRootProps:getImgProps,getInputProps:getImgInput}=useDropzone({onDrop:onImgDrop,accept:{'image/*':[]},maxFiles:1})
->>>>>>> ca46ded7371cddbc4005a85dbdc6abf72772763f
 
   const activeThumb=pages.find(p=>p.page===activePage)
   const settings={mode,text,font,bold,italic,color,fontSize,position,tiled,opacity,rotation,imageDataUrl}
 
-<<<<<<< HEAD
-  // Preview now rendered client-side via renderCanvasPreview()
-=======
   useEffect(()=>{
     if (!activeThumb?.img) return
     if (debRef.current) clearTimeout(debRef.current)
@@ -280,23 +152,16 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
       downloadBlob(res.data,'watermarked.pdf'); setStatus('done'); setTimeout(()=>setStatus('idle'),3000)
     }catch(e){setErrMsg(e.response?.data?.detail||e.message);setStatus('idle')}
   }
->>>>>>> ca46ded7371cddbc4005a85dbdc6abf72772763f
 
   const preview=previewCache[activePage]
 
   return (
-<<<<<<< HEAD
-    <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column' }}>
-      <canvas ref={canvasRef} style={{ display:'none' }} />
-      <TopBar onBack={onBack} title="◈ Add Watermark" subtitle="Text or image watermark with live preview" dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome} showCategories={showCategories} activeCategory={activeCategory} onCategoryChange={onCategoryChange} search={search} onSearch={onSearch}/>
-=======
     <div style={{ height:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
       <canvas ref={cvRef} style={{ display:'none' }}/>
       <TopBar onBack={onBack} title="◈ Watermark" subtitle="Add text or image watermark with live preview"
         dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome}
         showCategories={showCategories} activeCategory={activeCategory}
         onCategoryChange={onCategoryChange} search={search} onSearch={onSearch}/>
->>>>>>> ca46ded7371cddbc4005a85dbdc6abf72772763f
 
       {!file ? (
         <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px' }}>
