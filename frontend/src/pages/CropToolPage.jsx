@@ -9,7 +9,7 @@ import axios from 'axios'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 
-// ─── PDF point conversion math ─────────────────────────────────────────────────────
+// ─── PDF Math ─────────────────────────────────────────────────────
 function pxToPdfCrop(box, canvasW, canvasH, pdfW, pdfH) {
   const sx = pdfW / canvasW, sy = pdfH / canvasH
   return {
@@ -48,6 +48,15 @@ export default function CropToolPage() {
     onDrop, accept: { 'application/pdf': ['.pdf'] }, multiple: false
   })
 
+  // INTERNAL HANDLERS
+  const handleApplyToAll = () => {
+    if (!activePage) return
+    const masterBox = cropBoxes[activePage]
+    const newBoxes = {}
+    pages.forEach(p => { newBoxes[p.page] = { ...masterBox } })
+    setCropBoxes(newBoxes)
+  }
+
   const handleApply = async () => {
     if (!file) return
     setStatus('loading')
@@ -61,7 +70,7 @@ export default function CropToolPage() {
       formData.append('crops', JSON.stringify(crops))
 
       const res = await axios.post('https://your-huggingface-mind.hf.space/crop', formData, { responseType: 'blob' })
-      downloadBlob(res.data, 'cropped.pdf')
+      downloadBlob(res.data, 'cropped_result.pdf')
       setStatus('done')
     } catch (err) { setStatus('error') }
   }
@@ -84,16 +93,12 @@ export default function CropToolPage() {
             <>
               <h3 style={{ fontSize: '11px', color: '#888', marginBottom: '15px' }}>CONTROLS</h3>
               <button 
-                onClick={() => {
-                  const first = cropBoxes[1]
-                  const newBoxes = {}
-                  pages.forEach(p => newBoxes[p.page] = {...first})
-                  setCropBoxes(newBoxes)
-                }}
-                style={{ width: '100%', padding: '12px', background: '#1a1a32', border: '1px solid #6c63ff', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontSize: '12px' }}
+                onClick={handleApplyToAll}
+                style={{ width: '100%', padding: '12px', background: '#1a1a32', border: '1px solid #6c63ff', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', marginBottom: '10px' }}
               >
-                Apply Page 1 Crop to All
+                Apply Selected Crop to All
               </button>
+              <p style={{ fontSize: '11px', color: '#555' }}>Click a page to adjust its individual crop margins.</p>
             </>
           )}
         </div>
@@ -115,15 +120,19 @@ export default function CropToolPage() {
             <div style={{ width: '100%', maxWidth: '950px', display: 'flex', flexWrap: 'wrap', gap: '20px', justifyContent: 'center' }}>
                {pages.map(p => (
                  <div key={p.page} onClick={() => setActivePage(p.page)} style={{ position: 'relative', cursor: 'pointer', background: '#fff', borderRadius: '4px', overflow: 'hidden' }}>
-                    <img src={p.img} style={{ display: 'block', width: '250px' }} alt="" />
-                    <div style={{ position: 'absolute', inset: 0, border: '1px solid rgba(108, 99, 255, 0.3)' }} />
+                    <img src={p.img} style={{ display: 'block', width: '220px' }} alt="" />
+                    {/* Visual box to show it's active */}
+                    <div style={{ position: 'absolute', inset: 0, border: activePage === p.page ? '3px solid #6c63ff' : '1px solid rgba(255,255,255,0.1)' }} />
+                    <div style={{ position: 'absolute', bottom: 5, left: 5, background: 'rgba(0,0,0,0.7)', padding: '2px 6px', borderRadius: '4px', fontSize: '10px' }}>
+                      P. {p.page}
+                    </div>
                  </div>
                ))}
             </div>
           ) : (
             <div style={{ marginTop: '100px', textAlign: 'center', color: '#444' }}>
-              <Maximize2 size={48} style={{ opacity: 0.2 }} />
-              <p>No document active</p>
+              <Maximize2 size={48} style={{ opacity: 0.2, marginBottom: '10px' }} />
+              <p>Waiting for file...</p>
             </div>
           )}
         </div>
@@ -131,7 +140,7 @@ export default function CropToolPage() {
 
       {/* FLOATING ACTION BUTTON */}
       {file && (
-        <button onClick={handleApply} disabled={status === 'loading'} style={{ position: 'fixed', bottom: '30px', right: '30px', background: '#6c63ff', color: '#fff', border: 'none', padding: '12px 30px', borderRadius: '50px', fontWeight: 'bold', cursor: 'pointer', zIndex: 1000 }}>
+        <button onClick={handleApply} disabled={status === 'loading'} style={{ position: 'fixed', bottom: '30px', right: '30px', background: '#6c63ff', color: '#fff', border: 'none', padding: '12px 30px', borderRadius: '50px', fontWeight: 'bold', cursor: 'pointer', zIndex: 1000, boxShadow: '0 10px 30px rgba(108,99,255,0.4)' }}>
           {status === 'loading' ? <Loader2 className="spin" size={18} /> : 'Download Cropped PDF'}
         </button>
       )}
