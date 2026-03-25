@@ -21,66 +21,118 @@ export default function StampToolPage() {
   const [pos, setPos] = useState('top-right')
   const [opacity, setOpacity] = useState(0.6)
   const [rotation, setRotation] = useState(0)
+  const [loadingThumb, setLoadingThumb] = useState(false)
 
-  // 1. FIXED LAYOUT: Independent Scrolling
+  const onDrop = useCallback(acceptedFiles => {
+    if (acceptedFiles?.[0]) {
+      const f = acceptedFiles[0]
+      setFile(f)
+      setLoadingThumb(true)
+      // Trigger thumbnail generation
+      getThumbnailsProgressive(f, (ts) => {
+        setThumbnails(ts)
+        setTotalPages(ts.length)
+        setLoadingThumb(false)
+      })
+    }
+  }, [])
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
+    onDrop, 
+    accept: { 'application/pdf': ['.pdf'] },
+    multiple: false 
+  })
+
+  const handleApply = async () => {
+    if (!file) return
+    setStatus('loading')
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('text', stampText)
+      formData.append('position', pos)
+      formData.append('range', range)
+      
+      const res = await axios.post('https://your-huggingface-mind.hf.space/stamp', formData, { responseType: 'blob' })
+      downloadBlob(res.data, 'stamped.pdf')
+      setStatus('done')
+    } catch (err) {
+      setStatus('error')
+    }
+  }
+
+  const currentThumb = thumbnails.find(t => t.page === currentPage)
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg1)', color: 'var(--text1)', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0b0b18', color: '#fff', overflow: 'hidden' }}>
       <TopBar title="Stamp PDF" />
       
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         
-        {/* LEFT SIDEBAR: Static Settings */}
-        <div style={{ width: '280px', borderRight: '1px solid var(--border)', padding: '20px', overflowY: 'auto', background: 'var(--bg2)' }}>
-          <h3 style={{ fontSize: '14px', marginBottom: '16px' }}>STAMP SETTINGS</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '20px' }}>
-            {STAMP_LABELS.map(l => (
-              <button key={l} onClick={() => setStampText(l)} style={{ padding: '8px', fontSize: '11px', borderRadius: '4px', border: '1px solid var(--border)', background: stampText === l ? 'var(--accent)' : 'transparent', color: '#fff', cursor: 'pointer' }}>{l}</button>
-            ))}
-          </div>
-          
-          <label style={{ fontSize: '12px', display: 'block', marginBottom: '8px' }}>Page Range</label>
-          <input value={range} onChange={e => setRange(e.target.value)} placeholder="e.g. 1-3, 5" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg1)', color: '#fff', marginBottom: '20px' }} />
+        {/* LEFT SETTINGS SIDEBAR */}
+        <div style={{ width: '300px', borderRight: '1px solid #252538', padding: '20px', overflowY: 'auto', background: '#121225' }}>
+          {!file ? (
+            <div {...getRootProps()} style={{ border: '2px dashed #35354a', padding: '40px 20px', textAlign: 'center', borderRadius: '12px', cursor: 'pointer' }}>
+              <input {...getInputProps()} />
+              <Upload size={32} color="#6c63ff" style={{ marginBottom: '12px' }} />
+              <p style={{ fontSize: '13px' }}>{isDragActive ? 'Drop it!' : 'Upload PDF'}</p>
+            </div>
+          ) : (
+            <>
+              <h3 style={{ fontSize: '12px', color: '#888', marginBottom: '15px', letterSpacing: '1px' }}>STAMP CONTENT</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '25px' }}>
+                {STAMP_LABELS.map(l => (
+                  <button key={l} onClick={() => setStampText(l)} style={{ padding: '8px', fontSize: '11px', borderRadius: '6px', border: '1px solid #252538', background: stampText === l ? '#6c63ff' : '#1a1a32', color: '#fff', cursor: 'pointer' }}>{l}</button>
+                ))}
+              </div>
+
+              <h3 style={{ fontSize: '12px', color: '#888', marginBottom: '15px' }}>POSITION</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '25px' }}>
+                {POS_ROWS.map((row, i) => (
+                  <div key={i} style={{ display: 'flex', gap: '4px' }}>
+                    {row.map(p => (
+                      <button key={p} onClick={() => setPos(p)} style={{ flex: 1, height: '30px', borderRadius: '4px', border: '1px solid #252538', background: pos === p ? '#6c63ff' : '#1a1a32', cursor: 'pointer' }} />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
-        {/* MIDDLE STRIP: Scrollable Thumbnails */}
-        <div style={{ width: '160px', borderRight: '1px solid var(--border)', overflowY: 'auto', background: 'var(--bg2)', padding: '10px' }}>
+        {/* MIDDLE THUMBNAIL NAV */}
+        <div style={{ width: '150px', borderRight: '1px solid #252538', overflowY: 'auto', background: '#0f0f20', padding: '15px' }}>
+          {loadingThumb && <Loader2 className="spin" size={20} style={{ margin: '20px auto', display: 'block' }} />}
           {thumbnails.map((t, i) => (
-            <div key={i} onClick={() => setCurrentPage(i + 1)} style={{ marginBottom: '12px', cursor: 'pointer', border: currentPage === i + 1 ? '2px solid var(--accent)' : '1px solid transparent', borderRadius: '4px', padding: '4px' }}>
-              <img src={t.img} style={{ width: '100%', borderRadius: '2px' }} alt={`p${i+1}`} />
-              <p style={{ textAlign: 'center', fontSize: '10px', marginTop: '4px' }}>p.{i + 1}</p>
+            <div key={i} onClick={() => setCurrentPage(i + 1)} style={{ marginBottom: '15px', cursor: 'pointer', textAlign: 'center' }}>
+              <img src={t.img} style={{ width: '100%', borderRadius: '4px', border: currentPage === i+1 ? '2px solid #6c63ff' : '1px solid #252538' }} alt="" />
+              <span style={{ fontSize: '10px', color: currentPage === i+1 ? '#6c63ff' : '#666' }}>Page {i+1}</span>
             </div>
           ))}
         </div>
 
-        {/* RIGHT CONTENT: Large Preview */}
-        <div style={{ flex: 1, position: 'relative', overflowY: 'auto', background: 'var(--bg3)', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px' }}>
-          {file ? (
-            <div style={{ maxWidth: '90%', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-               <div style={{ position: 'relative', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
-                  {/* Actual PDF Preview Image would render here */}
-                  <div style={{ background: '#fff', width: '600px', height: '800px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#000' }}>
-                    [ Large Page {currentPage} Preview ]
-                  </div>
-                  
-                  {/* Floating "Done" Button above the preview */}
-                  <button style={{ position: 'absolute', top: '-50px', right: '0', background: 'var(--green)', color: '#fff', padding: '8px 16px', borderRadius: '4px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>
-                    Done for Page {currentPage}
-                  </button>
-               </div>
+        {/* MAIN LARGE PREVIEW AREA */}
+        <div style={{ flex: 1, background: '#080814', overflowY: 'auto', display: 'flex', justifyContent: 'center', padding: '40px', position: 'relative' }}>
+          {currentThumb ? (
+            <div style={{ position: 'relative', width: 'fit-content' }}>
+              <img src={currentThumb.img} style={{ maxWidth: '800px', width: '100%', boxShadow: '0 20px 50px rgba(0,0,0,0.6)', borderRadius: '4px' }} alt="Preview" />
+              
+              {/* Floating Done Button */}
+              <button style={{ position: 'absolute', top: '-45px', right: 0, background: '#1a8a3a', color: '#fff', border: 'none', padding: '6px 15px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
+                Done for Page {currentPage}
+              </button>
             </div>
           ) : (
-            <div style={{ marginTop: '100px', textAlign: 'center' }}>
-               <Upload size={48} color="var(--accent)" />
-               <p>Drop your PDF here to start stamping</p>
-            </div>
+            <div style={{ color: '#444', marginTop: '100px' }}>No document selected</div>
           )}
         </div>
       </div>
 
-      {/* FIXED FLOATING DOWNLOAD BUTTON */}
+      {/* FLOATING ACTION BUTTON */}
       {file && (
-        <button onClick={() => {/* apply logic */}} style={{ position: 'fixed', bottom: '30px', right: '30px', background: 'var(--accent)', color: '#fff', padding: '12px 24px', borderRadius: '50px', border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.4)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold' }}>
-          <Download size={18} /> Download Stamped PDF
+        <button onClick={handleApply} disabled={status === 'loading'} style={{ position: 'fixed', bottom: '30px', right: '30px', background: '#6c63ff', color: '#fff', border: 'none', padding: '12px 25px', borderRadius: '50px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 10px 30px rgba(108,99,255,0.4)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {status === 'loading' ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
+          Download Stamped PDF
         </button>
       )}
     </div>
