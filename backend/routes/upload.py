@@ -1,11 +1,36 @@
-import tempfile, shutil, hashlib, time, re
+import tempfile, shutil, hashlib, time, re, json, os
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 import fitz
 
-router    = APIRouter()
-_sessions: dict[str, dict] = {}
+router = APIRouter()
+
+# ── Session persistence ───────────────────────────────────────
+# Store sessions on disk so they survive Render free-tier restarts.
+# Each session lives at /tmp/pdfforge_sessions/<sid>/
+#   session.json  → metadata (filename, pageCount, pages/blocks)
+#   original.pdf  → the uploaded PDF
+
+SESSIONS_DIR = Path(tempfile.gettempdir()) / "pdfforge_sessions"
+SESSIONS_DIR.mkdir(exist_ok=True)
+
+def _session_dir(sid: str) -> Path:
+    return SESSIONS_DIR / sid
+
+def _save_session(sid: str, meta: dict):
+    d = _session_dir(sid)
+    d.mkdir(exist_ok=True)
+    with open(d / "session.json", "w") as f:
+        json.dump(meta, f)
+
+def _load_session(sid: str) -> dict | None:
+    meta_file = _session_dir(sid) / "session.json"
+    if not meta_file.exists():
+        return None
+    with open(meta_file) as f:
+        return json.load(f)
+
 
 def clean(text):
     fixes = {'\uf0b7':'•','\uf0a7':'•','\u2022':'•','\u00a0':' ','\uf020':' '}
@@ -22,20 +47,19 @@ def extract_blocks(pdf_path):
 
     for pn, page in enumerate(doc, 1):
         pw, ph   = page.rect.width, page.rect.height
-        raw_lines = []  # one entry per visual line
+        raw_lines = []
 
         page_dict = page.get_text("dict")
 
         for block in page_dict.get("blocks", []):
             if block.get("type") != 0:
-                continue  # skip image blocks
+                continue
 
             for line in block.get("lines", []):
                 spans = line.get("spans", [])
                 if not spans:
                     continue
 
-                # Merge all spans in this line
                 merged_text  = ""
                 sizes        = []
                 bold_count   = 0
@@ -67,7 +91,6 @@ def extract_blocks(pdf_path):
                 bold     = bold_count   > n / 2
                 italic   = italic_count > n / 2
 
-                # Line bounding box
                 bbox = line.get("bbox", [0, 0, 0, 0])
                 x0, y0, x1, y1 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
 
@@ -88,7 +111,6 @@ def extract_blocks(pdf_path):
                     "pageWidth": round(pw, 2),
                 })
 
-        # Sort by vertical position then horizontal
         raw_lines.sort(key=lambda l: (round(l["y0"], 0), l["x0"]))
 
         blocks = []
@@ -131,35 +153,40 @@ def extract_blocks(pdf_path):
 async def upload(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files accepted.")
-    tmp_dir  = tempfile.mkdtemp()
-    pdf_path = str(Path(tmp_dir) / file.filename)
+
+    sid      = hashlib.md5(f"{file.filename}{time.time()}".encode()).hexdigest()[:12]
+    sess_dir = _session_dir(sid)
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = str(sess_dir / "original.pdf")
+
     with open(pdf_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
+
     try:
         data = extract_blocks(pdf_path)
     except Exception as e:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        shutil.rmtree(str(sess_dir), ignore_errors=True)
         raise HTTPException(422, f"Failed to read PDF: {e}")
-    sid = hashlib.md5(f"{file.filename}{time.time()}".encode()).hexdigest()[:12]
-    _sessions[sid] = {
+
+    _save_session(sid, {
         "pdf":      pdf_path,
-        "tmp_dir":  tmp_dir,
+        "tmp_dir":  str(sess_dir),
         "filename": file.filename,
-        "data":     data,
-    }
+    })
+
     return {"sessionId": sid, "filename": file.filename, **data}
 
 
 @router.get("/pdf/{sid}")
 def serve_pdf(sid: str):
-    s = _sessions.get(sid)
-    if not s:
+    meta = _load_session(sid)
+    if not meta:
         raise HTTPException(404, "Session not found.")
-    return FileResponse(s["pdf"], media_type="application/pdf")
+    return FileResponse(meta["pdf"], media_type="application/pdf")
 
 
-def get_session(sid):
-    s = _sessions.get(sid)
-    if not s:
+def get_session(sid: str) -> dict:
+    meta = _load_session(sid)
+    if not meta:
         raise HTTPException(404, "Session expired. Please re-upload.")
-    return s
+    return meta
