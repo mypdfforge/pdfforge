@@ -4,7 +4,12 @@ import axios from 'axios'
 
 // ── Render backend (existing tools) ──────────────────────────
 const RENDER_URL = import.meta.env.VITE_API_URL || 'https://mypdfforge.onrender.com/api'
-const render = axios.create({ baseURL: RENDER_URL })
+const render = axios.create({ baseURL: RENDER_URL, timeout: 120000 })
+
+// Wake up Render from sleep (free tier spins down after inactivity).
+// Call this as early as possible so the cold start happens in the background.
+export const wakeRender = () =>
+  axios.get(`${RENDER_URL.replace('/api', '')}/api/health`, { timeout: 60000 }).catch(() => {})
 
 // ── Cloudflare Brain (distributed grid tools) ─────────────────
 const BRAIN_URL = import.meta.env.VITE_BRAIN_URL || ''

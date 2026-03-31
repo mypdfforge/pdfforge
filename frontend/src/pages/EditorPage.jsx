@@ -121,6 +121,11 @@ export default function EditorPage({ onBack }) {
   const [done,         setDone]         = useState(false)
   const [showAI,       setShowAI]       = useState(false)
   const [showPreview,  setShowPreview]  = useState(false)
+  const [exportError,  setExportError]  = useState('')
+
+  // Wake Render backend on mount — free tier sleeps after inactivity.
+  // Firing early means by the time the user finishes editing, backend is warm.
+  React.useEffect(() => { api.wakeRender() }, [])
 
   const handleUploaded = (data) => {
     setUploadData(data)
@@ -144,11 +149,21 @@ export default function EditorPage({ onBack }) {
 
   const handleExport = async () => {
     setExporting(true)
+    setExportError('')
     try {
       const { data } = await api.exportPDF(uploadData.sessionId, sections)
       api.downloadBlob(data, `${uploadData.filename.replace('.pdf','')}_edited.pdf`)
       setDone(true); setTimeout(() => setDone(false), 3000)
-    } catch { alert('Export failed. Check backend is running.') }
+    } catch(e) {
+      const status = e?.response?.status
+      if (status === 404) {
+        setExportError('Session expired — backend restarted. Please re-upload your PDF.')
+      } else if (e?.code === 'ECONNABORTED' || e?.message?.includes('timeout')) {
+        setExportError('Backend is waking up (free tier). Please wait 30 seconds and try again.')
+      } else {
+        setExportError('Export failed. Please try again.')
+      }
+    }
     finally { setExporting(false) }
   }
 
@@ -208,6 +223,13 @@ export default function EditorPage({ onBack }) {
           </button>
         </div>
       </header>
+
+      {exportError && (
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'10px', padding:'9px 20px', background:'rgba(229,83,75,0.1)', borderBottom:'1px solid rgba(229,83,75,0.25)', fontSize:'13px', color:'#e5534b', flexShrink:0 }}>
+          <span>⚠ {exportError}</span>
+          <button onClick={() => setExportError('')} style={{ background:'none', border:'none', color:'#e5534b', cursor:'pointer', fontSize:'16px', lineHeight:1 }}>×</button>
+        </div>
+      )}
 
       <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
         <main style={{ flex:1, overflowY:'auto', padding:'24px', marginRight:showAI?'380px':0, transition:'margin 0.3s ease' }}>
