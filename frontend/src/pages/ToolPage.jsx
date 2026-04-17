@@ -5,10 +5,11 @@ import { Upload, Loader2, CheckCircle, AlertCircle, Info, X, Download,
 import TopBar from '../components/TopBar'
 import * as api from '../utils/api'
 import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
-import { clientExtract, clientDuplicatePage, clientDeletePages } from '../utils/pdfClient'
+import { clientExtract, clientDuplicatePage, clientDeletePages, clientRepair } from '../utils/pdfClient'
 import { clientPdfToImages, clientPdfToJpg } from '../utils/pdfToImageClient'
 import axios from 'axios'
 import { processPDF } from '../lib/pdfForge'
+import SmartDownload from '../components/SmartDownload'
 
 const CONFIGS = {
   merge:        { title:'Merge PDFs',        desc:'Combine multiple PDFs into one.',       multi:true,  guide:'Upload 2+ PDFs. Drag arrows to reorder.', fields:[], action:(f)=>api.mergePDFs(f), out:'merged.pdf', clientSide:true },
@@ -18,7 +19,7 @@ const CONFIGS = {
   delete:       { title:'Delete Pages',      desc:'Remove unwanted pages.',                guide:'Click thumbnails or type page numbers to delete.', fields:[{id:'pages',label:'Pages to delete',placeholder:'e.g. 1,3'}], useSelector:true, action:(f,v)=>api.deletePages(f[0],v.pages||'1'), out:'output.pdf', clientSide:true },
   duplicate:    { title:'Duplicate Page',    desc:'Duplicate a page.',                     guide:'Enter the page number to duplicate.', fields:[{id:'page',label:'Page number',placeholder:'1',default:'1'}], action:(f,v)=>clientDuplicatePage(f[0],v.page||'1'), out:'duplicated.pdf', clientSide:true },
   compress:     { title:'Compress PDF',      desc:'Reduce file size.',                     guide:'Just upload — no settings needed.', fields:[], action:(f)=>api.compressPDF(f[0]), out:'compressed.pdf', noPreview:true, clientSide:true },
-  repair:       { title:'Repair PDF',        desc:'Fix corrupted PDF files.',              guide:'Upload your damaged PDF.', fields:[], action:(f)=>{ const form=new FormData(); form.append('file',f[0]); return api._post('/tools/repair',form) }, out:'repaired.pdf', noPreview:true },
+  repair:       { title:'Repair PDF',        desc:'Fix corrupted PDF files.',              guide:'Upload your damaged PDF.', fields:[], action:(f)=>clientRepair(f[0]), out:'repaired.pdf', noPreview:true, clientSide:true },
   images:       { title:'PDF to Images',     desc:'Convert each page to PNG (ZIP).',       guide:'Each page becomes a PNG.', fields:[], action:(f,v,onP)=>clientPdfToImages(f[0],onP), out:'pdf_images.zip', mime:'application/zip', noPreview:true, clientSide:true },
   'image-to-pdf':{ title:'Images to PDF',   desc:'Convert images to a PDF.',              guide:'Upload images in order.', multi:true, accept:{'image/jpeg':['.jpg','.jpeg'],'image/png':['.png']}, fields:[], action:(f)=>api.imageToPDF(f), out:'from_images.pdf', noPreview:true },
   'pdf-to-word':{ title:'PDF to Word',       desc:'Convert to editable .docx.',            guide:'Upload PDF and download Word.', fields:[], action:(f)=>api.pdfToWord(f[0]), out:'converted.docx', mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', noPreview:true },
@@ -355,10 +356,13 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
   const [pageRotations,  setPageRotations]  = useState({})  // { pageNum: degrees }
   const [deletedPages,   setDeletedPages]   = useState(new Set())  // pages removed from grid
   const [duplicatedAfter,setDuplicatedAfter]= useState({})  // { pageNum: count } — pages duplicated
+  const [smartResult,   setSmartResult]   = useState(null)
+  const [sourceFile,    setSourceFile]    = useState(null)
 
   const accept = cfg?.accept || {'application/pdf':['.pdf']}
   const onDrop = useCallback(a => {
     setFiles(prev => cfg?.multi ? [...prev,...a] : a)
+    if (a.length > 0) setSourceFile(a[0])
     setSelectedPages(new Set()); setPageRotations({}); setDeletedPages(new Set()); setDuplicatedAfter({})
   }, [cfg])
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept, maxFiles: cfg?.multi ? 20 : 1 })
@@ -411,11 +415,11 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
 
   const run = async () => {
     if (!files.length) return
-    setStatus('loading'); setErrMsg(''); setProgress(null)
+    setStatus('loading'); setErrMsg(''); setProgress(null); setSmartResult(null)
     try {
 
       // ── Tools routed to Cloudflare + HF worker grid ──────────
-      const GRID_TOOLS = ['compress', 'watermark', 'stamp', 'ocr']
+      const GRID_TOOLS = ['watermark', 'stamp', 'ocr']
       if (GRID_TOOLS.includes(toolId)) {
         const downloadUrl = await processPDF(
           files[0],
@@ -426,21 +430,28 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
             }
           }
         )
-        // Trigger browser download from the R2 URL
-        const a      = document.createElement('a')
-        a.href       = downloadUrl
-        a.download   = cfg.out
-        a.target     = '_blank'
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
+        // Fetch the blob so SmartDownload can show before/after stats
+        try {
+          const resp = await fetch(downloadUrl)
+          const blob = await resp.blob()
+          setSmartResult({ blob, name: cfg.out })
+        } catch {
+          // fallback: direct download if fetch fails (CORS etc.)
+          const a = document.createElement('a')
+          a.href = downloadUrl; a.download = cfg.out; a.target = '_blank'
+          document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        }
 
       } else {
         // ── Everything else still goes to Render (unchanged) ────
         const onProgress = (current, total) => setProgress({ current, total })
         const res = await cfg.action(files, vals, onProgress)
         if (!cfg.clientSide) {
-          api.downloadBlob(res.data, cfg.out, cfg.mime||'application/pdf')
+          const blob = new Blob([res.data], { type: cfg.mime || 'application/pdf' })
+          setSmartResult({ blob, name: cfg.out })
+        } else {
+          // client-side tools (merge, split etc.) already triggered download
+          setSmartResult({ blob: null, name: cfg.out })
         }
       }
 
@@ -453,6 +464,24 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
   }
 
   if (!cfg) return <div style={{ padding:'40px', color:'var(--red)' }}>Unknown tool: {toolId}</div>
+
+  // Show SmartDownload result page after successful processing
+  if (smartResult) return (
+    <div style={{ minHeight:'100vh', background:'var(--bg)' }}>
+      <header style={{ height:'52px', padding:'0 20px', display:'flex', alignItems:'center', gap:'12px', borderBottom:'1px solid var(--border)', background:'rgba(13,13,20,0.97)', backdropFilter:'blur(12px)', position:'sticky', top:0, zIndex:50 }}>
+        <button onClick={onBack} style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'13px', color:'#ffffff', background:'none', border:'1px solid var(--border)', borderRadius:'8px', padding:'5px 12px', cursor:'pointer' }}>← Back</button>
+        <span style={{ fontWeight:700, color:'#ffffff', fontSize:'15px' }}>{cfg.title}</span>
+      </header>
+      <SmartDownload
+        toolId={toolId}
+        originalFile={sourceFile}
+        outputBlob={smartResult.blob}
+        outputFilename={smartResult.name}
+        onSelectTool={onSelectTool}
+        onReset={() => { setSmartResult(null); setStatus('idle'); setFiles([]); setSourceFile(null) }}
+      />
+    </div>
+  )
 
   const inputFields    = cfg.fields.filter(f => f.type !== 'checkbox')
   const checkboxFields = cfg.fields.filter(f => f.type === 'checkbox')

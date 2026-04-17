@@ -2,7 +2,9 @@ import React, { useState, useCallback, useRef, useMemo } from 'react'
 import { ArrowLeft, Download, Loader2, CheckCircle, Upload as UploadIcon, Sparkles, Eye, Save, Crown, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useDropzone } from 'react-dropzone'
 import SectionCard  from '../components/SectionCard'
-import AIAssistant  from '../components/AIAssistant'
+import AIAssistant   from '../components/AIAssistant'
+import AIChatPanel   from '../components/AIChatPanel'
+import ATSScoreMeter from '../components/ATSScoreMeter'
 import axios from 'axios'
 import * as api from '../utils/api'
 
@@ -121,6 +123,7 @@ export default function EditorPage({ onBack }) {
   const [done,         setDone]         = useState(false)
   const [showAI,       setShowAI]       = useState(false)
   const [showPreview,  setShowPreview]  = useState(false)
+  const [showAIChat,   setShowAIChat]   = useState(false)
   const [exportError,  setExportError]  = useState('')
 
   // Wake Render backend on mount — free tier sleeps after inactivity.
@@ -209,7 +212,11 @@ export default function EditorPage({ onBack }) {
           </div>
           <button onClick={() => setShowAI(s=>!s)}
             style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'13px', fontWeight:600, color:showAI?'#fff':'#9d97ff', background:showAI?'linear-gradient(135deg,#6c63ff,#e879f9)':'rgba(108,99,255,0.1)', border:`1px solid ${showAI?'transparent':'rgba(108,99,255,0.3)'}`, borderRadius:'8px', padding:'6px 13px', cursor:'pointer' }}>
-            <Sparkles size={13}/> AI
+            <Sparkles size={13}/> Resume AI
+          </button>
+          <button onClick={() => setShowAIChat(s=>!s)}
+            style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'13px', fontWeight:600, color:showAIChat?'#fff':'#9d97ff', background:showAIChat?'linear-gradient(135deg,#6c63ff,#e879f9)':'rgba(108,99,255,0.1)', border:`1px solid ${showAIChat?'transparent':'rgba(108,99,255,0.3)'}`, borderRadius:'8px', padding:'6px 13px', cursor:'pointer' }}>
+            🤖 Ask AI
           </button>
           <button onClick={() => setShowPreview(true)}
             style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'13px', color:'#eeeef5', background:'#1e1e2e', border:'1px solid #252538', borderRadius:'8px', padding:'6px 13px', cursor:'pointer' }}>
@@ -256,6 +263,7 @@ export default function EditorPage({ onBack }) {
 
             {/* Sidebar */}
             <aside style={{ width:'210px', flexShrink:0, position:'sticky', top:'66px', alignSelf:'flex-start', display:'flex', flexDirection:'column', gap:'12px' }}>
+            <ATSScoreMeter blocks={sections} />
               <div style={{ background:'#13131e', border:'1px solid #252538', borderRadius:'12px', padding:'14px' }}>
                 <p style={{ fontSize:'10px', fontFamily:'monospace', color:'#5a5a78', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:'10px' }}>Document</p>
                 {[['Lines', sections.length],['Pages', pageCount],['Edited', changedCount]].map(([l,v]) => (
@@ -295,6 +303,16 @@ export default function EditorPage({ onBack }) {
             onApplySuggestion={handleAISuggestion}
             onClose={() => setShowAI(false)}
           />
+        )}
+
+        {showAIChat && (
+          <div style={{ position:'fixed', right:0, top:0, bottom:0, width:'360px', zIndex:50, boxShadow:'-4px 0 24px rgba(0,0,0,0.4)' }}>
+            <AIChatPanel
+              sessionId={uploadData.sessionId}
+              textBlocks={sections}
+              onClose={() => setShowAIChat(false)}
+            />
+          </div>
         )}
       </div>
 

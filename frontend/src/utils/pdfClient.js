@@ -219,3 +219,35 @@ export async function clientCompress(file) {
   URL.revokeObjectURL(url)
   return { data: blob }
 }
+
+/**
+ * Repair — reloads the PDF with lenient parsing and re-saves it clean.
+ * Fixes cross-reference table issues, broken object streams, and most
+ * structural corruption that causes "cannot open" errors.
+ * @param {File} file - source PDF
+ */
+export async function clientRepair(file) {
+  const { PDFDocument } = getPdfLib()
+  const bytes = await readFile(file)
+
+  // ignoreEncryption + throwOnInvalidObject:false = most lenient load possible
+  const pdfDoc = await PDFDocument.load(bytes, {
+    ignoreEncryption:      true,
+    throwOnInvalidObject:  false,
+  })
+
+  const repaired = await pdfDoc.save({
+    useObjectStreams: true,
+    addDefaultPage:  false,
+    objectsPerTick:  50,
+  })
+
+  const blob = new Blob([repaired], { type: 'application/pdf' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = 'repaired.pdf'
+  a.click()
+  URL.revokeObjectURL(url)
+  return { data: blob }
+}

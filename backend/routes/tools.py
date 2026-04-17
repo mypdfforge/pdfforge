@@ -740,31 +740,142 @@ async def pptx_to_pdf(file: UploadFile = File(...)):
 async def xlsx_to_pdf(file: UploadFile = File(...)):
     try:
         from openpyxl import load_workbook
+        from openpyxl.styles.colors import COLOR_INDEX, aRGB_REGEX
     except ImportError:
         raise HTTPException(500, "openpyxl not installed. Run: pip install openpyxl")
+
+    def argb_to_rgb_tuple(argb: str):
+        """Convert openpyxl ARGB hex string like 'FF3498DB' → (r,g,b) floats 0–1."""
+        if not argb or len(argb) < 6:
+            return None
+        hex6 = argb[-6:]  # strip alpha channel
+        try:
+            r = int(hex6[0:2], 16) / 255
+            g = int(hex6[2:4], 16) / 255
+            b = int(hex6[4:6], 16) / 255
+            return (r, g, b)
+        except ValueError:
+            return None
+
+    def get_fill_color(cell):
+        """Return (r,g,b) fill color or None if no fill / transparent."""
+        try:
+            fill = cell.fill
+            if fill is None or fill.fill_type in (None, "none"):
+                return None
+            fg = fill.fgColor
+            if fg is None:
+                return None
+            if fg.type == "rgb":
+                c = argb_to_rgb_tuple(fg.rgb)
+                if c and c != (1.0, 1.0, 1.0):  # skip white (= no fill)
+                    return c
+            elif fg.type == "theme":
+                # theme colours — skip for simplicity, still better than nothing
+                return None
+        except Exception:
+            return None
+        return None
+
+    def get_font_color(cell):
+        """Return (r,g,b) font color, default black."""
+        try:
+            fc = cell.font.color if cell.font else None
+            if fc and fc.type == "rgb":
+                c = argb_to_rgb_tuple(fc.rgb)
+                if c:
+                    return c
+        except Exception:
+            pass
+        return (0, 0, 0)
+
+    def is_bold(cell):
+        try:
+            return bool(cell.font and cell.font.bold)
+        except Exception:
+            return False
+
     tmp = tempfile.mkdtemp()
     src = os.path.join(tmp, file.filename)
     out = os.path.join(tmp, "converted.pdf")
-    with open(src, "wb") as f: shutil.copyfileobj(file.file, f)
+    with open(src, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
     wb = load_workbook(src, data_only=True)
     doc = fitz.open()
+
+    PAGE_W, PAGE_H = 842, 595   # A4 landscape
+    MARGIN         = 30
+    ROW_H          = 18         # row height in points
+    FS             = 8          # font size
+
     for sheet in wb.worksheets:
-        page = doc.new_page(width=842, height=595)  # A4 landscape
-        x_start, y_start, fs = 30, 40, 9
-        col_w = min(120, max(60, (842 - 60) // max(sheet.max_column, 1)))
-        for ri, row in enumerate(sheet.iter_rows(values_only=True)):
-            y = y_start + ri * (fs + 4)
-            if y > 575:
-                page = doc.new_page(width=842, height=595)
-                y_start = 40; ri = 0; y = 40
-            for ci, cell in enumerate(row):
-                if ci > 12: break
-                text = str(cell) if cell is not None else ""
-                if not text or text == "None": continue
-                x = x_start + ci * col_w
-                page.insert_text(fitz.Point(x, y), text[:20],
-                    fontname="helv", fontsize=fs, color=(0,0,0))
-    doc.save(out); doc.close()
+        max_col = min(sheet.max_column or 1, 15)   # cap at 15 columns
+        max_row = sheet.max_row or 1
+
+        # Calculate column widths from openpyxl column dimensions
+        usable_w = PAGE_W - 2 * MARGIN
+        raw_widths = []
+        for ci in range(1, max_col + 1):
+            col_letter = sheet.cell(1, ci).column_letter
+            dim = sheet.column_dimensions.get(col_letter)
+            raw_widths.append(dim.width if dim and dim.width else 10)
+        total_raw = sum(raw_widths) or 1
+        col_widths = [max(40, int(w / total_raw * usable_w)) for w in raw_widths]
+
+        # Build pages
+        page       = doc.new_page(width=PAGE_W, height=PAGE_H)
+        y          = MARGIN + 10
+        page_title = sheet.title
+        page.insert_text(fitz.Point(MARGIN, y - 2), page_title,
+                         fontname="hebo", fontsize=10, color=(0.2, 0.2, 0.2))
+        y += 4
+
+        for ri, row_cells in enumerate(sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_col)):
+            # New page if needed
+            if y + ROW_H > PAGE_H - MARGIN:
+                page = doc.new_page(width=PAGE_W, height=PAGE_H)
+                y    = MARGIN + 10
+
+            x = MARGIN
+            for ci, cell in enumerate(row_cells):
+                cw = col_widths[ci]
+
+                # 1. Draw cell background fill
+                fill_color = get_fill_color(cell)
+                cell_rect  = fitz.Rect(x, y, x + cw, y + ROW_H)
+                if fill_color:
+                    page.draw_rect(cell_rect, color=None, fill=fill_color, width=0)
+
+                # 2. Draw thin cell border
+                page.draw_rect(cell_rect,
+                               color=(0.82, 0.82, 0.82),  # light grey border
+                               fill=None,
+                               width=0.3)
+
+                # 3. Draw text
+                text = str(cell.value) if cell.value is not None else ""
+                if text and text != "None":
+                    font_color = get_font_color(cell)
+                    fontname   = "hebo" if is_bold(cell) else "helv"
+                    # Clip text to cell width (approx 1 char ≈ FS * 0.55 pts)
+                    max_chars  = max(1, int(cw / (FS * 0.55)))
+                    text_clipped = text[:max_chars]
+                    # Vertical center inside row
+                    page.insert_text(
+                        fitz.Point(x + 2, y + ROW_H - 4),
+                        text_clipped,
+                        fontname=fontname,
+                        fontsize=FS,
+                        color=font_color,
+                    )
+
+                x += cw
+
+            y += ROW_H
+
+    doc.save(out)
+    doc.close()
     return FileResponse(out, media_type="application/pdf", filename="converted.pdf")
 
 # ── HTML → PDF ─────────────────────────────────────────────────────────

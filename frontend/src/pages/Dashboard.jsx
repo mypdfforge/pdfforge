@@ -1,43 +1,48 @@
 import React, { useState, useEffect } from 'react'
-import { ArrowRight, Zap, ChevronDown } from 'lucide-react'
+import { ArrowRight, Zap, ChevronDown, Clock } from 'lucide-react'
 import TopBar from '../components/TopBar'
+import SmartUpload from '../components/SmartUpload'
+import OneClickWorkflows from '../components/OneClickWorkflows'
+import FileHistory from '../components/FileHistory'
+import { CreditsBadge, PaywallModal } from '../components/CreditsBadge'
+import { getRemaining, canUse } from '../utils/credits'
 
 export const TOOLS = [
   { id:'editor', featured:true, tag:'★ MOST POPULAR', icon:'✦', label:'Resume Editor',
     desc:'Edit PDF text directly on the page. Preserves original fonts, spacing, bullets and layout.',
     color:'#6c63ff', bg:'rgba(108,99,255,0.12)', border:'rgba(108,99,255,0.4)', category:'all',
-    perks:['Preserves original layout','Click any text to edit','AI-powered suggestions','Export instantly'] },
-  { id:'merge',     icon:'⊕', label:'Merge PDF',        desc:'Combine multiple PDFs into one document.',               color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
-  { id:'split',     icon:'⊘', label:'Split PDF',         desc:'Split by page range. Select pages visually.',           color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
-  { id:'extract',   icon:'⬡', label:'Extract Pages',     desc:'Pull specific pages out into a new PDF.',               color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
-  { id:'rotate',    icon:'↻', label:'Rotate Pages',      desc:'Rotate one or all pages 90°, 180°, or 270°.',          color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
-  { id:'delete',    icon:'⊗', label:'Delete Pages',      desc:'Remove unwanted pages from your PDF.',                  color:'#e5534b', bg:'rgba(229,83,75,0.08)',   border:'rgba(229,83,75,0.25)',   category:'organize' },
-  { id:'duplicate', icon:'⧉', label:'Duplicate Page',    desc:'Duplicate any page and insert it after the original.', color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
-  { id:'crop',      icon:'⬚', label:'Crop PDF',           desc:'Trim margins from all pages.',                          color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
-  { id:'image-to-pdf', icon:'📄', label:'Images → PDF',  desc:'Convert JPG/PNG images to a single PDF.',              color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
-  { id:'word-to-pdf',  icon:'📋', label:'Word → PDF',     desc:'Convert .docx documents to PDF.',                      color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
-  { id:'pptx-to-pdf',  icon:'📊', label:'PowerPoint → PDF', desc:'Convert .pptx presentations to PDF.',               color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
-  { id:'xlsx-to-pdf',  icon:'📈', label:'Excel → PDF',    desc:'Convert .xlsx spreadsheets to PDF.',                   color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
-  { id:'html-to-pdf',  icon:'🌐', label:'HTML → PDF',     desc:'Convert HTML web pages to PDF.',                       color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
-  { id:'images',      icon:'🖼', label:'PDF → Images',    desc:'Convert each page to PNG. Download as ZIP.',            color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
-  { id:'pdf-to-jpg',  icon:'🖼', label:'PDF → JPG',        desc:'Export PDF pages as JPG images (ZIP).',               color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
-  { id:'pdf-to-word', icon:'📝', label:'PDF → Word',       desc:'Convert PDF text to an editable .docx file.',         color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
-  { id:'pdf-to-pptx', icon:'📊', label:'PDF → PowerPoint', desc:'Convert PDF pages to PowerPoint slides.',             color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
-  { id:'pdf-to-xlsx', icon:'📈', label:'PDF → Excel',      desc:'Extract PDF content into a spreadsheet.',             color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
-  { id:'pdf-to-pdfa', icon:'📄', label:'PDF → PDF/A',      desc:'Convert to archive-standard PDF/A format.',           color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
-  { id:'compress',    icon:'⬡', label:'Compress PDF',      desc:'Reduce file size while maintaining quality.',          color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'optimize' },
-  { id:'repair',      icon:'⚙', label:'Repair PDF',        desc:'Fix corrupted or broken PDF files.',                   color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'optimize' },
-  { id:'watermark',   icon:'◈', label:'Watermark',         desc:'Add text or image watermark with live preview.',       color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'enhance' },
-  { id:'pagenums',    icon:'◎', label:'Page Numbers',      desc:'Add page numbers to every page.',                      color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'enhance' },
-  { id:'stamp',       icon:'◆', label:'Stamp',             desc:'Add APPROVED/DRAFT/CONFIDENTIAL stamps.',              color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'enhance' },
-  { id:'findreplace', icon:'⌕', label:'Find & Replace',    desc:'Search and replace text across entire PDF.',           color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'enhance' },
-  { id:'organize',    icon:'⊞', label:'Organize Pages',     desc:'Drag to reorder, rotate or delete pages visually.',    color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
-  { id:'sign',        icon:'✍', label:'Sign PDF',           desc:'Draw, type or upload your signature and place it.',    color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'enhance' },
-  { id:'ocr',         icon:'⌕', label:'OCR PDF',            desc:'Make scanned PDFs searchable or extract plain text.',  color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'enhance' },
-  { id:'translate',   icon:'⇄', label:'Translate PDF',     desc:'Translate your PDF into 15+ languages instantly.',     color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'enhance' },
-  { id:'protect',     icon:'🔐', label:'Protect PDF',      desc:'Add a password to your PDF.',                          color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'security' },
-  { id:'unlock',      icon:'🔓', label:'Unlock PDF',       desc:'Remove password protection from PDF.',                 color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'security' },
-  { id:'redact',      icon:'⬛', label:'Redact Text',      desc:'Permanently black out sensitive text.',                color:'#e5534b', bg:'rgba(229,83,75,0.08)',   border:'rgba(229,83,75,0.25)',   category:'security' },
+    perks:['Preserves original layout','Click any text to edit','AI-powered suggestions','ATS score check'] },
+  { id:'merge',     icon:'⊕', label:'Merge PDF',           desc:'Combine multiple PDFs into one document.',               color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
+  { id:'split',     icon:'⊘', label:'Split PDF',            desc:'Split by page range. Select pages visually.',           color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
+  { id:'extract',   icon:'⬡', label:'Extract Pages',        desc:'Pull specific pages out into a new PDF.',               color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
+  { id:'rotate',    icon:'↻', label:'Rotate Pages',         desc:'Rotate one or all pages 90°, 180°, or 270°.',          color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
+  { id:'delete',    icon:'⊗', label:'Delete Pages',         desc:'Remove unwanted pages from your PDF.',                  color:'#e5534b', bg:'rgba(229,83,75,0.08)',   border:'rgba(229,83,75,0.25)',   category:'organize' },
+  { id:'duplicate', icon:'⧉', label:'Duplicate Page',       desc:'Duplicate any page and insert it after the original.', color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
+  { id:'crop',      icon:'⬚', label:'Crop PDF',              desc:'Trim margins from all pages.',                          color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
+  { id:'image-to-pdf', icon:'📄', label:'Images → PDF',     desc:'Convert JPG/PNG images to a single PDF.',              color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
+  { id:'word-to-pdf',  icon:'📋', label:'Word → PDF',        desc:'Convert .docx documents to PDF.',                      color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
+  { id:'pptx-to-pdf',  icon:'📊', label:'PowerPoint → PDF', desc:'Convert .pptx presentations to PDF.',                  color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
+  { id:'xlsx-to-pdf',  icon:'📈', label:'Excel → PDF',       desc:'Convert .xlsx spreadsheets to PDF.',                   color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
+  { id:'html-to-pdf',  icon:'🌐', label:'HTML → PDF',        desc:'Convert HTML web pages to PDF.',                       color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'convert', sub:'to' },
+  { id:'images',       icon:'🖼', label:'PDF → Images',      desc:'Convert each page to PNG. Download as ZIP.',            color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
+  { id:'pdf-to-jpg',   icon:'🖼', label:'PDF → JPG',         desc:'Export PDF pages as JPG images (ZIP).',                color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
+  { id:'pdf-to-word',  icon:'📝', label:'PDF → Word',        desc:'Convert PDF text to an editable .docx file.',          color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
+  { id:'pdf-to-pptx',  icon:'📊', label:'PDF → PowerPoint',  desc:'Convert PDF pages to PowerPoint slides.',              color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
+  { id:'pdf-to-xlsx',  icon:'📈', label:'PDF → Excel',       desc:'Extract PDF content into a spreadsheet.',              color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
+  { id:'pdf-to-pdfa',  icon:'📄', label:'PDF → PDF/A',       desc:'Convert to archive-standard PDF/A format.',            color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'convert', sub:'from' },
+  { id:'compress',     icon:'⬡', label:'Compress PDF',       desc:'Reduce file size while maintaining quality.',          color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'optimize' },
+  { id:'repair',       icon:'⚙', label:'Repair PDF',         desc:'Fix corrupted or broken PDF files.',                   color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'optimize' },
+  { id:'watermark',    icon:'◈', label:'Watermark',          desc:'Add text or image watermark with live preview.',       color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'enhance' },
+  { id:'pagenums',     icon:'◎', label:'Page Numbers',       desc:'Add page numbers to every page.',                      color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'enhance' },
+  { id:'stamp',        icon:'◆', label:'Stamp',              desc:'Add APPROVED/DRAFT/CONFIDENTIAL stamps.',              color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'enhance' },
+  { id:'findreplace',  icon:'⌕', label:'Find & Replace',     desc:'Search and replace text across entire PDF.',           color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'enhance' },
+  { id:'organize',     icon:'⊞', label:'Organize Pages',      desc:'Drag to reorder, rotate or delete pages visually.',    color:'#3ecf8e', bg:'rgba(62,207,142,0.08)',  border:'rgba(62,207,142,0.25)',  category:'organize' },
+  { id:'sign',         icon:'✍', label:'Sign PDF',            desc:'Draw, type or upload your signature and place it.',    color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'enhance' },
+  { id:'ocr',          icon:'⌕', label:'OCR PDF',             desc:'Make scanned PDFs searchable or extract plain text.',  color:'#f5a623', bg:'rgba(245,166,35,0.08)',  border:'rgba(245,166,35,0.25)',  category:'enhance', creditCost:2 },
+  { id:'translate',    icon:'⇄', label:'Translate PDF',      desc:'Translate your PDF into 15+ languages instantly.',     color:'#9d97ff', bg:'rgba(157,151,255,0.08)', border:'rgba(157,151,255,0.25)', category:'enhance', creditCost:2 },
+  { id:'protect',      icon:'🔐', label:'Protect PDF',        desc:'Add a password to your PDF.',                          color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'security' },
+  { id:'unlock',       icon:'🔓', label:'Unlock PDF',         desc:'Remove password protection from PDF.',                 color:'#e879f9', bg:'rgba(232,121,249,0.08)', border:'rgba(232,121,249,0.25)', category:'security' },
+  { id:'redact',       icon:'⬛', label:'Redact Text',        desc:'Permanently black out sensitive text.',                color:'#e5534b', bg:'rgba(229,83,75,0.08)',   border:'rgba(229,83,75,0.25)',   category:'security' },
 ]
 
 function ToolCard({ tool, onClick }) {
@@ -53,9 +58,13 @@ function ToolCard({ tool, onClick }) {
         gridColumn: tool.featured ? 'span 2' : 'span 1',
         transform: hov ? 'translateY(-3px)' : '',
         boxShadow: hov ? '0 12px 36px rgba(0,0,0,0.25)' : 'none',
+        position:'relative',
       }}>
       {tool.tag && (
         <div style={{ display:'inline-flex', alignItems:'center', gap:'5px', fontSize:'10px', fontWeight:700, color:'#fff', background:'linear-gradient(135deg,#6c63ff,#e879f9)', padding:'3px 10px', borderRadius:'999px', marginBottom:'12px' }}>{tool.tag}</div>
+      )}
+      {tool.creditCost && (
+        <div style={{ position:'absolute', top:'12px', right:'12px', fontSize:'10px', fontWeight:600, color:'#f5a623', background:'rgba(245,166,35,0.12)', border:'1px solid rgba(245,166,35,0.25)', borderRadius:'999px', padding:'2px 8px' }}>⚡ {tool.creditCost} credits</div>
       )}
       <div style={{ display:'flex', alignItems:'flex-start', gap:'14px' }}>
         <div style={{ width:tool.featured?'46px':'38px', height:tool.featured?'46px':'38px', borderRadius:'11px', background:'rgba(108,99,255,0.1)', border:`1px solid ${tool.border}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:tool.featured?'22px':'17px', flexShrink:0, color:tool.color }}>{tool.icon}</div>
@@ -86,8 +95,16 @@ function SectionHeading({ label }) {
 }
 
 export default function Dashboard({ onSelectTool, initialCategory='all', dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
-  const [showAll, setShowAll] = useState(false)
-  useEffect(() => setShowAll(false), [activeCategory, search])
+  const [showAll,     setShowAll]     = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const [showPaywall, setShowPaywall] = useState(false)
+
+  useEffect(() => { setShowAll(false) }, [activeCategory, search])
+
+  const handleSelectTool = (id, cat, files) => {
+    if (!canUse(id)) { setShowPaywall(true); return }
+    onSelectTool(id, cat, files)
+  }
 
   const filtered = search?.trim()
     ? TOOLS.filter(t => t.label.toLowerCase().includes(search.toLowerCase()) || t.desc.toLowerCase().includes(search.toLowerCase()))
@@ -99,28 +116,26 @@ export default function Dashboard({ onSelectTool, initialCategory='all', dark, o
         <div style={{ textAlign:'center', padding:'60px 0' }}>
           <div style={{ fontSize:'36px', marginBottom:'12px' }}>🔍</div>
           <p style={{ fontSize:'15px', fontWeight:600, color:'#ffffff' }}>No tools found for "{search}"</p>
-          <p style={{ fontSize:'13px', color:'#b0b0cc', marginTop:'6px' }}>Try a different keyword</p>
         </div>
       )
-      return <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))', gap:'14px' }}>{filtered.map(t=><ToolCard key={t.id} tool={t} onClick={onSelectTool}/>)}</div>
+      return <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))', gap:'14px' }}>{filtered.map(t=><ToolCard key={t.id} tool={t} onClick={handleSelectTool}/>)}</div>
     }
     if (activeCategory === 'convert') {
       return (<>
         <SectionHeading label="Convert to PDF"/>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))', gap:'14px', marginBottom:'32px' }}>{TOOLS.filter(t=>t.category==='convert'&&t.sub==='to').map(t=><ToolCard key={t.id} tool={t} onClick={onSelectTool}/>)}</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))', gap:'14px', marginBottom:'32px' }}>{TOOLS.filter(t=>t.category==='convert'&&t.sub==='to').map(t=><ToolCard key={t.id} tool={t} onClick={handleSelectTool}/>)}</div>
         <SectionHeading label="Convert from PDF"/>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))', gap:'14px' }}>{TOOLS.filter(t=>t.category==='convert'&&t.sub==='from').map(t=><ToolCard key={t.id} tool={t} onClick={onSelectTool}/>)}</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))', gap:'14px' }}>{TOOLS.filter(t=>t.category==='convert'&&t.sub==='from').map(t=><ToolCard key={t.id} tool={t} onClick={handleSelectTool}/>)}</div>
       </>)
     }
     const visible   = activeCategory==='all' ? TOOLS : TOOLS.filter(t => t.featured || t.category === activeCategory)
     const displayed = activeCategory==='all' && !showAll ? visible.slice(0, 8) : visible
     const hasMore   = activeCategory==='all' && !showAll && visible.length > 8
     return (<>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))', gap:'14px' }}>{displayed.map(t=><ToolCard key={t.id} tool={t} onClick={onSelectTool}/>)}</div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(270px,1fr))', gap:'14px' }}>{displayed.map(t=><ToolCard key={t.id} tool={t} onClick={handleSelectTool}/>)}</div>
       {hasMore && (
         <div style={{ textAlign:'center', marginTop:'28px' }}>
-          <button onClick={() => setShowAll(true)}
-            style={{ display:'inline-flex', alignItems:'center', gap:'8px', padding:'10px 28px', borderRadius:'999px', border:'1px solid var(--border)', background:'var(--bg2)', color:'#d0d0e8', fontSize:'13px', fontWeight:500, cursor:'pointer' }}>
+          <button onClick={() => setShowAll(true)} style={{ display:'inline-flex', alignItems:'center', gap:'8px', padding:'10px 28px', borderRadius:'999px', border:'1px solid var(--border)', background:'var(--bg2)', color:'#d0d0e8', fontSize:'13px', fontWeight:500, cursor:'pointer' }}>
             <ChevronDown size={14}/> Show all {visible.length} tools
           </button>
         </div>
@@ -132,27 +147,57 @@ export default function Dashboard({ onSelectTool, initialCategory='all', dark, o
     <div style={{ minHeight:'100vh', background:'var(--bg)' }}>
       <TopBar dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome}
         showCategories={showCategories} activeCategory={activeCategory} onCategoryChange={onCategoryChange}
-        search={search} onSearch={onSearch}/>
+        search={search} onSearch={onSearch}
+        extraRight={
+          <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+            <CreditsBadge />
+            <button onClick={() => setShowHistory(true)} style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'12px', color:'#b0b0cc', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'8px', padding:'5px 10px', cursor:'pointer' }}>
+              <Clock size={12}/> History
+            </button>
+          </div>
+        }
+      />
 
       <main style={{ maxWidth:'1200px', margin:'0 auto', padding:'48px 24px' }}>
         {!search && (
-          <div style={{ textAlign:'center', marginBottom:'48px' }}>
-            <div style={{ display:'inline-flex', alignItems:'center', gap:'7px', fontSize:'11px', letterSpacing:'.12em', textTransform:'uppercase', color:'var(--accent2)', background:'rgba(108,99,255,0.1)', border:'1px solid rgba(108,99,255,0.2)', padding:'5px 18px', borderRadius:'999px', marginBottom:'22px' }}>
-              <Zap size={11}/> {TOOLS.length - 1} PDF Tools — All Free
+          <>
+            <div style={{ textAlign:'center', marginBottom:'48px' }}>
+              <div style={{ display:'inline-flex', alignItems:'center', gap:'7px', fontSize:'11px', letterSpacing:'.12em', textTransform:'uppercase', color:'var(--accent2)', background:'rgba(108,99,255,0.1)', border:'1px solid rgba(108,99,255,0.2)', padding:'5px 18px', borderRadius:'999px', marginBottom:'22px' }}>
+                <Zap size={11}/> {TOOLS.length - 1} PDF Tools — All Free
+              </div>
+              <h1 style={{ fontSize:'54px', fontWeight:800, lineHeight:1.07, letterSpacing:'-0.03em', marginBottom:'16px', color:'#ffffff', fontFamily:"'Syne',sans-serif" }}>
+                All your PDF tools,<br/>
+                <span style={{ background:'linear-gradient(135deg,#6c63ff,#e879f9)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>one place.</span>
+              </h1>
+              <p style={{ fontSize:'16px', color:'#d0d0e8', maxWidth:'500px', margin:'0 auto', lineHeight:1.75 }}>
+                Edit, merge, split, compress, protect — and the best AI-powered resume editor on the web.
+              </p>
             </div>
-            <h1 style={{ fontSize:'54px', fontWeight:800, lineHeight:1.07, letterSpacing:'-0.03em', marginBottom:'16px', color:'#ffffff', fontFamily:"'Syne',sans-serif" }}>
-              All your PDF tools,<br/>
-              <span style={{ background:'linear-gradient(135deg,#6c63ff,#e879f9)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>one place.</span>
-            </h1>
-            <p style={{ fontSize:'16px', color:'#d0d0e8', maxWidth:'500px', margin:'0 auto', lineHeight:1.75 }}>
-              Edit, merge, split, compress, protect, watermark — and the best PDF resume editor on the web.
-            </p>
+
+            {activeCategory === 'all' && (
+              <div style={{ marginBottom:'48px' }}>
+                <SmartUpload onSelectTool={handleSelectTool} />
+              </div>
+            )}
+
+            {activeCategory === 'all' && (
+              <OneClickWorkflows onSelectTool={handleSelectTool} />
+            )}
+          </>
+        )}
+
+        {/* Trust badges */}
+        {!search && (
+          <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'28px' }}>
+            {[['🚫','No watermark'],['👤','No signup required'],['🗑','Auto-delete in 24h'],['🔒','Private by default'],['⚡','Client-side processing']].map(([i,l]) => (
+              <span key={l} style={{ fontSize:'11px', color:'#3ecf8e', background:'rgba(62,207,142,0.08)', border:'1px solid rgba(62,207,142,0.2)', borderRadius:'999px', padding:'4px 12px' }}>{i} {l}</span>
+            ))}
           </div>
         )}
 
         {renderTools()}
 
-        {!search && (<>
+        {!search && (
           <div style={{ display:'flex', gap:'48px', justifyContent:'center', marginTop:'60px', paddingTop:'40px', borderTop:'1px solid var(--border)', flexWrap:'wrap' }}>
             {[['29+','PDF Tools'],['100%','Free to use'],['50MB','Max file size'],['0','Data stored']].map(([n,l]) => (
               <div key={l} style={{ textAlign:'center' }}>
@@ -161,20 +206,7 @@ export default function Dashboard({ onSelectTool, initialCategory='all', dark, o
               </div>
             ))}
           </div>
-          <div style={{ marginTop:'60px', padding:'40px', background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'20px', textAlign:'center' }}>
-            <h2 style={{ fontSize:'22px', fontWeight:800, color:'#ffffff', marginBottom:'10px' }}>Why Choose PDFForge?</h2>
-            <p style={{ fontSize:'14px', color:'#b0b0cc', marginBottom:'32px' }}>Built for privacy, speed, and simplicity.</p>
-            <div style={{ display:'flex', gap:'32px', justifyContent:'center', flexWrap:'wrap' }}>
-              {[['🔒','Private by Default','Files deleted immediately after processing.'],['⚡','Fast Processing','Server-side for large files.'],['🆓','Always Free','No accounts, no subscriptions.'],['🌐','Works Everywhere','Any modern browser.']].map(([icon,title,desc]) => (
-                <div key={title} style={{ maxWidth:'180px' }}>
-                  <div style={{ fontSize:'28px', marginBottom:'10px' }}>{icon}</div>
-                  <div style={{ fontSize:'14px', fontWeight:700, color:'#ffffff', marginBottom:'6px' }}>{title}</div>
-                  <div style={{ fontSize:'12px', color:'#b0b0cc', lineHeight:1.6 }}>{desc}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>)}
+        )}
       </main>
 
       <footer style={{ borderTop:'1px solid var(--border)', padding:'28px 40px', background:'var(--bg)' }}>
@@ -191,6 +223,9 @@ export default function Dashboard({ onSelectTool, initialCategory='all', dark, o
           </div>
         </div>
       </footer>
+
+      {showHistory && <FileHistory onClose={() => setShowHistory(false)} />}
+      {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} reason="You've used your free credits for today" />}
     </div>
   )
 }

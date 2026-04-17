@@ -10,7 +10,7 @@ const CATEGORIES = [
   { id:'security', label:'Security'  },
 ]
 
-export default function TopBar({ onBack, title, subtitle, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
+export default function TopBar({ onBack, title, subtitle, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch, extraRight }) {
   const searchRef = useRef(null)
 
   useEffect(() => {
@@ -42,6 +42,7 @@ export default function TopBar({ onBack, title, subtitle, dark, onToggleTheme, o
           </div>
         )}
         <div style={{ flex:1 }}/>
+        {extraRight && extraRight}
         <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'12px', color:'#b0b0cc' }}>
           <Shield size={12} color="var(--green)"/> Files auto-deleted
         </div>

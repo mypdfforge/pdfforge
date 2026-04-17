@@ -1,4 +1,4 @@
-import { clientMerge, clientSplit, clientExtract, clientRotate, clientDeletePages, clientDuplicatePage, clientCompress } from './pdfClient'
+import { clientMerge, clientSplit, clientExtract, clientRotate, clientDeletePages, clientDuplicatePage, clientCompress, clientRepair } from './pdfClient'
 import { clientPdfToImages, clientPdfToJpg } from './pdfToImageClient'
 import axios from 'axios'
 
