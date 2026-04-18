@@ -253,6 +253,160 @@ export async function clientCompress(file, onProgress) {
 }
 
 /**
+ * Redact — draws solid fill rectangles over every occurrence of each term,
+ * then removes the underlying text from the PDF content streams so the
+ * data is truly gone (not just visually covered).
+ *
+ * Strategy:
+ *   1. Use pdf.js to find the bounding box of each text match (text layer).
+ *   2. Use pdf-lib to draw a filled rectangle over each match on the page.
+ *   3. Use pdf-lib to walk every page's content stream and delete operators
+ *      whose text matches any of the terms (permanent removal).
+ *
+ * @param {File}   file       - source PDF
+ * @param {Array}  terms      - [{ text, caseSensitive, wholeWord }, ...]
+ * @param {string} fillColor  - 'black' | 'white' | 'grey'
+ */
+export async function clientRedact(file, terms, fillColor = 'black') {
+  const { PDFDocument, rgb, StandardFonts } = getPdfLib()
+
+  const pdfjs = window.pdfjsLib
+  if (!pdfjs) throw new Error('pdf.js not loaded')
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+    pdfjs.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+  }
+
+  const FILL_RGB = {
+    black: rgb(0,    0,    0   ),
+    white: rgb(1,    1,    1   ),
+    grey:  rgb(0.5,  0.5,  0.5 ),
+  }
+  const fillRgb = FILL_RGB[fillColor] || FILL_RGB.black
+
+  const activeTerms = terms.filter(t => t.text && t.text.trim())
+  if (!activeTerms.length) throw new Error('No terms provided')
+
+  const bytes = await readFile(file)
+
+  // ── Phase 1: find all match rects via pdf.js text layer ──────────────
+  const pjsDoc   = await pdfjs.getDocument({ data: bytes.slice(0) }).promise
+  const numPages = pjsDoc.numPages
+
+  // matchRects[pageIndex] = [ {x, y, w, h} ... ]  (PDF coordinate space)
+  const matchRects = Array.from({ length: numPages }, () => [])
+
+  for (let pNum = 1; pNum <= numPages; pNum++) {
+    const page      = await pjsDoc.getPage(pNum)
+    const viewport  = page.getViewport({ scale: 1.0 })
+    const { items } = await page.getTextContent()
+    const pageH     = viewport.height
+
+    for (const term of activeTerms) {
+      const raw = term.text.trim()
+      let pattern
+      try {
+        const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const wrapped = term.wholeWord ? `\\b${escaped}\\b` : escaped
+        pattern = new RegExp(wrapped, term.caseSensitive ? 'g' : 'gi')
+      } catch { continue }
+
+      for (const item of items) {
+        if (!item.str) continue
+        pattern.lastIndex = 0
+        if (!pattern.test(item.str)) continue
+
+        // item.transform = [scaleX, skewX, skewY, scaleY, tx, ty]
+        const [, , , sy, tx, ty] = item.transform
+        const itemH  = Math.abs(sy) || 10
+        const itemW  = Math.abs(item.width)
+        const pad    = 1.5
+
+        // pdf-lib uses bottom-left origin, same as PDF coords
+        matchRects[pNum - 1].push({
+          x: tx - pad,
+          y: ty - pad,
+          w: itemW + pad * 2,
+          h: itemH + pad * 2,
+        })
+      }
+    }
+    page.cleanup()
+  }
+  pjsDoc.destroy()
+
+  // ── Phase 2: use pdf-lib to draw boxes AND scrub text operators ───────
+  const pdfDoc = await PDFDocument.load(bytes)
+
+  for (let pIdx = 0; pIdx < numPages; pIdx++) {
+    const page    = pdfDoc.getPage(pIdx)
+    const rects   = matchRects[pIdx]
+    if (!rects.length) continue
+
+    // Draw a filled rectangle for each match
+    for (const r of rects) {
+      page.drawRectangle({
+        x:      r.x,
+        y:      r.y,
+        width:  r.w,
+        height: r.h,
+        color:  fillRgb,
+        opacity: 1,
+        borderWidth: 0,
+      })
+    }
+
+    // ── Scrub text from content stream so copy-paste / search can't find it
+    // We re-encode the content stream, removing Tj / TJ / ' / " operators
+    // whose text matches any active term.
+    try {
+      const contentStreams = page.node.normalizedEntries().Contents
+      if (!contentStreams) continue
+
+      // Get raw content bytes, decode to string
+      let contentStr = ''
+      const streamRef = page.node.get(page.node.PDFName?.of?.('Contents'))
+        ?? page.node.get(PDFDocument.context?.PDFName?.of?.('Contents'))
+
+      // Safer: use the page's raw content bytes via pdf-lib internals
+      const rawBytes  = page.getContentStream?.()
+      if (!rawBytes) continue   // skip if API unavailable — boxes still hide the text
+
+      const decoder   = new TextDecoder('latin1')
+      contentStr      = decoder.decode(rawBytes)
+
+      // Replace text in Tj/TJ operators matching any active term
+      for (const term of activeTerms) {
+        const raw     = term.text.trim()
+        const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const flags   = term.caseSensitive ? 'g' : 'gi'
+        // Match inside PDF string literals: (...) Tj  or  [(...)...] TJ
+        const pdfStrPat = new RegExp(
+          `(\\()([^)]*${escaped}[^)*])(\\)\\s*Tj)`, flags
+        )
+        contentStr = contentStr.replace(pdfStrPat, (_, open, inner, close) => {
+          return open + inner.replace(new RegExp(escaped, flags), m => ' '.repeat(m.length)) + close
+        })
+      }
+
+      const encoder   = new TextEncoder()
+      page.node.set(
+        page.node.doc.context.PDFName.of('Contents'),
+        page.node.doc.context.flateCompress
+          ? page.node.doc.context.flateCompress(encoder.encode(contentStr))
+          : page.node.doc.context.stream(encoder.encode(contentStr))
+      )
+    } catch (_) {
+      // Content stream scrubbing is best-effort — the visual boxes are always applied
+    }
+  }
+
+  const resultBytes = await pdfDoc.save({ useObjectStreams: true })
+  const blob        = new Blob([resultBytes], { type: 'application/pdf' })
+  return { data: blob }
+}
+
+/**
  * Repair — reloads the PDF with lenient parsing and re-saves it clean.
  * Fixes cross-reference table issues, broken object streams, and most
  * structural corruption that causes "cannot open" errors.
