@@ -191,32 +191,63 @@ export async function clientDuplicatePage(file, pageNum) {
  * Note: for heavy compression (image downsampling), server is still better.
  * @param {File} file - source PDF
  */
-export async function clientCompress(file) {
+export async function clientCompress(file, onProgress) {
   const { PDFDocument } = getPdfLib()
-  const bytes  = await readFile(file)
-  const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true })
 
-  // Strip document metadata (can be several KB)
-  pdfDoc.setTitle('')
-  pdfDoc.setAuthor('')
-  pdfDoc.setSubject('')
-  pdfDoc.setKeywords([])
-  pdfDoc.setProducer('')
-  pdfDoc.setCreator('')
+  // ── Step 1: load with PDF.js to get page count & dimensions ──────────
+  const pdfjs = window.pdfjsLib
+  if (!pdfjs) throw new Error('pdf.js not loaded')
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+    pdfjs.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+  }
 
-  // Remove all embedded file attachments
-  try {
-    const catalog = pdfDoc.catalog
-    catalog.delete(pdfDoc.context.obj('Names'))
-    catalog.delete(pdfDoc.context.obj('EmbeddedFiles'))
-  } catch (_) {}
+  const bytes     = await readFile(file)
+  const srcDoc    = await pdfjs.getDocument({ data: bytes }).promise
+  const numPages  = srcDoc.numPages
 
-  const compressed = await pdfDoc.save({
-    useObjectStreams:    true,   // compress object structure
-    addDefaultPage:     false,
-    objectsPerTick:     100,
-  })
+  // ── Step 2: build a new PDF, one page at a time ───────────────────────
+  const outDoc = await PDFDocument.create()
 
+  // Quality settings — balance between size and readability
+  const SCALE   = 1.5    // render at 1.5x → ~108 dpi. Enough for reading, much smaller than 2x
+  const QUALITY = 0.82   // JPEG quality 0–1
+
+  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    if (onProgress) onProgress({ stage: 'compressing', done: pageNum, total: numPages })
+
+    const page     = await srcDoc.getPage(pageNum)
+    const viewport = page.getViewport({ scale: SCALE })
+
+    // Render to an offscreen canvas
+    const canvas    = document.createElement('canvas')
+    canvas.width    = Math.floor(viewport.width)
+    canvas.height   = Math.floor(viewport.height)
+    const ctx       = canvas.getContext('2d')
+
+    await page.render({ canvasContext: ctx, viewport }).promise
+    page.cleanup()
+
+    // Convert canvas → JPEG blob
+    const jpegDataUrl = canvas.toDataURL('image/jpeg', QUALITY)
+    const jpegBase64  = jpegDataUrl.split(',')[1]
+    const jpegBytes   = Uint8Array.from(atob(jpegBase64), c => c.charCodeAt(0))
+
+    // Embed JPEG into the output PDF at the original page dimensions (in pts)
+    const origViewport = page.getViewport({ scale: 1.0 })
+    const jpgImage     = await outDoc.embedJpg(jpegBytes)
+    const newPage      = outDoc.addPage([origViewport.width, origViewport.height])
+    newPage.drawImage(jpgImage, {
+      x: 0, y: 0,
+      width:  origViewport.width,
+      height: origViewport.height,
+    })
+  }
+
+  srcDoc.destroy()
+
+  // ── Step 3: save with object streams for extra structure compression ──
+  const compressed = await outDoc.save({ useObjectStreams: true, addDefaultPage: false })
   const blob = new Blob([compressed], { type: 'application/pdf' })
   return { data: blob }
 }

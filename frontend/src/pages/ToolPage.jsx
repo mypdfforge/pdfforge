@@ -17,7 +17,7 @@ const CONFIGS = {
   rotate:       { title:'Rotate Pages',      desc:'Rotate PDF pages.',                     guide:'Select pages and choose angle. Leave blank to rotate all.', fields:[{id:'degrees',label:'Angle',type:'select',options:['90','180','270'],default:'90'},{id:'pages',label:'Pages (blank=all)',placeholder:'all',default:'all'}], useSelector:true, action:(f,v)=>api.rotatePDF(f[0],v.degrees||'90',v.pages||'all'), out:'rotated.pdf', clientSide:true },
   delete:       { title:'Delete Pages',      desc:'Remove unwanted pages.',                guide:'Click thumbnails or type page numbers to delete.', fields:[{id:'pages',label:'Pages to delete',placeholder:'e.g. 1,3'}], useSelector:true, action:(f,v)=>api.deletePages(f[0],v.pages||'1'), out:'output.pdf', clientSide:true },
   duplicate:    { title:'Duplicate Page',    desc:'Duplicate a page.',                     guide:'Enter the page number to duplicate.', fields:[{id:'page',label:'Page number',placeholder:'1',default:'1'}], action:(f,v)=>clientDuplicatePage(f[0],v.page||'1'), out:'duplicated.pdf', clientSide:true },
-  compress:     { title:'Compress PDF',      desc:'Reduce file size.',                     guide:'Upload your PDF — images will be downsampled and recompressed for maximum size reduction.', fields:[], action:(f, v, onP) => api.compressPDFServer(f[0], onP), out:'compressed.pdf', noPreview:true },
+  compress:     { title:'Compress PDF',      desc:'Reduce file size.',                     guide:'Renders every page as compressed JPEG — works on any PDF including image-heavy ones.', fields:[], action:(f, v, onP) => api.compressPDF(f[0], onP), out:'compressed.pdf', noPreview:true, clientSide:true },
   repair:       { title:'Repair PDF',        desc:'Fix corrupted PDF files.',              guide:'Upload your damaged PDF.', fields:[], action:(f)=>clientRepair(f[0]), out:'repaired.pdf', noPreview:true, clientSide:true },
   images:       { title:'PDF to Images',     desc:'Convert each page to PNG (ZIP).',       guide:'Each page becomes a PNG.', fields:[], action:(f,v,onP)=>clientPdfToImages(f[0],onP), out:'pdf_images.zip', mime:'application/zip', noPreview:true, clientSide:true },
   'image-to-pdf':{ title:'Images to PDF',   desc:'Convert images to a PDF.',              guide:'Upload images in order.', multi:true, accept:{'image/jpeg':['.jpg','.jpeg'],'image/png':['.png']}, fields:[], action:(f)=>api.imageToPDF(f), out:'from_images.pdf', noPreview:true },
@@ -433,7 +433,14 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
       } else if (cfg.clientSide) {
         // ── Client-side tools (compress, repair, merge, split…) ──
         const originalSize = files[0]?.size || 0
-        const res = await cfg.action(files, vals, (current, total) => setProgress({ current, total }))
+        const onP = (p) => {
+          if (typeof p === 'object' && p.stage === 'compressing') {
+            setProgress({ current: p.done, total: p.total, label: `Compressing page ${p.done} of ${p.total}…` })
+          } else if (typeof p === 'number') {
+            setProgress({ current: p, total: 100 })
+          }
+        }
+        const res = await cfg.action(files, vals, onP)
         // res = { data: blob } from pdfClient functions
         const blob = res?.data
         if (blob && blob instanceof Blob) {

@@ -50,7 +50,7 @@ export const compressPDFServer = (file, onProgress) =>
 export const mergePDFs      = (files)               => clientMerge(files)
 export const splitPDF       = (file,p)              => clientSplit(file,p)
 export const rotatePDF      = (file,d,p)            => clientRotate(file,d,p)
-export const compressPDF    = (file)                => clientCompress(file)
+export const compressPDF    = (file, onProgress) => clientCompress(file, onProgress)
 export const watermarkPDF   = (file,text,opacity)   => { const f=new FormData(); f.append('file',file); f.append('text',text); f.append('opacity',opacity); return _post('/tools/watermark',f) }
 export const pageNumbersPDF = (file,pos)            => { const f=new FormData(); f.append('file',file); f.append('position',pos); return _post('/tools/page-numbers',f) }
 export const pdfToImages    = (file, onProgress)    => clientPdfToImages(file, onProgress)
