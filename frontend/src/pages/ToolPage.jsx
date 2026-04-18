@@ -17,7 +17,7 @@ const CONFIGS = {
   rotate:       { title:'Rotate Pages',      desc:'Rotate PDF pages.',                     guide:'Select pages and choose angle. Leave blank to rotate all.', fields:[{id:'degrees',label:'Angle',type:'select',options:['90','180','270'],default:'90'},{id:'pages',label:'Pages (blank=all)',placeholder:'all',default:'all'}], useSelector:true, action:(f,v)=>api.rotatePDF(f[0],v.degrees||'90',v.pages||'all'), out:'rotated.pdf', clientSide:true },
   delete:       { title:'Delete Pages',      desc:'Remove unwanted pages.',                guide:'Click thumbnails or type page numbers to delete.', fields:[{id:'pages',label:'Pages to delete',placeholder:'e.g. 1,3'}], useSelector:true, action:(f,v)=>api.deletePages(f[0],v.pages||'1'), out:'output.pdf', clientSide:true },
   duplicate:    { title:'Duplicate Page',    desc:'Duplicate a page.',                     guide:'Enter the page number to duplicate.', fields:[{id:'page',label:'Page number',placeholder:'1',default:'1'}], action:(f,v)=>clientDuplicatePage(f[0],v.page||'1'), out:'duplicated.pdf', clientSide:true },
-  compress:     { title:'Compress PDF',      desc:'Reduce file size.',                     guide:'Instant compression — removes metadata & optimises structure. Best for text PDFs. Image-heavy PDFs compress less.', fields:[], action:(f)=>api.compressPDF(f[0]), out:'compressed.pdf', noPreview:true, clientSide:true },
+  compress:     { title:'Compress PDF',      desc:'Reduce file size.',                     guide:'Upload your PDF — images will be downsampled and recompressed for maximum size reduction.', fields:[], action:(f, v, onP) => api.compressPDFServer(f[0], onP), out:'compressed.pdf', noPreview:true },
   repair:       { title:'Repair PDF',        desc:'Fix corrupted PDF files.',              guide:'Upload your damaged PDF.', fields:[], action:(f)=>clientRepair(f[0]), out:'repaired.pdf', noPreview:true, clientSide:true },
   images:       { title:'PDF to Images',     desc:'Convert each page to PNG (ZIP).',       guide:'Each page becomes a PNG.', fields:[], action:(f,v,onP)=>clientPdfToImages(f[0],onP), out:'pdf_images.zip', mime:'application/zip', noPreview:true, clientSide:true },
   'image-to-pdf':{ title:'Images to PDF',   desc:'Convert images to a PDF.',              guide:'Upload images in order.', multi:true, accept:{'image/jpeg':['.jpg','.jpeg'],'image/png':['.png']}, fields:[], action:(f)=>api.imageToPDF(f), out:'from_images.pdf', noPreview:true },
@@ -449,9 +449,16 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
         }
 
       } else {
-        // ── Server-side tools (pdf-to-word, xlsx-to-pdf, etc.) ──
+        // ── Server-side tools (pdf-to-word, xlsx-to-pdf, compress etc.) ──
         const originalSize = files[0]?.size || 0
-        const onProgress = (current, total) => setProgress({ current, total })
+        const onProgress = (p) => {
+          if (typeof p === 'object' && p.stage) {
+            if (p.stage === 'uploading') setProgress({ current: p.done, total: p.total, label: 'Uploading…' })
+            if (p.stage === 'processing') setProgress({ current: 1, total: 1, label: p.label || 'Processing on server…' })
+          } else if (typeof p === 'number') {
+            setProgress({ current: p, total: 100 })
+          }
+        }
         const res = await cfg.action(files, vals, onProgress)
         const blob = new Blob([res.data], { type: cfg.mime || 'application/pdf' })
         // trigger download
@@ -623,11 +630,16 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
       {progress && (
         <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'8px', padding:'12px' }}>
           <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-            <span style={{ fontSize:'12px', color:'#d0d0e8', fontWeight:600 }}>Converting pages…</span>
-            <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700 }}>{progress.current}/{progress.total}</span>
+            <span style={{ fontSize:'12px', color:'#d0d0e8', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
+            {progress.stage !== 'processing' && (
+              <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700 }}>{Math.round((progress.current/progress.total)*100) || 0}%</span>
+            )}
           </div>
           <div style={{ height:'5px', background:'var(--bg3)', borderRadius:'3px', overflow:'hidden' }}>
-            <div style={{ height:'100%', width:`${Math.round((progress.current/progress.total)*100)}%`, background:'var(--accent)', borderRadius:'3px', transition:'width 0.3s ease' }}/>
+            <div style={{ height:'100%',
+              width: progress.stage === 'processing' ? '100%' : `${Math.round((progress.current/progress.total)*100)}%`,
+              background:'var(--accent)', borderRadius:'3px', transition:'width 0.4s ease',
+              opacity: progress.stage === 'processing' ? undefined : 1 }}/>
           </div>
         </div>
       )}
@@ -740,11 +752,11 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           {progress && (
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'8px', padding:'12px' }}>
               <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-                <span style={{ fontSize:'12px', color:'#d0d0e8', fontWeight:600 }}>Converting pages…</span>
+                <span style={{ fontSize:'12px', color:'#d0d0e8', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
                 <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700 }}>{progress.current}/{progress.total}</span>
               </div>
               <div style={{ height:'5px', background:'var(--bg3)', borderRadius:'3px', overflow:'hidden' }}>
-                <div style={{ height:'100%', width:`${Math.round((progress.current/progress.total)*100)}%`, background:'var(--accent)', borderRadius:'3px', transition:'width 0.3s ease'}}/>
+                <div style={{ height:'100%', width:`${progress.total ? Math.round((progress.current/progress.total)*100) : 100}%`, background:'var(--accent)', borderRadius:'3px', transition:'width 0.3s ease'}}/>
               </div>
             </div>
           )}

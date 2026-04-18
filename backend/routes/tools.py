@@ -148,45 +148,67 @@ async def delete_pages(file: UploadFile = File(...), pages: str = Form(...)):
 # ── COMPRESS ───────────────────────────────────────────────────────────
 @router.post("/compress")
 async def compress(file: UploadFile = File(...)):
+    import asyncio
     tmp = tempfile.mkdtemp()
     src = os.path.join(tmp, file.filename)
     out = os.path.join(tmp, "compressed.pdf")
     with open(src, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    doc = fitz.open(src)
+    def _do_compress(src, out):
+        from PIL import Image
+        import io
 
-    for page in doc:
-        for img in page.get_images(full=True):
-            xref = img[0]
-            try:
-                pix = fitz.Pixmap(doc, xref)
+        doc = fitz.open(src)
+        seen_xrefs = set()
 
-                # Skip tiny images (icons, bullets, decorations)
-                if pix.width < 50 or pix.height < 50:
+        for page in doc:
+            for img in page.get_images(full=True):
+                xref = img[0]
+                if xref in seen_xrefs:
+                    continue
+                seen_xrefs.add(xref)
+                try:
+                    pix = fitz.Pixmap(doc, xref)
+
+                    # Skip tiny images
+                    if pix.width < 50 or pix.height < 50:
+                        continue
+
+                    # Convert to plain RGB (drops alpha, CMYK, ICC etc.)
+                    if pix.n != 3:
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+
+                    # Convert to PIL for proper resampling
+                    pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+                    # Downsample anything wider/taller than 1280px
+                    max_dim = 1280
+                    if pil_img.width > max_dim or pil_img.height > max_dim:
+                        pil_img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+
+                    # Re-encode as JPEG at 75% quality
+                    buf = io.BytesIO()
+                    pil_img.save(buf, format="JPEG", quality=75, optimize=True)
+                    jpeg_bytes = buf.getvalue()
+
+                    # Only replace if smaller
+                    if len(jpeg_bytes) < pix.width * pix.height * 3:
+                        doc.update_stream(xref, jpeg_bytes)
+                        doc.xref_set_key(xref, "Filter",           "/DCTDecode")
+                        doc.xref_set_key(xref, "ColorSpace",       "/DeviceRGB")
+                        doc.xref_set_key(xref, "BitsPerComponent", "8")
+                        doc.xref_set_key(xref, "Width",            str(pil_img.width))
+                        doc.xref_set_key(xref, "Height",           str(pil_img.height))
+                except Exception:
                     continue
 
-                # Convert CMYK / alpha / exotic colourspaces → plain RGB
-                if pix.n != 3:
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
+        doc.save(out, garbage=4, deflate=True, clean=True,
+                 deflate_images=True, deflate_fonts=True)
+        doc.close()
 
-                # Re-encode as JPEG at 72% quality — main size reduction
-                jpeg_bytes = pix.tobytes("jpeg", jpg_quality=72)
-
-                # Only replace if JPEG is actually smaller
-                if len(jpeg_bytes) < pix.width * pix.height * pix.n:
-                    doc.update_stream(xref, jpeg_bytes)
-                    doc.xref_set_key(xref, "Filter",           "/DCTDecode")
-                    doc.xref_set_key(xref, "ColorSpace",       "/DeviceRGB")
-                    doc.xref_set_key(xref, "BitsPerComponent", "8")
-                    doc.xref_set_key(xref, "Width",            str(pix.width))
-                    doc.xref_set_key(xref, "Height",           str(pix.height))
-            except Exception:
-                continue
-
-    doc.save(out, garbage=4, deflate=True, clean=True,
-             deflate_images=True, deflate_fonts=True)
-    doc.close()
+    # Run in thread so FastAPI event loop isn't blocked
+    await asyncio.to_thread(_do_compress, src, out)
     return FileResponse(out, media_type="application/pdf", filename="compressed.pdf")
 
 # ── WATERMARK HELPERS ──────────────────────────────────────────────────

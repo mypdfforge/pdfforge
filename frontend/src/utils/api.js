@@ -18,6 +18,35 @@ const brain = BRAIN_URL ? axios.create({ baseURL: BRAIN_URL }) : null
 export const _post = (path, form, timeout = 300000) =>
   render.post(path, form, { responseType: 'blob', timeout })
 
+// Compress uses XHR directly — no axios timeout, real upload progress
+export const compressPDFServer = (file, onProgress) =>
+  new Promise((resolve, reject) => {
+    const form = new FormData()
+    form.append('file', file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${RENDER_URL}/tools/compress`)
+    xhr.responseType = 'blob'
+    xhr.timeout = 0  // no timeout — large files can take minutes
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress)
+        onProgress({ stage: 'uploading', done: e.loaded, total: e.total })
+    }
+    xhr.upload.onload = () => {
+      // Upload finished, server is now processing
+      if (onProgress) onProgress({ stage: 'processing', done: 1, total: 1, label: 'Compressing on server…' })
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve({ data: xhr.response })
+      } else {
+        reject(new Error(`Server error ${xhr.status}`))
+      }
+    }
+    xhr.onerror   = () => reject(new Error('Network error — check your connection'))
+    xhr.ontimeout = () => reject(new Error('Request timed out'))
+    xhr.send(form)
+  })
+
 export const mergePDFs      = (files)               => clientMerge(files)
 export const splitPDF       = (file,p)              => clientSplit(file,p)
 export const rotatePDF      = (file,d,p)            => clientRotate(file,d,p)
