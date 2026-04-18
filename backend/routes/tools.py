@@ -156,58 +156,47 @@ async def compress(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, f)
 
     def _do_compress(src, out):
-        from PIL import Image
-        import io
-
-        doc = fitz.open(src)
-        seen_xrefs = set()
+        doc  = fitz.open(src)
+        seen = set()
 
         for page in doc:
             for img in page.get_images(full=True):
                 xref = img[0]
-                if xref in seen_xrefs:
+                if xref in seen:
                     continue
-                seen_xrefs.add(xref)
+                seen.add(xref)
+                pix = None
                 try:
                     pix = fitz.Pixmap(doc, xref)
 
-                    # Skip tiny images
+                    # Skip tiny images (icons, bullets)
                     if pix.width < 50 or pix.height < 50:
                         continue
 
-                    # Convert to plain RGB (drops alpha, CMYK, ICC etc.)
+                    # Convert anything that isn't plain RGB → RGB
                     if pix.n != 3:
                         pix = fitz.Pixmap(fitz.csRGB, pix)
 
-                    # Convert to PIL for proper resampling
-                    pil_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    # Encode as JPEG at 75% quality — pure PyMuPDF, no PIL
+                    jpeg = pix.tobytes("jpeg", jpg_quality=75)
 
-                    # Downsample anything wider/taller than 1280px
-                    max_dim = 1280
-                    if pil_img.width > max_dim or pil_img.height > max_dim:
-                        pil_img.thumbnail((max_dim, max_dim), Image.LANCZOS)
-
-                    # Re-encode as JPEG at 75% quality
-                    buf = io.BytesIO()
-                    pil_img.save(buf, format="JPEG", quality=75, optimize=True)
-                    jpeg_bytes = buf.getvalue()
-
-                    # Only replace if smaller
-                    if len(jpeg_bytes) < pix.width * pix.height * 3:
-                        doc.update_stream(xref, jpeg_bytes)
+                    # Only replace if JPEG is actually smaller than raw pixels
+                    if len(jpeg) < pix.width * pix.height * pix.n:
+                        doc.update_stream(xref, jpeg)
                         doc.xref_set_key(xref, "Filter",           "/DCTDecode")
                         doc.xref_set_key(xref, "ColorSpace",       "/DeviceRGB")
                         doc.xref_set_key(xref, "BitsPerComponent", "8")
-                        doc.xref_set_key(xref, "Width",            str(pil_img.width))
-                        doc.xref_set_key(xref, "Height",           str(pil_img.height))
+                        doc.xref_set_key(xref, "Width",            str(pix.width))
+                        doc.xref_set_key(xref, "Height",           str(pix.height))
                 except Exception:
-                    continue
+                    pass
+                finally:
+                    pix = None  # free pixel memory immediately after each image
 
         doc.save(out, garbage=4, deflate=True, clean=True,
                  deflate_images=True, deflate_fonts=True)
         doc.close()
 
-    # Run in thread so FastAPI event loop isn't blocked
     await asyncio.to_thread(_do_compress, src, out)
     return FileResponse(out, media_type="application/pdf", filename="compressed.pdf")
 
