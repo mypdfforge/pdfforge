@@ -740,7 +740,6 @@ async def pptx_to_pdf(file: UploadFile = File(...)):
 async def xlsx_to_pdf(file: UploadFile = File(...)):
     try:
         from openpyxl import load_workbook
-        from openpyxl.styles.colors import COLOR_INDEX, aRGB_REGEX
     except ImportError:
         raise HTTPException(500, "openpyxl not installed. Run: pip install openpyxl")
 

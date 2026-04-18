@@ -63,17 +63,10 @@ function parsePageRange(rangeStr, totalPages) {
   return [...indices].sort((a, b) => a - b)
 }
 
-/** Save a PDFDocument and trigger browser download */
+/** Save a PDFDocument and return blob — ToolPage handles the actual download */
 async function saveAndDownload(pdfDoc, filename) {
-  const bytes  = await pdfDoc.save()
-  const blob   = new Blob([bytes], { type: 'application/pdf' })
-  const url    = URL.createObjectURL(blob)
-  const a      = document.createElement('a')
-  a.href       = url
-  a.download   = filename
-  a.click()
-  URL.revokeObjectURL(url)
-  // Return blob-like object matching existing downloadBlob API shape
+  const bytes = await pdfDoc.save()
+  const blob  = new Blob([bytes], { type: 'application/pdf' })
   return { data: blob }
 }
 
@@ -203,20 +196,13 @@ export async function clientCompress(file) {
   const bytes  = await readFile(file)
   const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true })
 
-  // Save with compression flags
   const compressed = await pdfDoc.save({
-    useObjectStreams:    true,   // pack objects into compressed streams
-    addDefaultPage:     false,
-    objectsPerTick:     50,
+    useObjectStreams: true,
+    addDefaultPage:  false,
+    objectsPerTick:  50,
   })
 
   const blob = new Blob([compressed], { type: 'application/pdf' })
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href     = url
-  a.download = 'compressed.pdf'
-  a.click()
-  URL.revokeObjectURL(url)
   return { data: blob }
 }
 
@@ -230,7 +216,6 @@ export async function clientRepair(file) {
   const { PDFDocument } = getPdfLib()
   const bytes = await readFile(file)
 
-  // ignoreEncryption + throwOnInvalidObject:false = most lenient load possible
   const pdfDoc = await PDFDocument.load(bytes, {
     ignoreEncryption:      true,
     throwOnInvalidObject:  false,
@@ -243,11 +228,5 @@ export async function clientRepair(file) {
   })
 
   const blob = new Blob([repaired], { type: 'application/pdf' })
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href     = url
-  a.download = 'repaired.pdf'
-  a.click()
-  URL.revokeObjectURL(url)
   return { data: blob }
 }

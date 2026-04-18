@@ -9,7 +9,6 @@ import { clientExtract, clientDuplicatePage, clientDeletePages, clientRepair } f
 import { clientPdfToImages, clientPdfToJpg } from '../utils/pdfToImageClient'
 import axios from 'axios'
 import { processPDF } from '../lib/pdfForge'
-import SmartDownload from '../components/SmartDownload'
 
 const CONFIGS = {
   merge:        { title:'Merge PDFs',        desc:'Combine multiple PDFs into one.',       multi:true,  guide:'Upload 2+ PDFs. Drag arrows to reorder.', fields:[], action:(f)=>api.mergePDFs(f), out:'merged.pdf', clientSide:true },
@@ -356,13 +355,12 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
   const [pageRotations,  setPageRotations]  = useState({})  // { pageNum: degrees }
   const [deletedPages,   setDeletedPages]   = useState(new Set())  // pages removed from grid
   const [duplicatedAfter,setDuplicatedAfter]= useState({})  // { pageNum: count } — pages duplicated
-  const [smartResult,   setSmartResult]   = useState(null)
-  const [sourceFile,    setSourceFile]    = useState(null)
+  const [downloadResult, setDownloadResult] = useState(null) // { blob, name, originalSize }
 
   const accept = cfg?.accept || {'application/pdf':['.pdf']}
   const onDrop = useCallback(a => {
     setFiles(prev => cfg?.multi ? [...prev,...a] : a)
-    if (a.length > 0) setSourceFile(a[0])
+    setDownloadResult(null)
     setSelectedPages(new Set()); setPageRotations({}); setDeletedPages(new Set()); setDuplicatedAfter({})
   }, [cfg])
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept, maxFiles: cfg?.multi ? 20 : 1 })
@@ -415,48 +413,57 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
 
   const run = async () => {
     if (!files.length) return
-    setStatus('loading'); setErrMsg(''); setProgress(null); setSmartResult(null)
+    setStatus('loading'); setErrMsg(''); setProgress(null); setDownloadResult(null)
     try {
 
-      // ── Tools routed to Cloudflare + HF worker grid ──────────
-      const GRID_TOOLS = ['watermark', 'stamp', 'ocr']
-      if (GRID_TOOLS.includes(toolId)) {
+      // ── Tools routed to Cloudflare worker grid ────────────────
+      const CF_TOOLS = ['watermark', 'stamp', 'ocr']
+      if (CF_TOOLS.includes(toolId)) {
         const downloadUrl = await processPDF(
-          files[0],
-          toolId,
-          (p) => {
-            if (p.stage === 'uploading') {
-              setProgress({ current: p.done, total: p.total })
-            }
-          }
+          files[0], toolId,
+          (p) => { if (p.stage === 'uploading') setProgress({ current: p.done, total: p.total }) }
         )
-        // Fetch the blob so SmartDownload can show before/after stats
-        try {
-          const resp = await fetch(downloadUrl)
-          const blob = await resp.blob()
-          setSmartResult({ blob, name: cfg.out })
-        } catch {
-          // fallback: direct download if fetch fails (CORS etc.)
-          const a = document.createElement('a')
-          a.href = downloadUrl; a.download = cfg.out; a.target = '_blank'
-          document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        const a = document.createElement('a')
+        a.href = downloadUrl; a.download = cfg.out; a.target = '_blank'
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+
+      } else if (cfg.clientSide) {
+        // ── Client-side tools (compress, repair, merge, split…) ──
+        const originalSize = files[0]?.size || 0
+        const res = await cfg.action(files, vals, (current, total) => setProgress({ current, total }))
+        // res = { data: blob } from pdfClient functions
+        const blob = res?.data
+        if (blob && blob instanceof Blob) {
+          // trigger download
+          const url = URL.createObjectURL(blob)
+          const a   = document.createElement('a')
+          a.href = url; a.download = cfg.out
+          document.body.appendChild(a); a.click()
+          document.body.removeChild(a)
+          setTimeout(() => URL.revokeObjectURL(url), 1000)
+          // show result panel
+          setDownloadResult({ blob, name: cfg.out, originalSize })
         }
 
       } else {
-        // ── Everything else still goes to Render (unchanged) ────
+        // ── Server-side tools (pdf-to-word, xlsx-to-pdf, etc.) ──
+        const originalSize = files[0]?.size || 0
         const onProgress = (current, total) => setProgress({ current, total })
         const res = await cfg.action(files, vals, onProgress)
-        if (!cfg.clientSide) {
-          const blob = new Blob([res.data], { type: cfg.mime || 'application/pdf' })
-          setSmartResult({ blob, name: cfg.out })
-        } else {
-          // client-side tools (merge, split etc.) already triggered download
-          setSmartResult({ blob: null, name: cfg.out })
-        }
+        const blob = new Blob([res.data], { type: cfg.mime || 'application/pdf' })
+        // trigger download
+        const url = URL.createObjectURL(blob)
+        const a   = document.createElement('a')
+        a.href = url; a.download = cfg.out
+        document.body.appendChild(a); a.click()
+        document.body.removeChild(a)
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+        // show result panel
+        setDownloadResult({ blob, name: cfg.out, originalSize })
       }
 
       setProgress(null)
-      setStatus('done'); setTimeout(()=>setStatus('idle'), 3500)
+      setStatus('done')
     } catch(e) {
       setErrMsg(e.message || e.response?.data?.detail || 'Processing failed')
       setStatus('error'); setProgress(null)
@@ -465,23 +472,69 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
 
   if (!cfg) return <div style={{ padding:'40px', color:'var(--red)' }}>Unknown tool: {toolId}</div>
 
-  // Show SmartDownload result page after successful processing
-  if (smartResult) return (
-    <div style={{ minHeight:'100vh', background:'var(--bg)' }}>
-      <header style={{ height:'52px', padding:'0 20px', display:'flex', alignItems:'center', gap:'12px', borderBottom:'1px solid var(--border)', background:'rgba(13,13,20,0.97)', backdropFilter:'blur(12px)', position:'sticky', top:0, zIndex:50 }}>
-        <button onClick={onBack} style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'13px', color:'#ffffff', background:'none', border:'1px solid var(--border)', borderRadius:'8px', padding:'5px 12px', cursor:'pointer' }}>← Back</button>
-        <span style={{ fontWeight:700, color:'#ffffff', fontSize:'15px' }}>{cfg.title}</span>
-      </header>
-      <SmartDownload
-        toolId={toolId}
-        originalFile={sourceFile}
-        outputBlob={smartResult.blob}
-        outputFilename={smartResult.name}
-        onSelectTool={onSelectTool}
-        onReset={() => { setSmartResult(null); setStatus('idle'); setFiles([]); setSourceFile(null) }}
-      />
-    </div>
-  )
+  // ── Inline success panel shown after download ─────────────────
+  if (downloadResult) {
+    const outSize  = downloadResult.blob?.size || 0
+    const origSize = downloadResult.originalSize || 0
+    const saved    = origSize > 0 && outSize < origSize
+      ? Math.round((1 - outSize / origSize) * 100) : null
+    const fmt = (b) => b < 1024*1024 ? `${(b/1024).toFixed(1)} KB` : `${(b/1024/1024).toFixed(2)} MB`
+    return (
+      <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column' }}>
+        <TopBar onBack={onBack} title={cfg.title} subtitle={cfg.desc} dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome}
+          showCategories={showCategories} activeCategory={activeCategory} onCategoryChange={onCategoryChange}
+          search={search} onSearch={onSearch}/>
+        <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px 24px' }}>
+          <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'16px', padding:'40px', maxWidth:'480px', width:'100%', textAlign:'center' }}>
+            <div style={{ width:'64px', height:'64px', borderRadius:'50%', background:'rgba(62,207,142,0.12)', border:'2px solid #3ecf8e', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 20px' }}>
+              <CheckCircle size={28} color="#3ecf8e"/>
+            </div>
+            <h2 style={{ fontSize:'20px', fontWeight:700, color:'#eeeef5', marginBottom:'8px' }}>Done! File downloaded.</h2>
+            <p style={{ fontSize:'13px', color:'#9898b8', marginBottom:'24px' }}>{downloadResult.name}</p>
+            {origSize > 0 && (
+              <div style={{ display:'flex', justifyContent:'center', gap:'32px', marginBottom:'24px' }}>
+                <div>
+                  <div style={{ fontSize:'11px', color:'#5a5a78', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'4px' }}>Original</div>
+                  <div style={{ fontSize:'16px', fontWeight:600, color:'#eeeef5' }}>{fmt(origSize)}</div>
+                </div>
+                {outSize > 0 && outSize !== origSize && (
+                  <>
+                    <div style={{ fontSize:'20px', color:'#5a5a78', alignSelf:'center' }}>→</div>
+                    <div>
+                      <div style={{ fontSize:'11px', color:'#5a5a78', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'4px' }}>Output</div>
+                      <div style={{ fontSize:'16px', fontWeight:600, color: saved ? '#3ecf8e' : '#eeeef5' }}>{fmt(outSize)}</div>
+                    </div>
+                    {saved && (
+                      <div style={{ alignSelf:'center' }}>
+                        <div style={{ fontSize:'13px', fontWeight:700, color:'#3ecf8e', background:'rgba(62,207,142,0.1)', border:'1px solid rgba(62,207,142,0.25)', borderRadius:'20px', padding:'4px 12px' }}>−{saved}%</div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            <div style={{ display:'flex', gap:'10px', justifyContent:'center' }}>
+              <button
+                onClick={() => {
+                  const url = URL.createObjectURL(downloadResult.blob)
+                  const a = document.createElement('a'); a.href = url; a.download = downloadResult.name
+                  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+                  setTimeout(() => URL.revokeObjectURL(url), 1000)
+                }}
+                style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'13px', fontWeight:600, color:'#fff', background:'var(--accent)', border:'none', borderRadius:'9px', padding:'10px 20px', cursor:'pointer' }}>
+                <Download size={14}/> Download Again
+              </button>
+              <button
+                onClick={() => { setDownloadResult(null); setStatus('idle'); setFiles([]) }}
+                style={{ fontSize:'13px', color:'#9898b8', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'9px', padding:'10px 20px', cursor:'pointer' }}>
+                Convert Another
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const inputFields    = cfg.fields.filter(f => f.type !== 'checkbox')
   const checkboxFields = cfg.fields.filter(f => f.type === 'checkbox')
