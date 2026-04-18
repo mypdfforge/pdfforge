@@ -209,9 +209,9 @@ export async function clientCompress(file, onProgress) {
   // ── Step 2: build a new PDF, one page at a time ───────────────────────
   const outDoc = await PDFDocument.create()
 
-  // Quality settings — balance between size and readability
-  const SCALE   = 1.5    // render at 1.5x → ~108 dpi. Enough for reading, much smaller than 2x
-  const QUALITY = 0.82   // JPEG quality 0–1
+  // Quality settings — tuned for maximum compression while staying readable
+  const SCALE   = 1.2    // render at 1.2x → ~86 dpi. Sharp enough for reading, smaller than 1.5x
+  const QUALITY = 0.75   // JPEG quality — 0.75 gives ~40-60% reduction vs 0.82
 
   for (let pageNum = 1; pageNum <= numPages; pageNum++) {
     if (onProgress) onProgress({ stage: 'compressing', done: pageNum, total: numPages })
