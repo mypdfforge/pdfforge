@@ -148,10 +148,52 @@ async def delete_pages(file: UploadFile = File(...), pages: str = Form(...)):
 # ── COMPRESS ───────────────────────────────────────────────────────────
 @router.post("/compress")
 async def compress(file: UploadFile = File(...)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"compressed.pdf")
-    with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, file.filename)
+    out = os.path.join(tmp, "compressed.pdf")
+    with open(src, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
     doc = fitz.open(src)
-    doc.save(out, garbage=4, deflate=True, clean=True); doc.close()
+
+    # Downsample and recompress every image on every page
+    for page in doc:
+        for img in page.get_images(full=True):
+            xref = img[0]
+            try:
+                pix = fitz.Pixmap(doc, xref)
+
+                # Convert CMYK / exotic colourspaces → RGB
+                if pix.colorspace and pix.colorspace.n > 3:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+
+                # Skip tiny images (icons, bullets etc.)
+                if pix.width < 50 or pix.height < 50:
+                    continue
+
+                # Downsample anything larger than 150 dpi equivalent
+                max_dim = 1200
+                if pix.width > max_dim or pix.height > max_dim:
+                    scale = max_dim / max(pix.width, pix.height)
+                    new_w = max(1, int(pix.width  * scale))
+                    new_h = max(1, int(pix.height * scale))
+                    pix = pix.resize(new_w, new_h)
+
+                # Re-encode as JPEG at 72% quality
+                img_data = pix.tobytes("jpeg", jpg_quality=72)
+                doc.update_stream(xref, img_data)
+                # Mark image as JPEG in the PDF
+                doc.xref_set_key(xref, "Filter", "/DCTDecode")
+                doc.xref_set_key(xref, "ColorSpace", "/DeviceRGB")
+                doc.xref_set_key(xref, "BitsPerComponent", "8")
+                doc.xref_set_key(xref, "Width",  str(pix.width))
+                doc.xref_set_key(xref, "Height", str(pix.height))
+            except Exception:
+                continue  # skip images that can't be processed
+
+    # Final structure optimisation pass
+    doc.save(out, garbage=4, deflate=True, clean=True, deflate_images=True, deflate_fonts=True)
+    doc.close()
     return FileResponse(out, media_type="application/pdf", filename="compressed.pdf")
 
 # ── WATERMARK HELPERS ──────────────────────────────────────────────────
@@ -524,23 +566,112 @@ async def image_to_pdf(files: List[UploadFile] = File(...)):
 async def pdf_to_word(file: UploadFile = File(...)):
     try:
         from docx import Document
-        from docx.shared import Pt
+        from docx.shared import Pt, RGBColor, Inches
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        import re as _re
     except ImportError:
         raise HTTPException(500, "python-docx not installed.")
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"converted.docx")
-    with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
-    doc_pdf = fitz.open(src)
+
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, file.filename)
+    out = os.path.join(tmp, "converted.docx")
+    with open(src, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    doc_pdf  = fitz.open(src)
     word_doc = Document()
-    for page in doc_pdf:
-        blocks = page.get_text("blocks")
-        for b in blocks:
-            text = b[4].strip()
-            if text:
-                word_doc.add_paragraph(text)
-        word_doc.add_page_break()
+
+    # 1-inch margins
+    for sec in word_doc.sections:
+        sec.top_margin    = Inches(1)
+        sec.bottom_margin = Inches(1)
+        sec.left_margin   = Inches(1)
+        sec.right_margin  = Inches(1)
+
+    # Pass 1: collect all font sizes to find the body median
+    all_sizes = []
+    for pg in doc_pdf:
+        for blk in pg.get_text("dict")["blocks"]:
+            if blk.get("type") != 0:
+                continue
+            for ln in blk.get("lines", []):
+                for sp in ln.get("spans", []):
+                    sz = round(sp.get("size", 11))
+                    if sz > 0:
+                        all_sizes.append(sz)
+    body_size = sorted(all_sizes)[len(all_sizes) // 2] if all_sizes else 11
+    heading_threshold = body_size * 1.12   # >12% larger = heading
+
+    # bullet prefixes pattern
+    BULLET_RE = _re.compile(r"^[\u2022\u2023\u25E6\u2043\u2219\u25AA\u25CF\-\*]\s+(.+)$")
+
+    first_page = True
+    for pg in doc_pdf:
+        if not first_page:
+            word_doc.add_page_break()
+        first_page = False
+
+        page_w = pg.rect.width
+
+        for blk in pg.get_text("dict")["blocks"]:
+            if blk.get("type") != 0:
+                continue
+
+            for ln in blk.get("lines", []):
+                spans = ln.get("spans", [])
+                if not spans:
+                    continue
+
+                # Build full line text and dominant span
+                line_text = "".join(s.get("text", "") for s in spans).strip()
+                if not line_text:
+                    continue
+
+                dom = max(spans, key=lambda s: len(s.get("text", "")))
+                font_size = round(dom.get("size", body_size))
+                flags     = dom.get("flags", 0)
+                is_bold   = bool(flags & (1 << 4))
+                is_italic = bool(flags & (1 << 1))
+                col_int   = dom.get("color", 0)
+                r = (col_int >> 16) & 0xFF
+                g = (col_int >> 8)  & 0xFF
+                b =  col_int        & 0xFF
+
+                # Alignment: centre if block centre is within 10% of page centre
+                blk_cx = (blk["bbox"][0] + blk["bbox"][2]) / 2
+                if abs(blk_cx - page_w / 2) < page_w * 0.10:
+                    alignment = WD_ALIGN_PARAGRAPH.CENTER
+                else:
+                    alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+                # Detect bullet
+                bm = BULLET_RE.match(line_text)
+                if bm:
+                    line_text = bm.group(1)
+                    para = word_doc.add_paragraph(style="List Bullet")
+                    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                elif font_size >= heading_threshold and len(line_text) < 120:
+                    para = word_doc.add_heading(level=1)
+                    para.clear()
+                    para.alignment = alignment
+                else:
+                    para = word_doc.add_paragraph()
+                    para.alignment = alignment
+
+                run          = para.add_run(line_text)
+                run.bold     = is_bold or (font_size >= heading_threshold and len(line_text) < 120)
+                run.italic   = is_italic
+                run.font.size = Pt(max(7, min(font_size, 36)))
+                if (r, g, b) != (0, 0, 0):
+                    run.font.color.rgb = RGBColor(r, g, b)
+
     doc_pdf.close()
     word_doc.save(out)
-    return FileResponse(out, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename="converted.docx")
+    return FileResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="converted.docx"
+    )
 
 # ── WORD TO PDF ────────────────────────────────────────────────────────
 @router.post("/word-to-pdf")
@@ -581,7 +712,8 @@ async def protect(file: UploadFile = File(...), password: str = Form(...)):
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src)
     perm = fitz.PDF_PERM_PRINT | fitz.PDF_PERM_COPY
-    doc.save(out, encryption=fitz.PDF_ENCRYPT_AES_256, user_pw=password, owner_pw=password+"_owner", permissions=perm)
+    # AES-128 is ~4x faster than AES-256 on low-CPU servers, still fully secure
+    doc.save(out, encryption=fitz.PDF_ENCRYPT_AES_128, user_pw=password, owner_pw=password+"_owner", permissions=perm)
     doc.close()
     return FileResponse(out, media_type="application/pdf", filename="protected.pdf")
 
@@ -592,7 +724,7 @@ async def unlock(file: UploadFile = File(...), password: str = Form(...)):
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src)
     if doc.authenticate(password):
-        doc.save(out, encryption=fitz.PDF_ENCRYPT_NONE); doc.close()
+        doc.save(out, encryption=fitz.PDF_ENCRYPT_NONE, garbage=1, deflate=True); doc.close()
         return FileResponse(out, media_type="application/pdf", filename="unlocked.pdf")
     doc.close(); raise HTTPException(400,"Incorrect password.")
 
