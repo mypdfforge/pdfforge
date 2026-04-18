@@ -734,15 +734,78 @@ async def unlock(file: UploadFile = File(...), password: str = Form(...)):
 
 # ── REDACT ─────────────────────────────────────────────────────────────
 @router.post("/redact")
-async def redact(file: UploadFile = File(...), text: str = Form(...)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"redacted.pdf")
-    with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
+async def redact(
+    file: UploadFile = File(...),
+    # Legacy single-term support (kept for backward compat)
+    text: str = Form(None),
+    # New multi-term JSON array: [{"text":"..","case_sensitive":bool,"whole_word":bool}, ...]
+    terms: str = Form(None),
+    fill_color: str = Form("black"),
+):
+    import json, re as _re
+
+    # Build term list
+    term_list = []
+    if terms:
+        try:
+            term_list = json.loads(terms)
+        except Exception:
+            pass
+    if not term_list and text:
+        term_list = [{"text": text, "case_sensitive": False, "whole_word": False}]
+    if not term_list:
+        raise HTTPException(400, "No redaction terms provided.")
+
+    # Fill colour
+    fill_map = {"black": (0,0,0), "white": (1,1,1), "grey": (0.5,0.5,0.5)}
+    fill = fill_map.get(fill_color, (0,0,0))
+
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, file.filename)
+    out = os.path.join(tmp, "redacted.pdf")
+    with open(src, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
     doc = fitz.open(src)
     for page in doc:
-        areas = page.search_for(text)
-        for rect in areas: page.add_redact_annot(rect, fill=(0,0,0))
+        for term in term_list:
+            raw = term.get("text", "").strip()
+            if not raw:
+                continue
+            case_sensitive = bool(term.get("case_sensitive", False))
+            whole_word     = bool(term.get("whole_word", False))
+
+            flags = 0 if case_sensitive else fitz.TEXT_INHIBIT_SPACES
+            # Use PyMuPDF search (case-insensitive by default via quads)
+            areas = page.search_for(raw, quads=False)
+
+            # whole-word post-filter using the page's text
+            if whole_word:
+                pattern = _re.compile(
+                    r'\b' + _re.escape(raw) + r'\b',
+                    0 if case_sensitive else _re.IGNORECASE
+                )
+                page_text = page.get_text("text")
+                if not pattern.search(page_text):
+                    areas = []
+
+            # case-sensitive post-filter (search_for is case-insensitive by default)
+            if case_sensitive:
+                # re-filter: keep only rects whose extracted text matches exactly
+                verified = []
+                for rect in areas:
+                    snippet = page.get_textbox(rect).strip()
+                    if raw in snippet:
+                        verified.append(rect)
+                areas = verified
+
+            for rect in areas:
+                page.add_redact_annot(rect, fill=fill)
+
         page.apply_redactions()
-    doc.save(out); doc.close()
+
+    doc.save(out)
+    doc.close()
     return FileResponse(out, media_type="application/pdf", filename="redacted.pdf")
 
 # ── FIND & REPLACE ─────────────────────────────────────────────────────

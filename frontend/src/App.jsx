@@ -11,6 +11,7 @@ import OrganizePDFPage    from './pages/OrganizePDFPage'
 import SignPDFPage        from './pages/SignPDFPage'
 import OCRToolPage        from './pages/OCRToolPage'
 import TranslateToolPage  from './pages/TranslateToolPage'
+import RedactToolPage     from './pages/RedactToolPage'
 import { consume } from './utils/credits'
 import './index.css'
 
@@ -60,6 +61,7 @@ export default function App() {
     if (id === 'sign')      return setPage({ type:'sign' })
     if (id === 'ocr')       return setPage({ type:'ocr' })
     if (id === 'translate') return setPage({ type:'translate' })
+    if (id === 'redact')    return setPage({ type:'redact' })
     setPage({ type:'tool', toolId: id })
   }
 
@@ -84,6 +86,7 @@ export default function App() {
   if (page.type === 'sign')      return <SignPDFPage        onBack={goHome} {...shared} {...fileProps}/>
   if (page.type === 'ocr')       return <OCRToolPage        onBack={goHome} {...shared} {...fileProps}/>
   if (page.type === 'translate') return <TranslateToolPage  onBack={goHome} {...shared} {...fileProps}/>
+  if (page.type === 'redact')    return <RedactToolPage     onBack={goHome} {...shared} {...fileProps}/>
   if (page.type === 'tool')      return <ToolPage toolId={page.toolId} onBack={goHome} onSelectTool={handleTool} {...shared} {...fileProps}/>
   return <Dashboard onSelectTool={handleTool} initialCategory={lastCategory} {...shared}/>
 }
