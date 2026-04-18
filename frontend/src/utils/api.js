@@ -4,7 +4,7 @@ import axios from 'axios'
 
 // ── Render backend (existing tools) ──────────────────────────
 const RENDER_URL = import.meta.env.VITE_API_URL || 'https://mypdfforge.onrender.com/api'
-const render = axios.create({ baseURL: RENDER_URL, timeout: 120000 })
+const render = axios.create({ baseURL: RENDER_URL, timeout: 300000 })
 
 // Wake up Render from sleep (free tier spins down after inactivity).
 // Call this as early as possible so the cold start happens in the background.
@@ -15,8 +15,8 @@ export const wakeRender = () =>
 const BRAIN_URL = import.meta.env.VITE_BRAIN_URL || ''
 const brain = BRAIN_URL ? axios.create({ baseURL: BRAIN_URL }) : null
 
-export const _post = (path, form) =>
-  render.post(path, form, { responseType: 'blob', timeout: 120000 })
+export const _post = (path, form, timeout = 300000) =>
+  render.post(path, form, { responseType: 'blob', timeout })
 
 export const mergePDFs      = (files)               => clientMerge(files)
 export const splitPDF       = (file,p)              => clientSplit(file,p)

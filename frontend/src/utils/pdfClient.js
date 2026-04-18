@@ -196,10 +196,25 @@ export async function clientCompress(file) {
   const bytes  = await readFile(file)
   const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true })
 
+  // Strip document metadata (can be several KB)
+  pdfDoc.setTitle('')
+  pdfDoc.setAuthor('')
+  pdfDoc.setSubject('')
+  pdfDoc.setKeywords([])
+  pdfDoc.setProducer('')
+  pdfDoc.setCreator('')
+
+  // Remove all embedded file attachments
+  try {
+    const catalog = pdfDoc.catalog
+    catalog.delete(pdfDoc.context.obj('Names'))
+    catalog.delete(pdfDoc.context.obj('EmbeddedFiles'))
+  } catch (_) {}
+
   const compressed = await pdfDoc.save({
-    useObjectStreams: true,
-    addDefaultPage:  false,
-    objectsPerTick:  50,
+    useObjectStreams:    true,   // compress object structure
+    addDefaultPage:     false,
+    objectsPerTick:     100,
   })
 
   const blob = new Blob([compressed], { type: 'application/pdf' })
