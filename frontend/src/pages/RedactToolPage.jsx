@@ -58,17 +58,22 @@ async function renderPageWithRedactions(pdfDoc, pageNum, terms, fillColor, scale
       for (const item of items) {
         if (!item.str) continue
         pattern.lastIndex = 0
-        if (!pattern.test(item.str)) continue
 
-        // item.transform = [scaleX, skewX, skewY, scaleY, tx, ty]
-        // PDF coords are bottom-left origin; canvas is top-left
-        const [, , , sy, tx, ty] = item.transform
-        const x  = tx * scale
-        const y  = canvas.height - ty * scale
-        const w  = Math.abs(item.width * scale)
-        const h  = (Math.abs(sy) || 10) * scale * 1.25
-        const pad = 2
-        ctx.fillRect(x - pad, y - h - pad, w + pad * 2, h + pad * 2)
+        let match
+        while ((match = pattern.exec(item.str)) !== null) {
+          const [, , , sy, tx, ty] = item.transform
+          const charW      = item.str.length > 0 ? Math.abs(item.width) / item.str.length : 0
+          const xOffset    = match.index * charW
+          const matchWidth = match[0].length * charW
+          const h          = (Math.abs(sy) || 10) * scale * 1.25
+          const pad        = 2
+
+          const x = (tx + xOffset) * scale
+          const y = canvas.height - ty * scale
+
+          ctx.fillRect(x - pad, y - h - pad, matchWidth * scale + pad * 2, h + pad * 2)
+        }
+        pattern.lastIndex = 0
       }
     }
   }
@@ -111,6 +116,8 @@ export default function RedactToolPage({
   const [previewing,   setPreviewing]   = useState(false)
   const [status,       setStatus]       = useState('idle')
   const [errMsg,       setErrMsg]       = useState('')
+  // Bug 2 fix: separate counter to fire preview only after pdfDocRef is set
+  const [previewReady, setPreviewReady] = useState(0)
 
   const pdfDocRef = useRef(null)   // holds the live pdf.js document
   const debRef    = useRef(null)
@@ -118,10 +125,15 @@ export default function RedactToolPage({
   /* ── file load ─────────────────────────────────────────────────────── */
   const loadFile = useCallback(async (f) => {
     setFile(f); setPages([]); setPreviewCache({}); setErrMsg(''); setLoading(true)
+    setTerms([newTerm()])          // Bug 1 fix: reset terms on every new file
+    setActivePage(1)
     try {
       const pdfjs    = getPdfjs()
       const arrayBuf = await f.arrayBuffer()
-      pdfDocRef.current = await pdfjs.getDocument({ data: arrayBuf }).promise
+      const doc      = await pdfjs.getDocument({ data: arrayBuf }).promise
+      pdfDocRef.current = doc
+      // Bug 2 fix: trigger preview immediately once doc is ready, not via effect race
+      setPreviewReady(r => r + 1)
     } catch (e) { console.error('pdf.js load error', e) }
     let first = true
     getThumbnailsProgressive(f, (t) => {
@@ -138,7 +150,8 @@ export default function RedactToolPage({
 
   /* ── pixel-accurate live preview ────────────────────────────────────── */
   useEffect(() => {
-    if (!file || !showPreview || !pdfDocRef.current) return
+    // Guard: pdfDocRef must be set before we try to render
+    if (!pdfDocRef.current || !showPreview) return
     if (debRef.current) clearTimeout(debRef.current)
     debRef.current = setTimeout(async () => {
       setPreviewing(true)
@@ -151,7 +164,8 @@ export default function RedactToolPage({
       setPreviewing(false)
     }, 220)
     return () => clearTimeout(debRef.current)
-  }, [activePage, terms, redactColor, showPreview, file])
+  // previewReady fires once doc is loaded; activePage/terms/redactColor fire on user changes
+  }, [activePage, terms, redactColor, showPreview, previewReady])
 
   const activeThumb = pages.find(p => p.page === activePage)
   const previewSrc  = showPreview ? previewCache[activePage] : activeThumb?.img
