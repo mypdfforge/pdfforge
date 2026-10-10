@@ -4,6 +4,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from typing import List, Optional
 import fitz
+from services.safe_paths import safe_join
 
 router = APIRouter()
 
@@ -39,7 +40,7 @@ def _apply_watermark_text(page, text: str, font_size: int, rotation_deg: float):
 @router.post("/thumbnails")
 async def get_thumbnails(file: UploadFile = File(...)):
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     with open(src,"wb") as f: shutil.copyfileobj(file.file, f)
     doc = fitz.open(src)
     thumbs = []
@@ -57,8 +58,8 @@ async def merge(files: List[UploadFile] = File(...)):
     if len(files)<2: raise HTTPException(400,"Need at least 2 PDFs.")
     tmp = tempfile.mkdtemp(); out = os.path.join(tmp,"merged.pdf")
     result = fitz.open()
-    for f in files:
-        p = os.path.join(tmp,f.filename)
+    for i, f in enumerate(files):
+        p = safe_join(tmp, f.filename, prefix=f"{i}_")
         with open(p,"wb") as fp: shutil.copyfileobj(f.file,fp)
         doc = fitz.open(p); result.insert_pdf(doc); doc.close()
     result.save(out); result.close()
@@ -67,7 +68,7 @@ async def merge(files: List[UploadFile] = File(...)):
 # ── SPLIT ──────────────────────────────────────────────────────────────
 @router.post("/split")
 async def split(file: UploadFile = File(...), pages: str = Form(...)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"split.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"split.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src); result = fitz.open()
     for part in pages.split(","):
@@ -84,7 +85,7 @@ async def split(file: UploadFile = File(...), pages: str = Form(...)):
 # ── EXTRACT ────────────────────────────────────────────────────────────
 @router.post("/extract")
 async def extract(file: UploadFile = File(...), pages: str = Form(...)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"extracted.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"extracted.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src); result = fitz.open()
     for p in pages.split(","):
@@ -98,7 +99,7 @@ async def extract(file: UploadFile = File(...), pages: str = Form(...)):
 # ── ROTATE ─────────────────────────────────────────────────────────────
 @router.post("/rotate")
 async def rotate(file: UploadFile = File(...), degrees: int = Form(90), pages: str = Form("all")):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"rotated.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"rotated.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src)
     pl = list(range(doc.page_count)) if pages=="all" else [int(p)-1 for p in pages.split(",") if p.strip().isdigit()]
@@ -136,7 +137,7 @@ async def rotate_visual(
 # ── DELETE PAGES ───────────────────────────────────────────────────────
 @router.post("/delete-pages")
 async def delete_pages(file: UploadFile = File(...), pages: str = Form(...)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"output.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"output.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src)
     nums = sorted(set(int(p)-1 for p in pages.split(",") if p.strip().isdigit()), reverse=True)
@@ -150,7 +151,7 @@ async def delete_pages(file: UploadFile = File(...), pages: str = Form(...)):
 async def compress(file: UploadFile = File(...)):
     import asyncio
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "compressed.pdf")
     with open(src, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -526,7 +527,7 @@ async def watermark_preview(
 # ── PAGE NUMBERS ───────────────────────────────────────────────────────
 @router.post("/page-numbers")
 async def add_page_numbers(file: UploadFile = File(...), position: str = Form("bottom-center"), start: int = Form(1)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"numbered.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"numbered.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src); total = doc.page_count
     for i,page in enumerate(doc):
@@ -542,7 +543,7 @@ async def add_page_numbers(file: UploadFile = File(...), position: str = Form("b
 @router.post("/pdf-to-images")
 async def pdf_to_images(file: UploadFile = File(...)):
     import zipfile
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); zp = os.path.join(tmp,"images.zip")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); zp = os.path.join(tmp,"images.zip")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src); mat = fitz.Matrix(2,2)
     with zipfile.ZipFile(zp,"w") as zf:
@@ -557,8 +558,8 @@ async def pdf_to_images(file: UploadFile = File(...)):
 async def image_to_pdf(files: List[UploadFile] = File(...)):
     tmp = tempfile.mkdtemp(); out = os.path.join(tmp,"from_images.pdf")
     doc = fitz.open()
-    for f in files:
-        path = os.path.join(tmp, f.filename)
+    for i, f in enumerate(files):
+        path = safe_join(tmp, f.filename, prefix=f"{i}_", default="image.png")
         with open(path,"wb") as fp: shutil.copyfileobj(f.file,fp)
         page = doc.new_page(width=595, height=842)
         page.insert_image(fitz.Rect(0,0,595,842), filename=path)
@@ -577,7 +578,7 @@ async def pdf_to_word(file: UploadFile = File(...)):
         raise HTTPException(500, "python-docx not installed.")
 
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "converted.docx")
     with open(src, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -686,7 +687,7 @@ async def word_to_pdf(file: UploadFile = File(...)):
     except ImportError:
         raise HTTPException(500, "python-docx not installed.")
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "converted.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
 
@@ -712,7 +713,7 @@ async def word_to_pdf(file: UploadFile = File(...)):
 # ── PROTECT ────────────────────────────────────────────────────────────
 @router.post("/protect")
 async def protect(file: UploadFile = File(...), password: str = Form(...)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"protected.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"protected.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src)
     perm = fitz.PDF_PERM_PRINT | fitz.PDF_PERM_COPY
@@ -724,7 +725,7 @@ async def protect(file: UploadFile = File(...), password: str = Form(...)):
 # ── UNLOCK ─────────────────────────────────────────────────────────────
 @router.post("/unlock")
 async def unlock(file: UploadFile = File(...), password: str = Form(...)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"unlocked.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"unlocked.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src)
     if doc.authenticate(password):
@@ -761,7 +762,7 @@ async def redact(
     fill = fill_map.get(fill_color, (0,0,0))
 
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "redacted.pdf")
     with open(src, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -812,7 +813,7 @@ async def redact(
 @router.post("/find-replace")
 async def find_replace(file: UploadFile = File(...), find: str = Form(...),
                        replace: str = Form(...), match_case: bool = Form(False), whole_word: bool = Form(False)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"replaced.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"replaced.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src)
     for page in doc:
@@ -827,7 +828,7 @@ async def find_replace(file: UploadFile = File(...), find: str = Form(...),
 # ── REPAIR ─────────────────────────────────────────────────────────────
 @router.post("/repair")
 async def repair(file: UploadFile = File(...)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"repaired.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"repaired.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src); doc.save(out, garbage=4, deflate=True, clean=True, linear=True); doc.close()
     return FileResponse(out, media_type="application/pdf", filename="repaired.pdf")
@@ -835,7 +836,7 @@ async def repair(file: UploadFile = File(...)):
 # ── DUPLICATE PAGE ─────────────────────────────────────────────────────
 @router.post("/duplicate-page")
 async def duplicate_page(file: UploadFile = File(...), page: int = Form(1)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"duplicated.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"duplicated.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src); n=page-1
     if 0<=n<doc.page_count: doc.copy_page(n)
@@ -845,7 +846,7 @@ async def duplicate_page(file: UploadFile = File(...), page: int = Form(1)):
 # ── CROP (simple margins) ──────────────────────────────────────────────
 @router.post("/crop")
 async def crop(file: UploadFile = File(...), left: float=Form(0), top: float=Form(0), right: float=Form(0), bottom: float=Form(0)):
-    tmp = tempfile.mkdtemp(); src = os.path.join(tmp,file.filename); out = os.path.join(tmp,"cropped.pdf")
+    tmp = tempfile.mkdtemp(); src = safe_join(tmp, file.filename); out = os.path.join(tmp,"cropped.pdf")
     with open(src,"wb") as f: shutil.copyfileobj(file.file,f)
     doc = fitz.open(src)
     for page in doc:
@@ -911,7 +912,7 @@ async def pptx_to_pdf(file: UploadFile = File(...)):
     except ImportError:
         raise HTTPException(500, "python-pptx not installed. Run: pip install python-pptx")
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "converted.pdf")
     with open(src, "wb") as f: shutil.copyfileobj(file.file, f)
     prs = Presentation(src)
@@ -976,7 +977,7 @@ async def xlsx_to_pdf(file: UploadFile = File(...)):
         except Exception: return False
 
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "converted.pdf")
     with open(src, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -1066,7 +1067,7 @@ async def xlsx_to_pdf(file: UploadFile = File(...)):
 @router.post("/html-to-pdf")
 async def html_to_pdf(file: UploadFile = File(...)):
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "converted.pdf")
     with open(src, "wb") as f: shutil.copyfileobj(file.file, f)
     html_content = open(src, "r", encoding="utf-8", errors="ignore").read()
@@ -1104,7 +1105,7 @@ async def html_to_pdf(file: UploadFile = File(...)):
 async def pdf_to_jpg(file: UploadFile = File(...)):
     import zipfile
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     zp  = os.path.join(tmp, "images.zip")
     with open(src,"wb") as f: shutil.copyfileobj(file.file, f)
     doc = fitz.open(src)
@@ -1126,7 +1127,7 @@ async def pdf_to_pptx(file: UploadFile = File(...)):
     except ImportError:
         raise HTTPException(500, "python-pptx not installed. Run: pip install python-pptx")
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "converted.pptx")
     with open(src, "wb") as f: shutil.copyfileobj(file.file, f)
     doc = fitz.open(src)
@@ -1156,7 +1157,7 @@ async def pdf_to_xlsx(file: UploadFile = File(...)):
     except ImportError:
         raise HTTPException(500, "openpyxl not installed. Run: pip install openpyxl")
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "converted.xlsx")
     with open(src, "wb") as f: shutil.copyfileobj(file.file, f)
     doc = fitz.open(src)
@@ -1187,7 +1188,7 @@ async def pdf_to_xlsx(file: UploadFile = File(...)):
 @router.post("/pdf-to-pdfa")
 async def pdf_to_pdfa(file: UploadFile = File(...)):
     tmp = tempfile.mkdtemp()
-    src = os.path.join(tmp, file.filename)
+    src = safe_join(tmp, file.filename)
     out = os.path.join(tmp, "converted_pdfa.pdf")
     with open(src, "wb") as f: shutil.copyfileobj(file.file, f)
     doc = fitz.open(src)
