@@ -7,7 +7,10 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      # Secrets: set values in the Render dashboard (never commit)
       - key: OCR_SPACE_API_KEY
-        value: K82287391888957
+        sync: false
       - key: MISTRAL_API_KEY
-        value:Kg779HWHH41Mp3U4QxQcKmHUBrfBiizI
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
