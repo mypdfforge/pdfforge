@@ -1,14 +1,18 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from limits import LimitsMiddleware
 from routes import upload, export, tools, ai
 
 app = FastAPI(title="PDFForge API", version="5.0")
 
+app.add_middleware(LimitsMiddleware)
+
+origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=origins,
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
