@@ -5,7 +5,7 @@ import {
   RotateCcw, Crop, ChevronsRight, Maximize2, Check, X,
 } from 'lucide-react'
 import TopBar from '../components/TopBar'
-import axios from 'axios'
+import { clientCropVisual } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 
@@ -497,6 +497,7 @@ export default function CropToolPage({
   const [cropBoxes,  setCropBoxes]  = useState({})
   const [status,     setStatus]     = useState('idle')
   const [errMsg,     setErrMsg]     = useState('')
+  const [pct, setPct] = useState(0)
   const [modCount,   setModCount]   = useState(0)
 
   const onDrop = useCallback(accepted => {
@@ -576,18 +577,20 @@ export default function CropToolPage({
 
   const download = async () => {
     if (!file) return
-    setStatus('loading'); setErrMsg('')
+    setStatus('loading'); setErrMsg(''); setPct(0)
     try {
       const pageCrops = {}
       pages.forEach(t => {
         const box = cropBoxes[t.page]
         if (!box) return
-        pageCrops[t.page] = pxToPdfCrop(box, t.width, t.height, t.width / 0.35, t.height / 0.35)
+        // fractions of the displayed page, so thumbnail scale no longer matters
+        pageCrops[t.page] = {
+          left: box.x / t.width, top: box.y / t.height,
+          right: (t.width - box.x - box.w) / t.width,
+          bottom: (t.height - box.y - box.h) / t.height,
+        }
       })
-      const form = new FormData()
-      form.append('file', file)
-      form.append('crops', JSON.stringify(pageCrops))
-      const res = await axios.post('/api/tools/crop-visual', form, { responseType: 'blob' })
+      const res = await clientCropVisual(file, pageCrops, p => setPct(Math.round(p.done / p.total * 100)))
       downloadBlob(res.data, 'cropped.pdf')
       setStatus('done'); setTimeout(() => setStatus('idle'), 3000)
     } catch (e) {
@@ -698,7 +701,7 @@ export default function CropToolPage({
                 color: status === 'loading' ? 'var(--text3)' : '#fff',
                 boxShadow: status !== 'loading' ? '0 2px 12px rgba(91,91,214,0.3)' : 'none',
               }}>
-              {status === 'loading' ? <><Loader2 size={14} className="spin"/>Cropping…</>
+              {status === 'loading' ? <><Loader2 size={14} className="spin"/>Cropping {pct}%</>
                 : status === 'done'  ? <><CheckCircle size={14}/>Downloaded!</>
                 :                      <><Download size={14}/>Download Cropped PDF</>}
             </button>

@@ -5,7 +5,7 @@ import {
   Upload, Loader2, CheckCircle, AlertCircle,
   Bold, Italic, ChevronDown, Hash
 } from 'lucide-react'
-import axios from 'axios'
+import { clientPageNumbers, previewPageNumbers } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 
 const FONTS = ['Helvetica', 'Times New Roman', 'Courier', 'Arial', 'Georgia']
@@ -157,6 +157,7 @@ export default function PageNumberToolPage({
   const [loading,    setLoading]    = useState(false)
   const [state,      setState]      = useState('idle')
   const [errMsg,     setErrMsg]     = useState('')
+  const [pct, setPct] = useState(0)
   const debounceRef = useRef(null)
 
   const onDrop = useCallback(a => { setFile(a[0]); setPreview(null); setErrMsg('') }, [])
@@ -173,31 +174,16 @@ export default function PageNumberToolPage({
   }, [file, template, firstNum, rangeFrom, rangeTo, position, facingPages,
       font, bold, italic, color, fontSize, opacity, pageRange])
 
-  const buildForm = () => {
-    const form = new FormData()
-    form.append('file', file)
-    form.append('template', template)
-    form.append('first_number', String(firstNum))
-    form.append('range_from', String(rangeFrom))
-    form.append('range_to', rangeTo === '' ? '' : String(rangeTo))
-    form.append('position', position)
-    form.append('facing_pages', String(facingPages))
-    form.append('font', font)
-    form.append('bold', String(bold))
-    form.append('italic', String(italic))
-    form.append('color', color)
-    form.append('font_size', String(fontSize))
-    form.append('opacity', String(opacity))
-    form.append('page_range', pageRange)
-    return form
-  }
+  const buildOpts = () => ({
+    template, firstNum, rangeFrom, rangeTo, position, facingPages,
+    font, bold, italic, color, fontSize, opacity, pageRange,
+  })
 
   const getPreview = async () => {
     if (!file) return
     setLoading(true)
     try {
-      const { data } = await axios.post('/api/tools/page-numbers/preview', buildForm())
-      setPreview(data.preview); setErrMsg('')
+      setPreview(await previewPageNumbers(file, buildOpts())); setErrMsg('')
     } catch (e) {
       setErrMsg('Preview error: ' + (e.response?.data?.detail || e.message))
     } finally {
@@ -207,17 +193,9 @@ export default function PageNumberToolPage({
 
   const apply = async () => {
     if (!file) return
-    setState('loading'); setErrMsg('')
+    setState('loading'); setErrMsg(''); setPct(0)
     try {
-      const response = await axios.post('/api/tools/page-numbers', buildForm(), {
-        responseType: 'blob', validateStatus: null,
-      })
-      if (response.status !== 200) {
-        const txt = await response.data.text()
-        let msg = `Server error ${response.status}`
-        try { msg = JSON.parse(txt).detail || msg } catch {}
-        setErrMsg(msg); setState('idle'); return
-      }
+      const response = await clientPageNumbers(file, buildOpts(), p => setPct(Math.round(p.done / p.total * 100)))
       downloadBlob(response.data, 'numbered.pdf')
       setState('done'); setTimeout(() => setState('idle'), 3000)
     } catch (e) {
@@ -502,7 +480,7 @@ export default function PageNumberToolPage({
             }}
           >
             {state === 'loading'
-              ? <><Loader2 size={15} className="spin" /> Adding page numbers…</>
+              ? <><Loader2 size={15} className="spin" /> Adding page numbers {pct}%</>
               : state === 'done'
               ? <><CheckCircle size={15} /> Downloaded!</>
               : <><Hash size={15} /> Add Page Numbers</>}

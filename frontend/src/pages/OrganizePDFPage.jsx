@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
 import { Upload, Loader2, CheckCircle, AlertCircle, Plus } from 'lucide-react'
-import axios from 'axios'
+import { clientOrganize } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 import VirtualPageGrid from '../components/VirtualPageGrid'
@@ -13,17 +13,22 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
   const [loading,   setLoading]   = useState(false)
   const [state,     setState]     = useState('idle')
   const [errMsg,    setErrMsg]    = useState('')
+  const [pct, setPct] = useState(0)
   const [hoverId,   setHoverId]   = useState(null)
+  const loadedRef   = useRef(0)
+  const totalRef    = useRef(0)
   const dragItem    = useRef(null)
   const dragOverItem = useRef(null)
 
   const onDrop = useCallback(async accepted => {
     const f = accepted[0]
     setFile(f); setErrMsg(''); setLoading(true); setPages([])
+    loadedRef.current = 0; totalRef.current = 0
     try {
       let first = true
-      await getThumbnailsProgressive(f, (thumb, idx) => {
+      const all = await getThumbnailsProgressive(f, (thumb, idx) => {
         if (first) { setLoading(false); first = false }
+        loadedRef.current += 1
         setPages(prev => [...prev, {
           id: `p-${idx}-${Date.now()}`,
           thumb: thumb.img,
@@ -32,6 +37,7 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
           origIdx: idx,
         }])
       }, 5)
+      totalRef.current = all.length
     } catch (e) {
       setErrMsg('Failed to load PDF: ' + e.message)
       setLoading(false)
@@ -64,24 +70,14 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
   /* ── Apply ── */
   const apply = async () => {
     if (!file || pages.length === 0) return
-    setState('loading'); setErrMsg('')
+    if (loadedRef.current < totalRef.current) {
+      setErrMsg(`Still loading pages (${loadedRef.current}/${totalRef.current}). Please wait a moment, then save.`)
+      return
+    }
+    setState('loading'); setErrMsg(''); setPct(0)
     try {
-      const form = new FormData()
-      form.append('file', file)
-      // Build instruction: array of {orig_idx, rotation, blank}
-      const instructions = pages.map(pg => ({
-        orig_idx: pg.origIdx,
-        rotation: pg.rotation,
-        blank: pg.blank,
-      }))
-      form.append('instructions', JSON.stringify(instructions))
-      const response = await axios.post('/api/tools/organize', form, { responseType: 'blob', validateStatus: null })
-      if (response.status !== 200) {
-        const txt = await response.data.text()
-        let msg = `Server error ${response.status}`
-        try { msg = JSON.parse(txt).detail || msg } catch {}
-        setErrMsg(msg); setState('idle'); return
-      }
+      const steps = pages.map(pg => ({ origIdx: pg.origIdx, rotation: pg.rotation, blank: pg.blank }))
+      const response = await clientOrganize(file, steps, p => setPct(Math.round(p.done / p.total * 100)))
       downloadBlob(response.data, 'organized.pdf')
       setState('done'); setTimeout(() => setState('idle'), 3000)
     } catch (e) {
@@ -130,7 +126,7 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
                 background: state === 'done' ? 'var(--green)' : 'var(--accent)', color: '#fff',
                 boxShadow: '0 4px 14px rgba(108,99,255,0.3)',
               }}>
-              {state === 'loading' ? <><Loader2 size={14} className="spin" />Saving…</>
+              {state === 'loading' ? <><Loader2 size={14} className="spin" />Saving {pct}%</>
                 : state === 'done' ? <><CheckCircle size={14} />Downloaded!</>
                 : <>⊞ Save PDF</>}
             </button>

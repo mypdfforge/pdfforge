@@ -6,7 +6,7 @@ import {
   Trash2, PenTool, Type, Image as ImageIcon,
   ChevronLeft, ChevronRight, Download, Check, Lock, Plus,
 } from 'lucide-react'
-import axios from 'axios'
+import { clientSign } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 
@@ -127,6 +127,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
   const [sigData,    setSigData]   = useState(null)
   const [status,     setStatus]    = useState('idle')
   const [errMsg,     setErrMsg]    = useState('')
+  const [pct, setPct] = useState(0)
 
   // sigsByPage: { pageNum: [{id, sigData, x, y, w, h, locked}] }
   // x/y/w/h in display pixels relative to the rendered <img>
@@ -210,7 +211,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
       .flatMap(([pg,sigs]) => sigs.filter(s=>s.locked).map(s=>({...s,page:Number(pg)})))
       .sort((a,b) => a.page - b.page)
     if (!file||allSigs.length===0) { setErrMsg('Lock at least one signature first.'); return }
-    setStatus('loading'); setErrMsg('')
+    setStatus('loading'); setErrMsg(''); setPct(0)
     try {
       // Measure display size ONCE from the live img element.
       // All pages share the same container width so the ratio is the same for every page.
@@ -219,7 +220,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
       const refDispW = imgRef.current ? imgRef.current.offsetWidth  : null
       const refDispH = imgRef.current ? imgRef.current.offsetHeight : null
 
-      let currentFile = file
+      const sigList = []
       for (const sig of allSigs) {
         const thumb = pages.find(p=>p.page===sig.page)
         if (!thumb) continue
@@ -237,23 +238,10 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
         const pdfY   = Math.round((sig.y * rY) / THUMB_SCALE)
         const pdfW   = Math.round((sig.w * rX) / THUMB_SCALE)
         const pdfH   = Math.round((sig.h * rY) / THUMB_SCALE)
-        const form   = new FormData()
-        form.append('file',      currentFile)
-        form.append('signature', sig.sigData)
-        form.append('x',         String(pdfX))
-        form.append('y',         String(pdfY))
-        form.append('width',     String(pdfW))
-        form.append('height',    String(pdfH))
-        form.append('page',      String(sig.page))
-        const res = await axios.post('/api/tools/sign', form, { responseType:'blob', validateStatus:null })
-        if (res.status!==200) {
-          const txt=await res.data.text(); let msg=`Server error ${res.status}`
-          try { msg=JSON.parse(txt).detail||msg } catch {}
-          setErrMsg(msg); setStatus('idle'); return
-        }
-        currentFile = new File([res.data],'signed.pdf',{type:'application/pdf'})
+        sigList.push({ page: sig.page, x: pdfX, y: pdfY, w: pdfW, h: pdfH, dataUrl: sig.sigData })
       }
-      downloadBlob(currentFile,'signed.pdf')
+      const res = await clientSign(file, sigList, p => setPct(Math.round(p.done / p.total * 100)))
+      downloadBlob(res.data,'signed.pdf')
       setStatus('done'); setTimeout(()=>setStatus('idle'),3000)
     } catch(e) { setErrMsg(e.response?.data?.detail||e.message||'Sign failed'); setStatus('idle') }
   }
@@ -501,7 +489,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
             cursor: totalLocked===0?'not-allowed':'pointer',
             boxShadow:'0 4px 18px rgba(108,99,255,0.4),0 2px 6px rgba(0,0,0,0.4)',
             transition:'all 0.2s', opacity:totalLocked===0?0.5:1 }}>
-          {status==='loading' ? <><Loader2 size={13} className="spin"/> Signing…</>
+          {status==='loading' ? <><Loader2 size={13} className="spin"/> Signing {pct}%</>
             : status==='done' ? <><CheckCircle size={13}/> Downloaded!</>
             : totalLocked > 0 ? <><Download size={13}/> Download ({totalLocked} sig{totalLocked!==1?'s':''})</>
             : <><Download size={13}/> Lock a signature first</>}

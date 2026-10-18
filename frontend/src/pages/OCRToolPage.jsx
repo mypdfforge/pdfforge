@@ -132,7 +132,7 @@ export default function OCRToolPage({
 
     // OCR.space API key — loaded from env via Vite
     // Falls back to empty string which triggers server-side fallback
-    const OCR_API_KEY = import.meta.env.VITE_OCR_SPACE_API_KEY || ''
+    const OCR_API_KEY = ''   // OCR.space retired (key was public in the bundle); on-device OCR comes in M5c
     const ocrLang     = OCR_LANG_MAP[language] || 'eng'
 
     try {

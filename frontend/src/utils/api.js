@@ -12,8 +12,6 @@ export const wakeRender = () =>
   axios.get(`${RENDER_URL.replace('/api', '')}/api/health`, { timeout: 60000 }).catch(() => {})
 
 // ── Cloudflare Brain (distributed grid tools) ─────────────────
-const BRAIN_URL = import.meta.env.VITE_BRAIN_URL || ''
-const brain = BRAIN_URL ? axios.create({ baseURL: BRAIN_URL }) : null
 
 export const _post = (path, form, timeout = 300000) =>
   render.post(path, form, { responseType: 'blob', timeout })

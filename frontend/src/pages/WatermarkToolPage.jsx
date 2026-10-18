@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
 import { Loader2, CheckCircle, AlertCircle, Type, Image as ImageIcon, Download, ChevronLeft, ChevronRight } from 'lucide-react'
-import axios from 'axios'
+import { clientWatermark } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 
@@ -64,9 +64,9 @@ function renderWatermark(imgSrc, s, canvasRef) {
       if (s.mode==='image'&&s.imageDataUrl) {
         const stamp=new Image()
         stamp.onload=()=>{
-          const sw=200,sh=100,mg=40,pm={'top-left':[mg,mg],'top-center':[(W-sw)/2,mg],'top-right':[W-sw-mg,mg],'middle-left':[mg,(H-sh)/2],'middle-center':[(W-sw)/2,(H-sh)/2],'middle-right':[W-sw-mg,(H-sh)/2],'bottom-left':[mg,H-sh-mg],'bottom-center':[(W-sw)/2,H-sh-mg],'bottom-right':[W-sw-mg,H-sh-mg]}
+          const k=W/595,sw=200*k,sh=100*k,mg=40*k,pm={'top-left':[mg,mg],'top-center':[(W-sw)/2,mg],'top-right':[W-sw-mg,mg],'middle-left':[mg,(H-sh)/2],'middle-center':[(W-sw)/2,(H-sh)/2],'middle-right':[W-sw-mg,(H-sh)/2],'bottom-left':[mg,H-sh-mg],'bottom-center':[(W-sw)/2,H-sh-mg],'bottom-right':[W-sw-mg,H-sh-mg]}
           const[sx,sy]=s.tiled?[(W-sw)/2,(H-sh)/2]:(pm[s.position]||pm['middle-center'])
-          ctx.globalAlpha=s.opacity; ctx.drawImage(stamp,sx,sy,sw,sh); ctx.globalAlpha=1
+          ctx.globalAlpha=s.opacity; {const q=Math.min(sw/stamp.width,sh/stamp.height),dw=stamp.width*q,dh=stamp.height*q;ctx.drawImage(stamp,sx+(sw-dw)/2,sy+(sh-dh)/2,dw,dh)}; ctx.globalAlpha=1
           resolve(cv.toDataURL('image/jpeg',0.85))
         }; stamp.src=s.imageDataUrl
       } else if (s.text.trim()) {
@@ -75,7 +75,7 @@ function renderWatermark(imgSrc, s, canvasRef) {
         f+=(s.font==='Times New Roman'?'serif':s.font==='Courier'?'monospace':'sans-serif')
         ctx.font=f; ctx.fillStyle=s.color; ctx.globalAlpha=s.opacity; ctx.textBaseline='middle'
         const txt=s.text.replace('{{date}}',new Date().toISOString().slice(0,10)).replace('{{page_number}}','?')
-        const mg=60,pm={'top-left':[mg,mg+fs/2],'top-center':[W/2,mg+fs/2],'top-right':[W-mg,mg+fs/2],'middle-left':[mg,H/2],'middle-center':[W/2,H/2],'middle-right':[W-mg,H/2],'bottom-left':[mg,H-mg],'bottom-center':[W/2,H-mg],'bottom-right':[W-mg,H-mg]}
+        const mg=Math.round(60*W/595),pm={'top-left':[mg,mg+fs/2],'top-center':[W/2,mg+fs/2],'top-right':[W-mg,mg+fs/2],'middle-left':[mg,H/2],'middle-center':[W/2,H/2],'middle-right':[W-mg,H/2],'bottom-left':[mg,H-mg],'bottom-center':[W/2,H-mg],'bottom-right':[W-mg,H-mg]}
         if (s.tiled){ctx.textAlign='center';const spX=W/3,spY=H/4;for(let r=-1;r<5;r++)for(let c=-1;c<4;c++){ctx.save();ctx.translate(c*spX+spX/2,r*spY+spY/2);ctx.rotate(45*Math.PI/180);ctx.fillText(txt,0,0);ctx.restore()}}
         else{const[cx,cy]=pm[s.position]||pm['middle-center'];ctx.textAlign=s.position.includes('center')?'center':s.position.includes('right')?'right':'left';ctx.save();ctx.translate(cx,cy);ctx.rotate(s.rotation*Math.PI/180);ctx.fillText(txt,0,0);ctx.restore()}
         ctx.globalAlpha=1; resolve(cv.toDataURL('image/jpeg',0.85))
@@ -109,6 +109,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
   const [previewing,  setPreviewing]   = useState(false)
   const [status,      setStatus]       = useState('idle')
   const [errMsg,      setErrMsg]       = useState('')
+  const [pct, setPct] = useState(0)
   const cvRef  = useRef(null)
   const debRef = useRef(null)
 
@@ -139,16 +140,9 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
 
   const apply=async()=>{
     if (!file) return; if (mode==='text'&&!text.trim()) return
-    setStatus('loading'); setErrMsg('')
+    setStatus('loading'); setErrMsg(''); setPct(0)
     try {
-      const form=new FormData()
-      form.append('file',file);form.append('mode',mode);form.append('opacity',String(opacity))
-      form.append('rotation',String(tiled?45:rotation));form.append('position',tiled?'tile':position)
-      form.append('layer',layer);form.append('page_range',pageRange)
-      if(mode==='text'){form.append('text',text);form.append('font',font);form.append('bold',String(bold));form.append('italic',String(italic));form.append('underline',String(underline));form.append('color',color);form.append('font_size',String(fontSize))}
-      else if(imageFile) form.append('image',imageFile)
-      const res=await axios.post('/api/tools/watermark',form,{responseType:'blob',validateStatus:null})
-      if(res.status!==200){const t=await res.data.text();let m=`Server error ${res.status}`;try{m=JSON.parse(t).detail||m}catch{};setErrMsg(m);setStatus('idle');return}
+      const res=await clientWatermark(file,{mode,text,font,bold,italic,color,fontSize,position,tiled,opacity,rotation,layer,pageRange},imageFile,p => setPct(Math.round(p.done / p.total * 100)))
       downloadBlob(res.data,'watermarked.pdf'); setStatus('done'); setTimeout(()=>setStatus('idle'),3000)
     }catch(e){setErrMsg(e.response?.data?.detail||e.message);setStatus('idle')}
   }
@@ -327,7 +321,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
         <button onClick={apply}
           disabled={!file||(mode==='text'&&!text.trim())||(mode==='image'&&!imageFile)||status==='loading'}
           style={{ position:'fixed', bottom:'20px', right:'20px', zIndex:9000, display:'flex', alignItems:'center', gap:'8px', padding:'11px 20px', borderRadius:'50px', border:'none', background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)', color:status==='loading'?'var(--text2)':'#fff', fontWeight:700, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 18px rgba(108,99,255,0.4),0 2px 6px rgba(0,0,0,0.4)', transition:'all 0.2s' }}>
-          {status==='loading'?<><Loader2 size={13} className="spin"/> Processing…</>:status==='done'?<><CheckCircle size={13}/> Downloaded!</>:<><Download size={13}/> Download Watermarked PDF</>}
+          {status==='loading'?<><Loader2 size={13} className="spin"/> Processing {pct}%</>:status==='done'?<><CheckCircle size={13}/> Downloaded!</>:<><Download size={13}/> Download Watermarked PDF</>}
         </button>
       )}
     </div>

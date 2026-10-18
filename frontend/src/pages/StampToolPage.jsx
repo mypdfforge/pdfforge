@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Loader2, CheckCircle, AlertCircle, ImageIcon, ChevronLeft, ChevronRight, Download } from 'lucide-react'
 import TopBar from '../components/TopBar'
-import axios from 'axios'
+import { clientStamp } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 
@@ -60,6 +60,7 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
   const [previewing,  setPreviewing]   = useState(false)
   const [status,      setStatus]       = useState('idle')
   const [errMsg,      setErrMsg]       = useState('')
+  const [pct, setPct] = useState(0)
   const cvRef  = useRef(null)
   const debRef = useRef(null)
 
@@ -91,12 +92,9 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
   },[activeThumb,label,customText,customImage,position,fontSize,pagesRange])
 
   const apply=async()=>{
-    if (!file) return; setStatus('loading'); setErrMsg('')
+    if (!file) return; setStatus('loading'); setErrMsg(''); setPct(0)
     try {
-      const form=new FormData()
-      form.append('file',file);form.append('label',label||'CUSTOM');form.append('pages',pagesRange)
-      form.append('position',position);form.append('custom_text',customText);form.append('font_size',fontSize)
-      const{data}=await axios.post('/api/tools/stamp',form,{responseType:'blob'})
+      const{data}=await clientStamp(file,{text:stampText,color:stampColor,position,fontSize,pagesRange,imageDataUrl:customImage},p => setPct(Math.round(p.done / p.total * 100)))
       downloadBlob(data,'stamped.pdf'); setStatus('done'); setTimeout(()=>setStatus('idle'),3000)
     }catch(e){setErrMsg(e.message||'Stamp failed');setStatus('idle')}
   }
@@ -278,7 +276,7 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
       {file && (
         <button onClick={apply} disabled={!file||status==='loading'}
           style={{ position:'fixed', bottom:'20px', right:'20px', zIndex:9000, display:'flex', alignItems:'center', gap:'8px', padding:'11px 20px', borderRadius:'50px', border:'none', background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)', color:status==='loading'?'var(--text2)':'#fff', fontWeight:700, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 18px rgba(108,99,255,0.4),0 2px 6px rgba(0,0,0,0.4)', transition:'all 0.2s', opacity:!file?0.5:1 }}>
-          {status==='loading'?<><Loader2 size={13} className="spin"/> Processing…</>:status==='done'?<><CheckCircle size={13}/> Downloaded!</>:<><Download size={13}/> Download Stamped PDF</>}
+          {status==='loading'?<><Loader2 size={13} className="spin"/> Processing {pct}%</>:status==='done'?<><CheckCircle size={13}/> Downloaded!</>:<><Download size={13}/> Download Stamped PDF</>}
         </button>
       )}
     </div>

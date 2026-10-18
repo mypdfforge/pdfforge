@@ -9,7 +9,7 @@ import { clientExtract, clientDuplicatePage, clientDeletePages, clientRepair } f
 import { clientPdfToImages, clientPdfToJpg } from '../utils/pdfToImageClient'
 import { pdfToWord, pdfToExcel, pdfToPptx } from '../utils/convertClient'
 import axios from 'axios'
-import { processPDF } from '../lib/pdfForge'
+import { clientImagesToPdf } from '../utils/editClient'
 
 const CONFIGS = {
   merge:        { title:'Merge PDFs',        desc:'Combine multiple PDFs into one.',       multi:true,  guide:'Upload 2+ PDFs. Drag arrows to reorder.', fields:[], action:(f)=>api.mergePDFs(f), out:'merged.pdf', clientSide:true },
@@ -21,7 +21,7 @@ const CONFIGS = {
   compress:     { title:'Compress PDF',      desc:'Reduce file size.',                     guide:'Renders every page as compressed JPEG — works on any PDF including image-heavy ones.', fields:[], action:(f, v, onP) => api.compressPDF(f[0], onP), out:'compressed.pdf', noPreview:true, clientSide:true },
   repair:       { title:'Repair PDF',        desc:'Fix corrupted PDF files.',              guide:'Upload your damaged PDF.', fields:[], action:(f)=>clientRepair(f[0]), out:'repaired.pdf', noPreview:true, clientSide:true },
   images:       { title:'PDF to Images',     desc:'Convert each page to PNG (ZIP).',       guide:'Each page becomes a PNG.', fields:[], action:(f,v,onP)=>clientPdfToImages(f[0],onP), out:'pdf_images.zip', mime:'application/zip', noPreview:true, clientSide:true },
-  'image-to-pdf':{ title:'Images to PDF',   desc:'Convert images to a PDF.',              guide:'Upload images in order.', multi:true, accept:{'image/jpeg':['.jpg','.jpeg'],'image/png':['.png']}, fields:[], action:(f)=>api.imageToPDF(f), out:'from_images.pdf', noPreview:true },
+  'image-to-pdf':{ title:'Images to PDF',   desc:'Convert images to a PDF.',              guide:'Upload images in order.', multi:true, accept:{'image/jpeg':['.jpg','.jpeg'],'image/png':['.png'],'image/webp':['.webp'],'image/gif':['.gif'],'image/bmp':['.bmp']}, fields:[], action:(f,v,onP)=>clientImagesToPdf(f,onP), out:'from_images.pdf', mime:'application/pdf', noPreview:true, clientSide:true },
   'pdf-to-word':{ title:'PDF to Word',       desc:'Convert to .docx (text only).',          guide:'Text only, one paragraph per line. No images or styling.', fields:[], action:(f)=>pdfToWord(f[0]), out:'converted.docx', mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', noPreview:true, clientSide:true },
   'word-to-pdf':{ title:'Word to PDF',       desc:'Convert .docx to PDF.',                 guide:'Upload your Word file.', accept:{'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['.docx']}, fields:[], action:(f)=>api.wordToPDF(f[0]), out:'converted.pdf', noPreview:true },
   'pptx-to-pdf':{ title:'PowerPoint to PDF', desc:'Convert .pptx to PDF.',                guide:'Each slide becomes a page.', accept:{'application/vnd.openxmlformats-officedocument.presentationml.presentation':['.pptx']}, fields:[], action:(f)=>{ const form=new FormData(); form.append('file',f[0]); return api._post('/tools/pptx-to-pdf',form) }, out:'converted.pdf', noPreview:true },
@@ -420,23 +420,14 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
     setStatus('loading'); setErrMsg(''); setProgress(null); setDownloadResult(null)
     try {
 
-      // ── Tools routed to Cloudflare worker grid ────────────────
-      const CF_TOOLS = ['watermark', 'stamp', 'ocr']
-      if (CF_TOOLS.includes(toolId)) {
-        const downloadUrl = await processPDF(
-          files[0], toolId,
-          (p) => { if (p.stage === 'uploading') setProgress({ current: p.done, total: p.total }) }
-        )
-        const a = document.createElement('a')
-        a.href = downloadUrl; a.download = cfg.out; a.target = '_blank'
-        document.body.appendChild(a); a.click(); document.body.removeChild(a)
-
-      } else if (cfg.clientSide) {
+      if (cfg.clientSide) {
         // ── Client-side tools (compress, repair, merge, split…) ──
         const originalSize = files[0]?.size || 0
         const onP = (p) => {
           if (typeof p === 'object' && p.stage === 'compressing') {
             setProgress({ current: p.done, total: p.total, label: `Compressing page ${p.done} of ${p.total}…` })
+          } else if (typeof p === 'object' && p.total) {
+            setProgress({ current: p.done, total: p.total })
           } else if (typeof p === 'number') {
             setProgress({ current: p, total: 100 })
           }

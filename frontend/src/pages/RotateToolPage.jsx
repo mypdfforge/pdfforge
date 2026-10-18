@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Loader2, CheckCircle, AlertCircle, Download, RotateCw, RotateCcw } from 'lucide-react'
 import TopBar from '../components/TopBar'
-import axios from 'axios'
+import { clientRotateVisual } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 
@@ -13,6 +13,7 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
   const [loading,   setLoading]   = useState(false)
   const [status,    setStatus]    = useState('idle')
   const [errMsg,    setErrMsg]    = useState('')
+  const [pct, setPct] = useState(0)
 
   const onDrop = useCallback(a => {
     if (!a.length) return
@@ -77,14 +78,11 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
   // ── Download ──
   const download = async () => {
     if (!file || !modifiedCount) return
-    setStatus('loading'); setErrMsg('')
+    setStatus('loading'); setErrMsg(''); setPct(0)
     try {
       const rotations = {}
       pages.forEach(p => { if (p.rotation !== 0) rotations[p.id] = p.rotation })
-      const form = new FormData()
-      form.append('file', file)
-      form.append('rotations', JSON.stringify(rotations))
-      const res = await axios.post('/api/tools/rotate-visual', form, { responseType: 'blob' })
+      const res = await clientRotateVisual(file, rotations, p => setPct(Math.round(p.done / p.total * 100)))
       downloadBlob(res.data, 'rotated.pdf')
       setStatus('done'); setTimeout(() => setStatus('idle'), 3000)
     } catch(e) {
@@ -175,7 +173,7 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
                 background: status==='done' ? 'var(--green)' : status==='loading' ? 'var(--bg3)' : 'var(--accent)',
                 color: status==='loading' ? '#b0b0cc' : '#fff',
                 boxShadow: modifiedCount ? '0 2px 12px rgba(108,99,255,0.35)' : 'none' }}>
-              {status==='loading' ? <><Loader2 size={13} className="spin"/>Applying…</>
+              {status==='loading' ? <><Loader2 size={13} className="spin"/>Applying {pct}%</>
                : status==='done'  ? <><CheckCircle size={13}/>Downloaded!</>
                :                    <><Download size={13}/>Download Rotated PDF</>}
             </button>
