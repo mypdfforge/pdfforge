@@ -260,7 +260,7 @@ export default function OCRToolPage({
 
           {/* File */}
           {!file ? (
-            <div {...getRootProps()} style={{ background: isDragActive ? 'rgba(108,99,255,0.08)' : 'var(--bg2)', border: `2px dashed ${isDragActive ? 'var(--accent)' : 'var(--border)'}`, borderRadius: '12px', padding: '30px 20px', textAlign: 'center', cursor: 'pointer' }}>
+            <div {...getRootProps()} style={{ background: isDragActive ? 'rgba(234,88,12,0.08)' : 'var(--bg2)', border: `2px dashed ${isDragActive ? 'var(--accent)' : 'var(--border)'}`, borderRadius: '12px', padding: '30px 20px', textAlign: 'center', cursor: 'pointer' }}>
               <input {...getInputProps()} />
               <Upload size={20} color="var(--accent2)" style={{ margin: '0 auto 10px', display: 'block' }} />
               <p style={{ color: 'var(--text)', fontWeight: 500, fontSize: '14px' }}>Drop scanned PDF here</p>
@@ -284,7 +284,7 @@ export default function OCRToolPage({
                   display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px',
                   borderRadius: '9px', textAlign: 'left', cursor: 'pointer',
                   border: `2px solid ${outputMode === opt.id ? 'var(--accent)' : 'var(--border)'}`,
-                  background: outputMode === opt.id ? 'rgba(108,99,255,0.1)' : 'var(--bg3)',
+                  background: outputMode === opt.id ? 'rgba(234,88,12,0.1)' : 'var(--bg3)',
                 }}>
                 <span style={{ color: outputMode === opt.id ? 'var(--accent2)' : 'var(--text3)', marginTop: '1px', flexShrink: 0 }}>{opt.icon}</span>
                 <div>
@@ -327,7 +327,7 @@ export default function OCRToolPage({
           )}
 
           <button onClick={apply} disabled={!file || state === 'loading'}
-            style={{ padding: '12px', background: state === 'done' ? 'var(--green)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: '10px', cursor: !file ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 4px 16px rgba(108,99,255,0.25)', opacity: !file ? 0.5 : 1 }}>
+            style={{ padding: '12px', background: state === 'done' ? 'var(--green)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: '10px', cursor: !file ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 4px 16px rgba(234,88,12,0.25)', opacity: !file ? 0.5 : 1 }}>
             {state === 'loading'
               ? <><Loader2 size={15} className="spin" />Processing…</>
               : state === 'done'
@@ -337,7 +337,7 @@ export default function OCRToolPage({
         </div>
 
         {/* ── Right Panel ── */}
-        <div style={{ flex: 1, background: '#14141f', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', overflowY: 'auto' }}>
+        <div style={{ flex: 1, background: 'var(--bg3)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', overflowY: 'auto' }}>
           {extractedText ? (
             <div style={{ width: '100%', maxWidth: '720px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

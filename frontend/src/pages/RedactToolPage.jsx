@@ -355,7 +355,7 @@ export default function RedactToolPage({
           </div>
 
           {/* ════ Panel 3 — Preview workspace ════ */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#12121c' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg3)' }}>
 
             {/* Header bar */}
             <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg2)', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>

@@ -41,7 +41,7 @@ function PositionGrid({ value, onChange }) {
           style={{
             width: '30px', height: '30px', borderRadius: '6px',
             border: `1px solid ${value === pos ? 'var(--accent)' : 'var(--border)'}`,
-            background: value === pos ? 'rgba(108,99,255,0.25)' : 'var(--bg3)',
+            background: value === pos ? 'rgba(234,88,12,0.25)' : 'var(--bg3)',
             color: value === pos ? 'var(--accent2)' : 'var(--text3)',
             cursor: 'pointer', fontSize: '14px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -100,7 +100,7 @@ function PageRangeControl({ onChange }) {
             style={{
               flex: 1, padding: '5px 0', fontSize: '11px', fontWeight: 600, borderRadius: '6px',
               border: `1px solid ${mode === o ? 'var(--accent)' : 'var(--border)'}`,
-              background: mode === o ? 'rgba(108,99,255,0.15)' : 'var(--bg3)',
+              background: mode === o ? 'rgba(234,88,12,0.15)' : 'var(--bg3)',
               color: mode === o ? 'var(--accent2)' : 'var(--text3)',
               cursor: 'pointer', textTransform: 'capitalize',
             }}
@@ -226,7 +226,7 @@ export default function PageNumberToolPage({
             <div
               {...getRootProps()}
               style={{
-                background: isDragActive ? 'rgba(108,99,255,0.08)' : 'var(--bg2)',
+                background: isDragActive ? 'rgba(234,88,12,0.08)' : 'var(--bg2)',
                 border: `2px dashed ${isDragActive ? 'var(--accent)' : 'var(--border)'}`,
                 borderRadius: '12px', padding: '30px 20px', textAlign: 'center', cursor: 'pointer',
               }}
@@ -266,7 +266,7 @@ export default function PageNumberToolPage({
                     style={{
                       fontSize: '11px', padding: '3px 9px', borderRadius: '6px', fontFamily: 'monospace',
                       border: `1px solid ${template === p.label ? 'var(--accent)' : 'var(--border)'}`,
-                      background: template === p.label ? 'rgba(108,99,255,0.15)' : 'var(--bg3)',
+                      background: template === p.label ? 'rgba(234,88,12,0.15)' : 'var(--bg3)',
                       color: template === p.label ? 'var(--accent2)' : 'var(--text2)',
                       cursor: 'pointer',
                     }}
@@ -373,7 +373,7 @@ export default function PageNumberToolPage({
                     style={{
                       fontSize: '11px', padding: '7px 10px', borderRadius: '8px', textAlign: 'left',
                       border: `1px solid ${facingPages === (val === 'facing') ? 'var(--accent)' : 'var(--border)'}`,
-                      background: facingPages === (val === 'facing') ? 'rgba(108,99,255,0.15)' : 'var(--bg3)',
+                      background: facingPages === (val === 'facing') ? 'rgba(234,88,12,0.15)' : 'var(--bg3)',
                       color: facingPages === (val === 'facing') ? 'var(--accent2)' : 'var(--text3)',
                       cursor: 'pointer',
                     }}
@@ -421,7 +421,7 @@ export default function PageNumberToolPage({
                   style={{
                     width: '34px', height: '34px', borderRadius: '7px',
                     border: `1px solid ${val ? 'var(--accent)' : 'var(--border)'}`,
-                    background: val ? 'rgba(108,99,255,0.2)' : 'var(--bg3)',
+                    background: val ? 'rgba(234,88,12,0.2)' : 'var(--bg3)',
                     color: val ? 'var(--accent2)' : 'var(--text2)',
                     cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}
@@ -476,7 +476,7 @@ export default function PageNumberToolPage({
               border: 'none', borderRadius: '10px', cursor: 'pointer',
               fontWeight: 700, fontSize: '14px',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-              boxShadow: '0 4px 16px rgba(108,99,255,0.25)', opacity: !file ? 0.5 : 1,
+              boxShadow: '0 4px 16px rgba(234,88,12,0.25)', opacity: !file ? 0.5 : 1,
             }}
           >
             {state === 'loading'
@@ -489,7 +489,7 @@ export default function PageNumberToolPage({
 
         {/* ── Live Preview Panel ── */}
         <div style={{
-          flex: 1, background: '#14141f',
+          flex: 1, background: 'var(--bg3)',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
           padding: '32px', overflowY: 'auto',

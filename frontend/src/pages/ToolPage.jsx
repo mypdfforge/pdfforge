@@ -47,11 +47,11 @@ const GRID_TOOLS = new Set(['split','extract','delete','duplicate'])
 function MultiFileSidebar({ files, onReorder, onRemove, dropZoneJSX, onRun, status }) {
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column' }}>
-      <div style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)', fontSize:'10px', fontWeight:700, color:'#b0b0cc', textTransform:'uppercase', letterSpacing:'.06em' }}>Files to merge ({files.length})</div>
+      <div style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)', fontSize:'10px', fontWeight:700, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.06em' }}>Files to merge ({files.length})</div>
       <div style={{ flex:1, overflowY:'auto', padding:'10px', display:'flex', flexDirection:'column', gap:'8px' }}>
         {dropZoneJSX}
         {files.length === 0 ? (
-          <div style={{ textAlign:'center', padding:'12px', color:'#b0b0cc', fontSize:'12px' }}>
+          <div style={{ textAlign:'center', padding:'12px', color:'var(--text3)', fontSize:'12px' }}>
             <div style={{ fontSize:'22px', marginBottom:'5px', opacity:0.2 }}>📄</div>
             Drop 2+ PDFs above to merge
           </div>
@@ -60,14 +60,14 @@ function MultiFileSidebar({ files, onReorder, onRemove, dropZoneJSX, onRun, stat
             <div key={i} style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'7px', padding:'7px 8px', display:'flex', alignItems:'center', gap:'6px' }}>
               <span style={{ fontSize:'13px' }}>📄</span>
               <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:'10px', color:'#ffffff', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</div>
-                <div style={{ fontSize:'9px', color:'#b0b0cc' }}>{(f.size/1024).toFixed(0)} KB</div>
+                <div style={{ fontSize:'10px', color:'var(--text)', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</div>
+                <div style={{ fontSize:'9px', color:'var(--text3)' }}>{(f.size/1024).toFixed(0)} KB</div>
               </div>
               <div style={{ display:'flex', flexDirection:'column' }}>
-                <button onClick={()=>{ if(i>0){const n=[...files];[n[i-1],n[i]]=[n[i],n[i-1]];onReorder(n)} }} disabled={i===0} style={{ background:'none', border:'none', color:i===0?'var(--border)':'#b0b0cc', cursor:i===0?'default':'pointer', fontSize:'11px', lineHeight:1.2 }}>▲</button>
-                <button onClick={()=>{ if(i<files.length-1){const n=[...files];[n[i],n[i+1]]=[n[i+1],n[i]];onReorder(n)} }} disabled={i===files.length-1} style={{ background:'none', border:'none', color:i===files.length-1?'var(--border)':'#b0b0cc', cursor:i===files.length-1?'default':'pointer', fontSize:'11px', lineHeight:1.2 }}>▼</button>
+                <button onClick={()=>{ if(i>0){const n=[...files];[n[i-1],n[i]]=[n[i],n[i-1]];onReorder(n)} }} disabled={i===0} style={{ background:'none', border:'none', color:i===0?'var(--border)':'var(--text3)', cursor:i===0?'default':'pointer', fontSize:'11px', lineHeight:1.2 }}>▲</button>
+                <button onClick={()=>{ if(i<files.length-1){const n=[...files];[n[i],n[i+1]]=[n[i+1],n[i]];onReorder(n)} }} disabled={i===files.length-1} style={{ background:'none', border:'none', color:i===files.length-1?'var(--border)':'var(--text3)', cursor:i===files.length-1?'default':'pointer', fontSize:'11px', lineHeight:1.2 }}>▼</button>
               </div>
-              <button onClick={()=>onRemove(i)} style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer', fontSize:'14px', lineHeight:1 }}>×</button>
+              <button onClick={()=>onRemove(i)} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'14px', lineHeight:1 }}>×</button>
             </div>
           ))
         )}
@@ -77,13 +77,13 @@ function MultiFileSidebar({ files, onReorder, onRemove, dropZoneJSX, onRun, stat
               cursor:status==='loading'?'not-allowed':'pointer', marginTop:'4px',
               display:'flex', alignItems:'center', justifyContent:'center', gap:'7px',
               background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)',
-              color:status==='loading'?'#d0d0e8':'#fff',
+              color:status==='loading'?'var(--text2)':'#fff',
               boxShadow:status!=='loading'?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
             {status==='loading'?'Merging…':status==='done'?'✓ Downloaded!':'Merge '+files.length+' PDFs'}
           </button>
         )}
         {files.length === 1 && (
-          <p style={{ fontSize:'11px', color:'#b0b0cc', textAlign:'center', margin:0 }}>Add at least one more PDF</p>
+          <p style={{ fontSize:'11px', color:'var(--text3)', textAlign:'center', margin:0 }}>Add at least one more PDF</p>
         )}
       </div>
     </div>
@@ -111,15 +111,15 @@ function ZoomModal({ file, pageNum, onClose }) {
         backdropFilter:'blur(4px)', padding:'24px' }}>
       <div style={{ position:'relative', maxWidth:'90vw', maxHeight:'92vh', display:'flex', flexDirection:'column', gap:'10px' }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <span style={{ fontSize:'13px', color:'#b0b0cc', fontWeight:600 }}>Page {pageNum} — Full Resolution</span>
+          <span style={{ fontSize:'13px', color:'var(--text3)', fontWeight:600 }}>Page {pageNum} — Full Resolution</span>
           <button onClick={onClose}
-            style={{ background:'#1e1e2e', border:'1px solid #252538', borderRadius:'8px',
-              padding:'5px 12px', color:'#9898b8', cursor:'pointer', fontSize:'12px', display:'flex', alignItems:'center', gap:'5px' }}>
+            style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'8px',
+              padding:'5px 12px', color:'var(--text3)', cursor:'pointer', fontSize:'12px', display:'flex', alignItems:'center', gap:'5px' }}>
             <X size={12}/> Close
           </button>
         </div>
         {loading
-          ? <div style={{ width:'500px', height:'600px', display:'flex', alignItems:'center', justifyContent:'center', color:'#b0b0cc' }}>
+          ? <div style={{ width:'500px', height:'600px', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text3)' }}>
               <Loader2 size={28} color="var(--accent)" className="spin"/>
             </div>
           : <img src={imgSrc} alt={`Page ${pageNum}`}
@@ -157,7 +157,7 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
   const selectEven = () => onSelectionChange(new Set(thumbs.filter(t => t.page % 2 === 0).map(t => t.page)))
 
   if (!file) return (
-    <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'#b0b0cc' }}>
+    <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text3)' }}>
       <div style={{ textAlign:'center' }}>
         <div style={{ fontSize:'40px', opacity:0.15, marginBottom:'12px' }}>📄</div>
         <p style={{ fontSize:'13px' }}>Upload a PDF to see pages</p>
@@ -181,12 +181,12 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
           position: relative;
         }
         .pdf-card:hover .pdf-thumb {
-          border-color: rgba(108,99,255,0.6);
+          border-color: rgba(234,88,12,0.6);
           box-shadow: 0 6px 20px rgba(0,0,0,0.4);
         }
         .pdf-thumb-selected {
           border-color: var(--accent) !important;
-          box-shadow: 0 0 0 3px rgba(108,99,255,0.25) !important;
+          box-shadow: 0 0 0 3px rgba(234,88,12,0.25) !important;
         }
 
         .pdf-actions {
@@ -202,11 +202,11 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
       {/* Selection toolbar */}
       <div style={{ padding:'8px 16px', borderBottom:'1px solid var(--border)', background:'var(--bg2)',
         display:'flex', alignItems:'center', gap:'6px', flexShrink:0 }}>
-        <span style={{ fontSize:'11px', color:'#b0b0cc', fontWeight:600, marginRight:'4px' }}>Select:</span>
+        <span style={{ fontSize:'11px', color:'var(--text3)', fontWeight:600, marginRight:'4px' }}>Select:</span>
         {[['All', selectAll],['None', selectNone],['Odd', selectOdd],['Even', selectEven]].map(([l, fn]) => (
           <button key={l} onClick={fn}
             style={{ fontSize:'11px', padding:'3px 9px', borderRadius:'5px',
-              border:'1px solid var(--border)', background:'var(--bg3)', color:'#d0d0e8', cursor:'pointer' }}>
+              border:'1px solid var(--border)', background:'var(--bg3)', color:'var(--text2)', cursor:'pointer' }}>
             {l}
           </button>
         ))}
@@ -272,13 +272,13 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
                   <ActionIcon
                     title="Zoom — full resolution view"
                     color="rgba(30,30,50,0.9)"
-                    border="rgba(108,99,255,0.6)"
+                    border="rgba(234,88,12,0.6)"
                     icon={<ZoomIn size={12}/>}
                     onClick={() => onPageAction('zoom', t.page)}
                   />
                   <ActionIcon
                     title="Rotate 90°"
-                    color="rgba(108,99,255,0.85)"
+                    color="rgba(234,88,12,0.85)"
                     icon={<RotateCw size={12}/>}
                     onClick={() => onPageAction('rotate', t.page)}
                   />
@@ -303,7 +303,7 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
 
               {/* Page label */}
               <div style={{ textAlign:'center', marginTop:'5px' }}>
-                <span style={{ fontSize:'11px', color: isSelected ? 'var(--accent2)' : t._isDupe ? 'var(--green)' : '#b0b0cc', fontWeight: isSelected ? 700 : 400 }}>
+                <span style={{ fontSize:'11px', color: isSelected ? 'var(--accent2)' : t._isDupe ? 'var(--green)' : 'var(--text3)', fontWeight: isSelected ? 700 : 400 }}>
                   {t._isDupe ? t._dupeLabel : `Page ${t.page}`}
                 </span>
                 {pageRotations[t.page] > 0 && !t._isDupe && (
@@ -373,7 +373,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
   }, [selectedPages])
 
   // Wake Render backend on mount so it's warm when the user clicks run
-  useEffect(() => { api.wakeRender() }, [])
+  useEffect(() => { if (!cfg?.clientSide) api.wakeRender() }, [])  // browser-only tools never need the server
 
   // Handle per-page context menu actions
   const handlePageAction = useCallback((action, pageNum) => {
@@ -495,27 +495,27 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           search={search} onSearch={onSearch}/>
         <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px 24px' }}>
           <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'16px', padding:'40px', maxWidth:'480px', width:'100%', textAlign:'center' }}>
-            <div style={{ width:'64px', height:'64px', borderRadius:'50%', background:'rgba(62,207,142,0.12)', border:'2px solid #3ecf8e', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 20px' }}>
-              <CheckCircle size={28} color="#3ecf8e"/>
+            <div style={{ width:'64px', height:'64px', borderRadius:'50%', background:'rgba(21,128,61,0.12)', border:'2px solid var(--green)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 20px' }}>
+              <CheckCircle size={28} color="var(--green)"/>
             </div>
-            <h2 style={{ fontSize:'20px', fontWeight:700, color:'#eeeef5', marginBottom:'8px' }}>Done! File downloaded.</h2>
-            <p style={{ fontSize:'13px', color:'#9898b8', marginBottom:'24px' }}>{downloadResult.name}</p>
+            <h2 style={{ fontSize:'20px', fontWeight:700, color:'var(--text)', marginBottom:'8px' }}>Done! File downloaded.</h2>
+            <p style={{ fontSize:'13px', color:'var(--text3)', marginBottom:'24px' }}>{downloadResult.name}</p>
             {origSize > 0 && (
               <div style={{ display:'flex', justifyContent:'center', gap:'32px', marginBottom:'24px' }}>
                 <div>
-                  <div style={{ fontSize:'11px', color:'#5a5a78', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'4px' }}>Original</div>
-                  <div style={{ fontSize:'16px', fontWeight:600, color:'#eeeef5' }}>{fmt(origSize)}</div>
+                  <div style={{ fontSize:'11px', color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'4px' }}>Original</div>
+                  <div style={{ fontSize:'16px', fontWeight:600, color:'var(--text)' }}>{fmt(origSize)}</div>
                 </div>
                 {outSize > 0 && outSize !== origSize && (
                   <>
-                    <div style={{ fontSize:'20px', color:'#5a5a78', alignSelf:'center' }}>→</div>
+                    <div style={{ fontSize:'20px', color:'var(--text3)', alignSelf:'center' }}>→</div>
                     <div>
-                      <div style={{ fontSize:'11px', color:'#5a5a78', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'4px' }}>Output</div>
-                      <div style={{ fontSize:'16px', fontWeight:600, color: saved ? '#3ecf8e' : '#eeeef5' }}>{fmt(outSize)}</div>
+                      <div style={{ fontSize:'11px', color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'4px' }}>Output</div>
+                      <div style={{ fontSize:'16px', fontWeight:600, color: saved ? 'var(--green)' : 'var(--text)' }}>{fmt(outSize)}</div>
                     </div>
                     {saved && (
                       <div style={{ alignSelf:'center' }}>
-                        <div style={{ fontSize:'13px', fontWeight:700, color:'#3ecf8e', background:'rgba(62,207,142,0.1)', border:'1px solid rgba(62,207,142,0.25)', borderRadius:'20px', padding:'4px 12px' }}>−{saved}%</div>
+                        <div style={{ fontSize:'13px', fontWeight:700, color:'var(--green)', background:'rgba(21,128,61,0.1)', border:'1px solid rgba(21,128,61,0.25)', borderRadius:'20px', padding:'4px 12px' }}>−{saved}%</div>
                       </div>
                     )}
                   </>
@@ -535,7 +535,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
               </button>
               <button
                 onClick={() => { setDownloadResult(null); setStatus('idle'); setFiles([]) }}
-                style={{ fontSize:'13px', color:'#9898b8', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'9px', padding:'10px 20px', cursor:'pointer' }}>
+                style={{ fontSize:'13px', color:'var(--text3)', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'9px', padding:'10px 20px', cursor:'pointer' }}>
                 Convert Another
               </button>
             </div>
@@ -557,8 +557,8 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
       <Upload size={16} color="var(--accent2)" style={{ display:'block', margin:'0 auto 7px'}}/>
       {isDragActive
         ? <p style={{ color:'var(--accent2)', fontWeight:600, fontSize:'13px' }}>Drop it!</p>
-        : <><p style={{ color:'#ffffff', fontWeight:500, fontSize:'13px' }}>Drop {cfg.multi?'files':'file'} or <span style={{ color:'var(--accent2)' }}>browse</span></p>
-           <p style={{ color:'#b0b0cc', fontSize:'11px', marginTop:'3px' }}>{cfg.multi?'Multiple PDFs':'PDF only'}</p></>}
+        : <><p style={{ color:'var(--text)', fontWeight:500, fontSize:'13px' }}>Drop {cfg.multi?'files':'file'} or <span style={{ color:'var(--accent2)' }}>browse</span></p>
+           <p style={{ color:'var(--text3)', fontSize:'11px', marginTop:'3px' }}>{cfg.multi?'Multiple PDFs':'PDF only'}</p></>}
     </div>
   )
 
@@ -568,8 +568,8 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
       {guide && cfg.guide && (
         <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'11px 13px', display:'flex', alignItems:'flex-start', gap:'8px' }}>
           <Info size={13} color="var(--accent2)" style={{ flexShrink:0, marginTop:'1px'}}/>
-          <p style={{ fontSize:'12px', color:'#d0d0e8', lineHeight:1.55, flex:1 }}>{cfg.guide}</p>
-          <button onClick={()=>setGuide(false)} style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer' }}><X size={12}/></button>
+          <p style={{ fontSize:'12px', color:'var(--text2)', lineHeight:1.55, flex:1 }}>{cfg.guide}</p>
+          <button onClick={()=>setGuide(false)} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer' }}><X size={12}/></button>
         </div>
       )}
       {dropZoneJSX}
@@ -577,22 +577,22 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
         <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'8px 12px' }}>
           {files.map((f,i) => (
             <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'5px 0', borderBottom:i<files.length-1?'1px solid var(--border)':'none' }}>
-              <span style={{ fontSize:'12px', color:'#ffffff', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>📄 {f.name}</span>
+              <span style={{ fontSize:'12px', color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>📄 {f.name}</span>
               <div style={{ display:'flex', gap:'8px', alignItems:'center', marginLeft:'8px', flexShrink:0 }}>
-                <span style={{ fontSize:'11px', color:'#b0b0cc' }}>{(f.size/1024).toFixed(0)}KB</span>
-                <button onClick={()=>setFiles(p=>p.filter((_,j)=>j!==i))} style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer', fontSize:'15px', lineHeight:1 }}>×</button>
+                <span style={{ fontSize:'11px', color:'var(--text3)' }}>{(f.size/1024).toFixed(0)}KB</span>
+                <button onClick={()=>setFiles(p=>p.filter((_,j)=>j!==i))} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'15px', lineHeight:1 }}>×</button>
               </div>
             </div>
           ))}
         </div>
       )}
       {cfg.useSelector && selectedPages.size>0 && !isGridTool && (
-        <div style={{ background:'rgba(108,99,255,0.08)', border:'1px solid rgba(108,99,255,0.2)', borderRadius:'8px', padding:'8px 12px', fontSize:'12px', color:'var(--accent2)' }}>
+        <div style={{ background:'rgba(234,88,12,0.08)', border:'1px solid rgba(234,88,12,0.2)', borderRadius:'8px', padding:'8px 12px', fontSize:'12px', color:'var(--accent2)' }}>
           Selected: {[...selectedPages].sort((a,b)=>a-b).join(', ')}
         </div>
       )}
       {cfg.useSelector && selectedPages.size>0 && isGridTool && (
-        <div style={{ background:'rgba(108,99,255,0.08)', border:'1px solid rgba(108,99,255,0.2)', borderRadius:'8px', padding:'8px 12px', fontSize:'12px', color:'var(--accent2)' }}>
+        <div style={{ background:'rgba(234,88,12,0.08)', border:'1px solid rgba(234,88,12,0.2)', borderRadius:'8px', padding:'8px 12px', fontSize:'12px', color:'var(--accent2)' }}>
           {selectedPages.size} page{selectedPages.size!==1?'s':''} selected
         </div>
       )}
@@ -601,8 +601,8 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           {inputFields.map(field => (
             <div key={field.id}>
               <div style={{ display:'flex', alignItems:'center', gap:'5px', marginBottom:'4px' }}>
-                <label style={{ fontSize:'12px', color:'#d0d0e8', fontWeight:500 }}>{field.label}</label>
-                {field.tip && <span style={{ fontSize:'11px', color:'#b0b0cc' }}>— {field.tip}</span>}
+                <label style={{ fontSize:'12px', color:'var(--text2)', fontWeight:500 }}>{field.label}</label>
+                {field.tip && <span style={{ fontSize:'11px', color:'var(--text3)' }}>— {field.tip}</span>}
               </div>
               {field.type==='select'
                 ? <select value={vals[field.id]||field.default||''} onChange={e=>setVals(v=>({...v,[field.id]:e.target.value}))} style={{ width:'100%' }}>{field.options.map(o=><option key={o} value={o}>{o}</option>)}</select>
@@ -614,7 +614,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
       {checkboxFields.length>0 && (
         <div style={{ display:'flex', gap:'12px' }}>
           {checkboxFields.map(f => (
-            <label key={f.id} style={{ display:'flex', alignItems:'center', gap:'6px', cursor:'pointer', fontSize:'12px', color:'#d0d0e8' }}>
+            <label key={f.id} style={{ display:'flex', alignItems:'center', gap:'6px', cursor:'pointer', fontSize:'12px', color:'var(--text2)' }}>
               <input type="checkbox" checked={!!vals[f.id]} onChange={e=>setVals(v=>({...v,[f.id]:e.target.checked}))} style={{ width:'13px', height:'13px', accentColor:'var(--accent)' }}/>
               {f.label}
             </label>
@@ -629,7 +629,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
       {progress && (
         <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'8px', padding:'12px' }}>
           <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-            <span style={{ fontSize:'12px', color:'#d0d0e8', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
+            <span style={{ fontSize:'12px', color:'var(--text2)', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
             {progress.stage !== 'processing' && (
               <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700 }}>{Math.round((progress.current/progress.total)*100) || 0}%</span>
             )}
@@ -647,7 +647,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           cursor:!files.length?'not-allowed':'pointer', opacity:!files.length?0.45:1,
           display:'flex', alignItems:'center', justifyContent:'center', gap:'7px',
           background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)',
-          color:status==='loading'?'#d0d0e8':'#fff', boxShadow:files.length?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
+          color:status==='loading'?'var(--text2)':'#fff', boxShadow:files.length?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
         {status==='loading'?<><Loader2 size={13} className="spin"/>Processing…</>:status==='done'?<><CheckCircle size={13}/>Downloaded!</>:<><Download size={13}/>{cfg.title}</>}
       </button>
     </div>
@@ -690,7 +690,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
               {/* Mini page sidebar */}
               {!isMerge && (
                 <div style={{ width:'150px', flexShrink:0, borderRight:'1px solid var(--border)', background:'var(--bg2)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-                  <div style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)', fontSize:'10px', fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'#b0b0cc' }}>Pages</div>
+                  <div style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)', fontSize:'10px', fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--text3)' }}>Pages</div>
                   <div style={{ flex:1, overflow:'hidden' }}>
                     <ClassicPageSidebar file={files[0]} selectedPages={selectedPages} onSelectionChange={setSelectedPages}/>
                   </div>
@@ -710,8 +710,8 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           {guide && cfg.guide && (
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'12px 16px', display:'flex', alignItems:'flex-start', gap:'10px' }}>
               <Info size={14} color="var(--accent2)" style={{ flexShrink:0, marginTop:'1px'}}/>
-              <p style={{ fontSize:'13px', color:'#d0d0e8', lineHeight:1.55, flex:1 }}>{cfg.guide}</p>
-              <button onClick={()=>setGuide(false)} style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer' }}><X size={13}/></button>
+              <p style={{ fontSize:'13px', color:'var(--text2)', lineHeight:1.55, flex:1 }}>{cfg.guide}</p>
+              <button onClick={()=>setGuide(false)} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer' }}><X size={13}/></button>
             </div>
           )}
           {dropZoneJSX}
@@ -719,10 +719,10 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'8px 14px' }}>
               {files.map((f,i) => (
                 <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'6px 0', borderBottom:i<files.length-1?'1px solid var(--border)':'none' }}>
-                  <span style={{ fontSize:'13px', color:'#ffffff' }}>📄 {f.name}</span>
+                  <span style={{ fontSize:'13px', color:'var(--text)' }}>📄 {f.name}</span>
                   <div style={{ display:'flex', gap:'10px', alignItems:'center' }}>
-                    <span style={{ fontSize:'12px', color:'#b0b0cc' }}>{(f.size/1024).toFixed(0)} KB</span>
-                    <button onClick={()=>setFiles(p=>p.filter((_,j)=>j!==i))} style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer', fontSize:'16px' }}>×</button>
+                    <span style={{ fontSize:'12px', color:'var(--text3)' }}>{(f.size/1024).toFixed(0)} KB</span>
+                    <button onClick={()=>setFiles(p=>p.filter((_,j)=>j!==i))} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'16px' }}>×</button>
                   </div>
                 </div>
               ))}
@@ -733,8 +733,8 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
               {inputFields.map(field => (
                 <div key={field.id}>
                   <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'5px' }}>
-                    <label style={{ fontSize:'12px', color:'#d0d0e8', fontWeight:500 }}>{field.label}</label>
-                    {field.tip && <span style={{ fontSize:'11px', color:'#b0b0cc' }}>— {field.tip}</span>}
+                    <label style={{ fontSize:'12px', color:'var(--text2)', fontWeight:500 }}>{field.label}</label>
+                    {field.tip && <span style={{ fontSize:'11px', color:'var(--text3)' }}>— {field.tip}</span>}
                   </div>
                   {field.type==='select'
                     ? <select value={vals[field.id]||field.default||''} onChange={e=>setVals(v=>({...v,[field.id]:e.target.value}))} style={{ width:'100%' }}>{field.options.map(o=><option key={o} value={o}>{o}</option>)}</select>
@@ -751,7 +751,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
           {progress && (
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'8px', padding:'12px' }}>
               <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-                <span style={{ fontSize:'12px', color:'#d0d0e8', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
+                <span style={{ fontSize:'12px', color:'var(--text2)', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
                 <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700 }}>{progress.current}/{progress.total}</span>
               </div>
               <div style={{ height:'5px', background:'var(--bg3)', borderRadius:'3px', overflow:'hidden' }}>
@@ -791,24 +791,24 @@ function ClassicPageSidebar({ file, selectedPages, onSelectionChange }) {
   const selectNone = () => onSelectionChange(new Set())
   const selectOdd  = () => onSelectionChange(new Set(thumbs.filter(t=>t.page%2===1).map(t=>t.page)))
   const selectEven = () => onSelectionChange(new Set(thumbs.filter(t=>t.page%2===0).map(t=>t.page)))
-  if (!file) return <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:'#b0b0cc', padding:'20px', textAlign:'center' }}><div style={{ fontSize:'28px', opacity:0.2, marginBottom:'8px' }}>📄</div><p style={{ fontSize:'12px' }}>Upload PDF to see pages</p></div>
+  if (!file) return <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:'var(--text3)', padding:'20px', textAlign:'center' }}><div style={{ fontSize:'28px', opacity:0.2, marginBottom:'8px' }}>📄</div><p style={{ fontSize:'12px' }}>Upload PDF to see pages</p></div>
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column' }}>
       <div style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)', display:'flex', gap:'4px', flexWrap:'wrap' }}>
         {[['All',selectAll],['None',selectNone],['Odd',selectOdd],['Even',selectEven]].map(([l,fn])=>(
-          <button key={l} onClick={fn} style={{ fontSize:'10px', padding:'3px 7px', borderRadius:'5px', border:'1px solid var(--border)', background:'var(--bg3)', color:'#d0d0e8', cursor:'pointer' }}>{l}</button>
+          <button key={l} onClick={fn} style={{ fontSize:'10px', padding:'3px 7px', borderRadius:'5px', border:'1px solid var(--border)', background:'var(--bg3)', color:'var(--text2)', cursor:'pointer' }}>{l}</button>
         ))}
         {selectedPages.size>0 && <span style={{ fontSize:'10px', color:'var(--accent2)', marginLeft:'auto', alignSelf:'center' }}>{selectedPages.size} sel.</span>}
       </div>
       <div style={{ flex:1, overflowY:'auto', padding:'8px', display:'flex', flexDirection:'column', gap:'6px' }}>
-        {loading ? <div style={{ textAlign:'center', padding:'16px', color:'#b0b0cc', fontSize:'12px' }}><Loader2 size={16} className="spin" style={{ display:'block', margin:'0 auto 6px'}}/>Loading…</div>
+        {loading ? <div style={{ textAlign:'center', padding:'16px', color:'var(--text3)', fontSize:'12px' }}><Loader2 size={16} className="spin" style={{ display:'block', margin:'0 auto 6px'}}/>Loading…</div>
         : thumbs.map(t => {
           const sel = selectedPages.has(t.page)
           return (
-            <div key={t.page} onClick={()=>toggle(t.page)} style={{ cursor:'pointer', position:'relative', borderRadius:'7px', overflow:'hidden', border:`2px solid ${sel?'var(--accent)':'var(--border)'}`, boxShadow:sel?'0 0 0 2px rgba(108,99,255,0.3)':'none', transition:'all 0.12s' }}>
+            <div key={t.page} onClick={()=>toggle(t.page)} style={{ cursor:'pointer', position:'relative', borderRadius:'7px', overflow:'hidden', border:`2px solid ${sel?'var(--accent)':'var(--border)'}`, boxShadow:sel?'0 0 0 2px rgba(234,88,12,0.3)':'none', transition:'all 0.12s' }}>
               <img src={t.img} alt={`p${t.page}`} style={{ width:'100%', display:'block'}}/>
               <div style={{ position:'absolute', top:'3px', right:'3px', width:'16px', height:'16px', borderRadius:'50%', background:sel?'var(--accent)':'rgba(0,0,0,0.55)', border:'2px solid #fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'9px', color:'#fff', fontWeight:700 }}>{sel?'✓':''}</div>
-              <div style={{ textAlign:'center', fontSize:'9px', color:'#b0b0cc', padding:'2px 0', background:'var(--bg2)' }}>p.{t.page}</div>
+              <div style={{ textAlign:'center', fontSize:'9px', color:'var(--text3)', padding:'2px 0', background:'var(--bg2)' }}>p.{t.page}</div>
             </div>
           )
         })}
@@ -832,20 +832,20 @@ function ClassicPreviewPanel({ file, selectedPages }) {
     }, 5).catch(() => setLoading(false))
   }, [file])
   const thumb = thumbs.find(t => t.page === currentPage)
-  if (!file) return <div style={{ height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color:'#b0b0cc', background:'var(--bg3)' }}><div style={{ fontSize:'48px', opacity:0.1, marginBottom:'14px' }}>📄</div><p style={{ fontSize:'14px', fontWeight:600, color:'#d0d0e8' }}>Upload a PDF to preview</p></div>
+  if (!file) return <div style={{ height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color:'var(--text3)', background:'var(--bg3)' }}><div style={{ fontSize:'48px', opacity:0.1, marginBottom:'14px' }}>📄</div><p style={{ fontSize:'14px', fontWeight:600, color:'var(--text2)' }}>Upload a PDF to preview</p></div>
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column' }}>
       {totalPages>1 && (
         <div style={{ padding:'8px 16px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'center', gap:'12px', background:'var(--bg2)' }}>
-          <button onClick={()=>setCurrentPage(p=>Math.max(1,p-1))} disabled={currentPage<=1} style={{ background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 8px', cursor:'pointer', color:'#d0d0e8', opacity:currentPage<=1?0.4:1 }}>‹</button>
-          <span style={{ fontSize:'12px', color:'#d0d0e8' }}>Page {currentPage} of {totalPages}</span>
-          <button onClick={()=>setCurrentPage(p=>Math.min(totalPages,p+1))} disabled={currentPage>=totalPages} style={{ background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 8px', cursor:'pointer', color:'#d0d0e8', opacity:currentPage>=totalPages?0.4:1 }}>›</button>
+          <button onClick={()=>setCurrentPage(p=>Math.max(1,p-1))} disabled={currentPage<=1} style={{ background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 8px', cursor:'pointer', color:'var(--text2)', opacity:currentPage<=1?0.4:1 }}>‹</button>
+          <span style={{ fontSize:'12px', color:'var(--text2)' }}>Page {currentPage} of {totalPages}</span>
+          <button onClick={()=>setCurrentPage(p=>Math.min(totalPages,p+1))} disabled={currentPage>=totalPages} style={{ background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 8px', cursor:'pointer', color:'var(--text2)', opacity:currentPage>=totalPages?0.4:1 }}>›</button>
         </div>
       )}
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'24px', overflowY:'auto', background:'var(--bg3)' }}>
-        {loading ? <div style={{ textAlign:'center', color:'#b0b0cc' }}><Loader2 size={24} className="spin" color="var(--accent)" style={{ display:'block', margin:'0 auto 10px'}}/><p style={{ fontSize:'13px' }}>Loading preview…</p></div>
+        {loading ? <div style={{ textAlign:'center', color:'var(--text3)' }}><Loader2 size={24} className="spin" color="var(--accent)" style={{ display:'block', margin:'0 auto 10px'}}/><p style={{ fontSize:'13px' }}>Loading preview…</p></div>
         : thumb ? <img src={thumb.img} alt={`Page ${currentPage}`} style={{ maxWidth:'100%', maxHeight:'100%', boxShadow:'0 4px 32px rgba(0,0,0,0.4)', borderRadius:'3px', background:'#fff'}}/>
-        : <p style={{ color:'#b0b0cc', fontSize:'13px' }}>No preview available</p>}
+        : <p style={{ color:'var(--text3)', fontSize:'13px' }}>No preview available</p>}
       </div>
     </div>
   )

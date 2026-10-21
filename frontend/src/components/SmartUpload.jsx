@@ -74,14 +74,14 @@ export default function SmartUpload({ onSelectTool, onFilesReady }) {
         onDrop={onDrop}
         onClick={() => inputRef.current?.click()}
         style={{
-          border:       `2px dashed ${dragging ? '#6c63ff' : 'rgba(108,99,255,0.35)'}`,
+          border:       `2px dashed ${dragging ? 'var(--accent)' : 'rgba(234,88,12,0.35)'}`,
           borderRadius: '20px',
           padding:      '52px 32px',
           textAlign:    'center',
           cursor:       'pointer',
           background:   dragging
-            ? 'rgba(108,99,255,0.12)'
-            : 'linear-gradient(135deg,rgba(108,99,255,0.06),rgba(232,121,249,0.04))',
+            ? 'rgba(234,88,12,0.12)'
+            : 'linear-gradient(135deg,rgba(234,88,12,0.06),rgba(232,121,249,0.04))',
           transition:   'all 0.2s',
           position:     'relative',
           overflow:     'hidden',
@@ -91,7 +91,7 @@ export default function SmartUpload({ onSelectTool, onFilesReady }) {
         <div style={{
           position:'absolute', top:'-40px', left:'50%', transform:'translateX(-50%)',
           width:'200px', height:'200px', borderRadius:'50%',
-          background:'radial-gradient(circle,rgba(108,99,255,0.18) 0%,transparent 70%)',
+          background:'radial-gradient(circle,rgba(234,88,12,0.18) 0%,transparent 70%)',
           pointerEvents:'none',
         }}/>
 
@@ -108,29 +108,29 @@ export default function SmartUpload({ onSelectTool, onFilesReady }) {
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'14px' }}>
             <div style={{
               width:'40px', height:'40px', borderRadius:'50%',
-              border:'3px solid rgba(108,99,255,0.2)',
-              borderTopColor:'#6c63ff',
+              border:'3px solid rgba(234,88,12,0.2)',
+              borderTopColor:'var(--accent)',
               animation:'sgSpin 0.8s linear infinite',
             }}/>
-            <p style={{ fontSize:'15px', fontWeight:600, color:'#ffffff' }}>Analyzing your file…</p>
-            <p style={{ fontSize:'13px', color:'#b0b0cc' }}>Detecting document type and best tools</p>
+            <p style={{ fontSize:'15px', fontWeight:600, color:'var(--text)' }}>Analyzing your file…</p>
+            <p style={{ fontSize:'13px', color:'var(--text3)' }}>Detecting document type and best tools</p>
           </div>
         ) : files.length > 0 ? (
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'10px' }}>
             <div style={{ fontSize:'32px' }}>📄</div>
-            <p style={{ fontSize:'15px', fontWeight:700, color:'#ffffff' }}>
+            <p style={{ fontSize:'15px', fontWeight:700, color:'var(--text)' }}>
               {files.length === 1 ? files[0].name : `${files.length} files selected`}
             </p>
             {metadata && (
               <div style={{ display:'flex', gap:'12px', flexWrap:'wrap', justifyContent:'center' }}>
                 {metadata.sizeLabel && <Chip label={metadata.sizeLabel} />}
                 {metadata.pageCount && <Chip label={`${metadata.pageCount} pages`} />}
-                {metadata.isResume  && <Chip label="📋 Resume" color="#6c63ff" />}
-                {metadata.isScanned && <Chip label="🖨 Scanned" color="#f5a623" />}
-                {metadata.isInvoice && <Chip label="🧾 Invoice" color="#3ecf8e" />}
+                {metadata.isResume  && <Chip label="📋 Resume" color="var(--accent)" />}
+                {metadata.isScanned && <Chip label="🖨 Scanned" color="var(--gold)" />}
+                {metadata.isInvoice && <Chip label="🧾 Invoice" color="var(--green)" />}
               </div>
             )}
-            <p style={{ fontSize:'12px', color:'#9d97ff', marginTop:'4px' }}>
+            <p style={{ fontSize:'12px', color:'var(--accent2)', marginTop:'4px' }}>
               Click to change file
             </p>
           </div>
@@ -138,22 +138,22 @@ export default function SmartUpload({ onSelectTool, onFilesReady }) {
           <>
             <div style={{
               width:'56px', height:'56px', borderRadius:'14px',
-              background:'linear-gradient(135deg,rgba(108,99,255,0.2),rgba(232,121,249,0.15))',
-              border:'1px solid rgba(108,99,255,0.3)',
+              background:'linear-gradient(135deg,rgba(234,88,12,0.2),rgba(232,121,249,0.15))',
+              border:'1px solid rgba(234,88,12,0.3)',
               display:'flex', alignItems:'center', justifyContent:'center',
               fontSize:'26px', margin:'0 auto 18px',
             }}>📄</div>
-            <p style={{ fontSize:'17px', fontWeight:700, color:'#ffffff', marginBottom:'8px' }}>
+            <p style={{ fontSize:'17px', fontWeight:700, color:'var(--text)', marginBottom:'8px' }}>
               Drop your PDF here
             </p>
-            <p style={{ fontSize:'13px', color:'#b0b0cc', marginBottom:'16px' }}>
+            <p style={{ fontSize:'13px', color:'var(--text3)', marginBottom:'16px' }}>
               or click to browse — we'll detect the best tools automatically
             </p>
             <div style={{ display:'flex', gap:'10px', justifyContent:'center', flexWrap:'wrap' }}>
-              {['No signup', 'Auto-deleted in 24h', 'No watermark'].map(t => (
+              {['No signup', 'Most tools run on your device', 'No watermark'].map(t => (
                 <span key={t} style={{
-                  fontSize:'11px', color:'#3ecf8e', background:'rgba(62,207,142,0.1)',
-                  border:'1px solid rgba(62,207,142,0.25)', borderRadius:'999px', padding:'3px 10px',
+                  fontSize:'11px', color:'var(--green)', background:'rgba(21,128,61,0.1)',
+                  border:'1px solid rgba(21,128,61,0.25)', borderRadius:'999px', padding:'3px 10px',
                 }}>✓ {t}</span>
               ))}
             </div>
@@ -167,8 +167,8 @@ export default function SmartUpload({ onSelectTool, onFilesReady }) {
           <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'14px' }}>
             <span style={{
               fontSize:'11px', fontWeight:700, letterSpacing:'.1em', textTransform:'uppercase',
-              color:'#9d97ff', background:'rgba(108,99,255,0.1)',
-              border:'1px solid rgba(108,99,255,0.2)', borderRadius:'999px', padding:'3px 12px',
+              color:'var(--accent2)', background:'rgba(234,88,12,0.1)',
+              border:'1px solid rgba(234,88,12,0.2)', borderRadius:'999px', padding:'3px 12px',
             }}>✦ Recommended for you</span>
             <div style={{ flex:1, height:'1px', background:'var(--border)' }}/>
           </div>
@@ -212,9 +212,9 @@ function SuggestionCard({ sug, onClick }) {
     >
       <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' }}>
         <span style={{ fontSize:'20px' }}>{sug.icon}</span>
-        <span style={{ fontSize:'13px', fontWeight:700, color:'#ffffff' }}>{sug.title}</span>
+        <span style={{ fontSize:'13px', fontWeight:700, color:'var(--text)' }}>{sug.title}</span>
       </div>
-      <p style={{ fontSize:'11px', color:'#b0b0cc', lineHeight:1.6 }}>{sug.reason}</p>
+      <p style={{ fontSize:'11px', color:'var(--text3)', lineHeight:1.6 }}>{sug.reason}</p>
       {sug.isWorkflow && (
         <span style={{
           display:'inline-block', marginTop:'8px',
@@ -228,7 +228,7 @@ function SuggestionCard({ sug, onClick }) {
   )
 }
 
-function Chip({ label, color='#9d97ff' }) {
+function Chip({ label, color='var(--accent2)' }) {
   return (
     <span style={{
       fontSize:'11px', color, background:`rgba(${hexToRgb(color)},0.12)`,

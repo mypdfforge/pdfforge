@@ -1,0 +1,409 @@
+Absolutely. Based on the audit of your current PDFForge UI shown in pdf forge pages.docx, including the landing page, categorized tool grid, optimize section, and extract-pages workspace, this prompt is designed to transform PDFForge from a traditional PDF utility website into a premium AI-native PDF workspace.
+
+PDFForge v2 Redesign Master Prompt
+Project Vision
+
+Redesign PDFForge into a modern AI-powered PDF workspace inspired by Claude, Linear, Cursor, Raycast, Notion, and Vercel.
+
+The current product already contains a strong collection of PDF tools, but the experience still feels like a traditional "tool directory" where users choose a tool first and then upload files.
+
+The new vision is:
+
+PDFForge is not a collection of PDF tools.
+
+PDFForge is a unified workspace where users upload documents and perform everything from a single interface.
+
+The redesign should focus on:
+
+Better first impression
+Cleaner information architecture
+Workspace-first workflow
+AI-native experience
+Premium SaaS aesthetics
+Reduced cognitive load
+Faster user actions
+Modern developer-tool design language
+PART 1
+Landing Experience
+Objective
+
+The current homepage communicates tools.
+
+The new homepage should communicate a product.
+
+Users should immediately understand:
+
+What PDFForge is
+Why it's different
+Why they should trust it
+What happens after upload
+Hero Section
+
+Replace traditional PDF-tool messaging with a product-centric narrative.
+
+Heading
+Work with PDFs like you're using Cursor for documents.
+
+
+Alternative:
+
+All your PDF tools.
+Zero bloat.
+Powered by your own AI.
+
+Subheading
+Edit, organize, convert, analyze, and automate PDFs from one intelligent workspace.
+
+100% client-side processing.
+No forced uploads.
+Bring your own AI.
+
+Primary CTA
+Launch Workspace
+
+
+Orange filled button.
+
+Secondary CTA
+Explore Features
+
+
+Ghost button.
+
+Interactive Workspace Preview
+
+Instead of generic graphics, create a large visual preview.
+
+Display:
+
+Sidebar
++
+Document Viewer
++
+AI Assistant
+
+
+Users must instantly understand the destination after clicking.
+
+Trust Section
+
+Add a small trust strip:
+
+✓ Client-side processing
+✓ Files never leave your device
+✓ Open-source
+✓ BYOAI capable
+✓ Auto file cleanup
+
+Feature Architecture
+
+Replace equal-sized cards.
+
+Create hierarchy.
+
+Essentials
+Merge PDF
+Split PDF
+Extract Pages
+Compress PDF
+
+Convert
+PDF → Word
+PDF → Images
+Images → PDF
+PDF → Text
+
+AI Workspace
+Resume ATS Scanner
+Chat with PDF
+BYOAI Assistant
+Document Intelligence
+
+
+AI cards should be 2x larger than normal cards.
+
+PART 2
+Unified Workspace
+Core Principle
+
+Users should enter one workspace.
+
+Tools become actions.
+
+Do not create separate websites for every action.
+
+Layout
+┌─────────────────────────────────────┐
+│ Global Header                        │
+├───────────────┬─────────────────────┤
+│ Sidebar       │                     │
+│               │     PDF Canvas      │
+│               │                     │
+│               │                     │
+├───────────────┴─────────────────────┤
+│ Status + Action Bar                 │
+└─────────────────────────────────────┘
+
+Sidebar Navigation
+
+Collapsible.
+
+Inspired by Linear and Cursor.
+
+Files
+
+Organize
+Convert
+Edit
+Security
+AI Assistant
+
+Settings
+
+File Explorer
+
+Support multiple open files.
+
+Example:
+
+Resume.pdf
+
+Contract.pdf
+
+Invoice.pdf
+
+
+Tabs like VS Code.
+
+Top Toolbar
+
+Show metadata.
+
+Resume.pdf
+
+Pages: 8
+Size: 1.2 MB
+
+Status: Local Processing
+
+AI: Connected
+
+
+Use monospace typography.
+
+Command Palette
+
+Keyboard shortcut:
+
+Ctrl + K
+
+
+or
+
+⌘ + K
+
+
+Users can execute actions through natural language.
+
+Examples:
+
+Extract pages 12-18
+
+Remove blank pages
+
+Compress this PDF
+
+Rotate page 3
+
+Analyze resume
+
+Summarize contract
+
+Contextual Actions
+
+When pages are selected:
+
+Display floating toolbar.
+
+Delete
+
+Extract
+
+Rotate
+
+Duplicate
+
+Move
+
+Analyze
+
+
+Only show tools when needed.
+
+Avoid exposing everything simultaneously.
+
+PART 3
+AI-Native Layer
+Objective
+
+Make AI feel integrated.
+
+Not bolted on.
+
+AI Assistant Panel
+
+Right-side collapsible panel.
+
+Example:
+
+Ask PDFForge AI...
+
+
+Suggested actions:
+
+Summarize document
+
+Extract key insights
+
+Find signatures
+
+Generate notes
+
+Create action items
+
+Explain page 5
+
+BYOAI Experience
+
+Create dedicated setup screen.
+
+Show:
+
+Provider
+
+OpenAI
+Gemini
+Anthropic
+OpenRouter
+Local Models
+
+AI Status Badge
+
+Always visible.
+
+Example:
+
+● Local AI Active
+
+GPT-5
+
+
+or
+
+● AI Not Connected
+
+Smart Document Detection
+
+If uploaded file resembles:
+
+Resume
+
+Show:
+
+ATS Score
+
+Optimize Resume
+
+Generate Cover Letter
+
+Interview Questions
+
+Invoice
+
+Show:
+
+Extract Line Items
+
+Export CSV
+
+Find GST Details
+
+Generate Spreadsheet
+
+Contract
+
+Show:
+
+Summarize
+
+Extract Parties
+
+Highlight Risks
+
+Generate Key Terms
+
+Design System
+Light Theme
+Background: #FAFAF9;
+Surface: #FFFFFF;
+Border: #E4E4E7;
+
+Text Primary: #09090B;
+Text Secondary: #71717A;
+
+Accent: #F97316;
+Accent Hover: #EA580C;
+
+Dark Theme
+Background: #09090B;
+Surface: #121212;
+Border: #27272A;
+
+Text Primary: #F4F4F5;
+Text Secondary: #A1A1AA;
+
+Accent: #F97316;
+Accent Hover: #FB923C;
+
+Theme Toggle
+
+Requirements:
+
+Persistent using localStorage
+
+Instant switching
+
+No page refresh
+
+Respects system preference
+
+Works across all pages
+
+UX Principles
+Follow
+Claude simplicity
+Linear precision
+Cursor productivity
+Raycast speed
+Vercel polish
+Avoid
+Tool overload
+Large gradients
+Marketing fluff
+Excessive animations
+Multiple upload screens
+Repetitive cards
+Separate workflows for each tool
+Success Criteria
+
+A user should be able to understand PDFForge in under 5 seconds:
+
+This is an AI-powered PDF workspace.
+My files stay local.
+I can do everything from one place.
+I can use my own AI.
+
+
+If the experience feels like ILovePDF or SmallPDF, the redesign has failed.
+
+If it feels like Cursor for PDFs, the redesign has succeeded.

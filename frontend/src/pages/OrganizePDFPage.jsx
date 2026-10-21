@@ -124,7 +124,7 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
                 display: 'flex', alignItems: 'center', gap: '7px', padding: '8px 20px',
                 borderRadius: '9px', border: 'none', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
                 background: state === 'done' ? 'var(--green)' : 'var(--accent)', color: '#fff',
-                boxShadow: '0 4px 14px rgba(108,99,255,0.3)',
+                boxShadow: '0 4px 14px rgba(234,88,12,0.3)',
               }}>
               {state === 'loading' ? <><Loader2 size={14} className="spin" />Saving {pct}%</>
                 : state === 'done' ? <><CheckCircle size={14} />Downloaded!</>
@@ -139,7 +139,7 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
             /* Upload zone */
             <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
               <div {...getRootProps()} style={{
-                background: isDragActive ? 'rgba(108,99,255,0.08)' : 'var(--bg2)',
+                background: isDragActive ? 'rgba(234,88,12,0.08)' : 'var(--bg2)',
                 border: `2px dashed ${isDragActive ? 'var(--accent)' : 'var(--border)'}`,
                 borderRadius: '20px', padding: '60px 40px', textAlign: 'center', cursor: 'pointer',
                 transition: 'all 0.2s', maxWidth: '480px', width: '100%',

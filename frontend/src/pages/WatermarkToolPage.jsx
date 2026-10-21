@@ -36,7 +36,7 @@ function PosGrid({ value, onChange }) {
     <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'3px' }}>
       {POSITIONS.map(pos=>(
         <button key={pos} onClick={()=>onChange(pos)} title={pos}
-          style={{ width:'30px', height:'30px', borderRadius:'5px', border:`1px solid ${value===pos?'var(--accent)':'var(--border)'}`, background:value===pos?'rgba(108,99,255,0.2)':'var(--bg4)', color:value===pos?'var(--accent2)':'var(--text3)', cursor:'pointer', fontSize:'14px', display:'flex', alignItems:'center', justifyContent:'center' }}>
+          style={{ width:'30px', height:'30px', borderRadius:'5px', border:`1px solid ${value===pos?'var(--accent)':'var(--border)'}`, background:value===pos?'rgba(234,88,12,0.2)':'var(--bg4)', color:value===pos?'var(--accent2)':'var(--text3)', cursor:'pointer', fontSize:'14px', display:'flex', alignItems:'center', justifyContent:'center' }}>
           {POS_ICONS[pos]}
         </button>
       ))}
@@ -160,7 +160,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
       {!file ? (
         <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px' }}>
           <div style={{ maxWidth:'460px', width:'100%' }}>
-            <div {...getRootProps()} style={{ background:isDragActive?'rgba(108,99,255,0.08)':'var(--bg2)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'16px', padding:'56px 40px', textAlign:'center', cursor:'pointer' }}>
+            <div {...getRootProps()} style={{ background:isDragActive?'rgba(234,88,12,0.08)':'var(--bg2)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'16px', padding:'56px 40px', textAlign:'center', cursor:'pointer' }}>
               <input {...getInputProps()}/><div style={{ fontSize:'38px', marginBottom:'14px', opacity:0.5 }}>◈</div>
               <p style={{ color:'var(--text)', fontWeight:600, fontSize:'15px', marginBottom:'7px' }}>Drop your PDF here</p>
               <p style={{ color:'var(--text3)', fontSize:'12px' }}>or click to browse</p>
@@ -188,7 +188,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
             {mode==='text' && <>
               <Sec title="Text">
                 <div style={{ display:'flex', flexWrap:'wrap', gap:'3px' }}>
-                  {PRESET_TEXTS.map(t=><button key={t} onClick={()=>setText(t)} style={{ fontSize:'10px', padding:'2px 7px', borderRadius:'4px', border:`1px solid ${text===t?'var(--accent)':'var(--border)'}`, background:text===t?'rgba(108,99,255,0.15)':'var(--bg4)', color:text===t?'var(--accent2)':'var(--text3)', cursor:'pointer' }}>{t}</button>)}
+                  {PRESET_TEXTS.map(t=><button key={t} onClick={()=>setText(t)} style={{ fontSize:'10px', padding:'2px 7px', borderRadius:'4px', border:`1px solid ${text===t?'var(--accent)':'var(--border)'}`, background:text===t?'rgba(234,88,12,0.15)':'var(--bg4)', color:text===t?'var(--accent2)':'var(--text3)', cursor:'pointer' }}>{t}</button>)}
                 </div>
                 <input value={text} onChange={e=>setText(e.target.value)} placeholder="Custom text…"
                   style={{ background:'var(--bg4)', color:'var(--text)', border:'1px solid var(--border)', borderRadius:'7px', padding:'6px 9px', fontSize:'12px', outline:'none', width:'100%', boxSizing:'border-box' }}/>
@@ -199,7 +199,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
                 </select>
                 <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
                   {[[bold,setBold,'B'],[italic,setItalic,'I'],[underline,setUnderline,'U']].map(([v,s,k])=>(
-                    <button key={k} onClick={()=>s(!v)} style={{ width:'28px', height:'28px', borderRadius:'5px', border:`1px solid ${v?'var(--accent)':'var(--border)'}`, background:v?'rgba(108,99,255,0.2)':'var(--bg4)', color:v?'var(--accent2)':'var(--text2)', cursor:'pointer', fontWeight:700, fontSize:'12px' }}>{k}</button>
+                    <button key={k} onClick={()=>s(!v)} style={{ width:'28px', height:'28px', borderRadius:'5px', border:`1px solid ${v?'var(--accent)':'var(--border)'}`, background:v?'rgba(234,88,12,0.2)':'var(--bg4)', color:v?'var(--accent2)':'var(--text2)', cursor:'pointer', fontWeight:700, fontSize:'12px' }}>{k}</button>
                   ))}
                   <div style={{ display:'flex', alignItems:'center', gap:'4px', flex:1, background:'var(--bg4)', border:'1px solid var(--border)', borderRadius:'5px', padding:'0 7px', height:'28px' }}>
                     <span style={{ fontSize:'10px', color:'var(--text3)' }}>Color</span>
@@ -226,7 +226,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
                   </label>
                   <div style={{ display:'flex', gap:'2px' }}>
                     {[['over','↑'],['under','↓']].map(([v,icon])=>(
-                      <button key={v} onClick={()=>setLayer(v)} style={{ padding:'2px 5px', fontSize:'9px', borderRadius:'4px', border:`1px solid ${layer===v?'var(--accent)':'var(--border)'}`, background:layer===v?'rgba(108,99,255,0.15)':'var(--bg4)', color:layer===v?'var(--accent2)':'var(--text3)', cursor:'pointer' }}>{icon} {v}</button>
+                      <button key={v} onClick={()=>setLayer(v)} style={{ padding:'2px 5px', fontSize:'9px', borderRadius:'4px', border:`1px solid ${layer===v?'var(--accent)':'var(--border)'}`, background:layer===v?'rgba(234,88,12,0.15)':'var(--bg4)', color:layer===v?'var(--accent2)':'var(--text3)', cursor:'pointer' }}>{icon} {v}</button>
                     ))}
                   </div>
                 </div>
@@ -239,7 +239,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
             <Sec title="Apply to Pages">
               <div style={{ display:'flex', gap:'3px', flexWrap:'wrap' }}>
                 {['all','odd','even','first','last'].map(o=>(
-                  <button key={o} onClick={()=>setPageRange(o)} style={{ padding:'3px 7px', fontSize:'10px', fontWeight:600, borderRadius:'5px', border:`1px solid ${pageRange===o?'var(--accent)':'var(--border)'}`, background:pageRange===o?'rgba(108,99,255,0.15)':'var(--bg4)', color:pageRange===o?'var(--accent2)':'var(--text3)', cursor:'pointer', textTransform:'capitalize' }}>{o}</button>
+                  <button key={o} onClick={()=>setPageRange(o)} style={{ padding:'3px 7px', fontSize:'10px', fontWeight:600, borderRadius:'5px', border:`1px solid ${pageRange===o?'var(--accent)':'var(--border)'}`, background:pageRange===o?'rgba(234,88,12,0.15)':'var(--bg4)', color:pageRange===o?'var(--accent2)':'var(--text3)', cursor:'pointer', textTransform:'capitalize' }}>{o}</button>
                 ))}
               </div>
               <input value={pageRange} onChange={e=>setPageRange(e.target.value)} placeholder="e.g. 1-3, 5"
@@ -259,7 +259,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
               const sel=isPageSelected(p.page,pages.length,pageRange)
               return (
                 <div key={p.page} onClick={()=>setActivePage(p.page)}
-                  style={{ padding:'6px', cursor:'pointer', background:activePage===p.page?'rgba(108,99,255,0.12)':'transparent', borderBottom:'1px solid var(--border)', position:'relative', transition:'background 0.1s' }}>
+                  style={{ padding:'6px', cursor:'pointer', background:activePage===p.page?'rgba(234,88,12,0.12)':'transparent', borderBottom:'1px solid var(--border)', position:'relative', transition:'background 0.1s' }}>
                   <div style={{ border:`2px solid ${activePage===p.page?'var(--accent)':'var(--border)'}`, borderRadius:'4px', overflow:'hidden' }}>
                     <img src={p.img} alt={`p${p.page}`} style={{ width:'100%', display:'block', opacity:sel?1:0.4 }}/>
                   </div>
@@ -271,7 +271,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
           </div>
 
           {/* ━━ Panel 3: Large preview workspace — scrolls independently ━━ */}
-          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'#12121c' }}>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'var(--bg3)' }}>
             {/* Workspace header */}
             <div style={{ padding:'8px 16px', borderBottom:'1px solid var(--border)', background:'var(--bg2)', display:'flex', alignItems:'center', gap:'10px', flexShrink:0 }}>
               <span style={{ fontSize:'12px', color:'var(--text)', fontWeight:600 }}>Page {activePage} of {pages.length}</span>
@@ -320,7 +320,7 @@ export default function WatermarkToolPage({ onBack, dark, onToggleTheme, onGoHom
       {file && (
         <button onClick={apply}
           disabled={!file||(mode==='text'&&!text.trim())||(mode==='image'&&!imageFile)||status==='loading'}
-          style={{ position:'fixed', bottom:'20px', right:'20px', zIndex:9000, display:'flex', alignItems:'center', gap:'8px', padding:'11px 20px', borderRadius:'50px', border:'none', background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)', color:status==='loading'?'var(--text2)':'#fff', fontWeight:700, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 18px rgba(108,99,255,0.4),0 2px 6px rgba(0,0,0,0.4)', transition:'all 0.2s' }}>
+          style={{ position:'fixed', bottom:'20px', right:'20px', zIndex:9000, display:'flex', alignItems:'center', gap:'8px', padding:'11px 20px', borderRadius:'50px', border:'none', background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)', color:status==='loading'?'var(--text2)':'#fff', fontWeight:700, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 18px rgba(234,88,12,0.4),0 2px 6px rgba(0,0,0,0.4)', transition:'all 0.2s' }}>
           {status==='loading'?<><Loader2 size={13} className="spin"/> Processing {pct}%</>:status==='done'?<><CheckCircle size={13}/> Downloaded!</>:<><Download size={13}/> Download Watermarked PDF</>}
         </button>
       )}

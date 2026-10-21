@@ -142,7 +142,7 @@ export default function TranslateToolPage({ onBack, dark, onToggleTheme, onGoHom
 
           {/* File */}
           {!file ? (
-            <div {...getRootProps()} style={{ background: isDragActive ? 'rgba(108,99,255,0.08)' : 'var(--bg2)', border: `2px dashed ${isDragActive ? 'var(--accent)' : 'var(--border)'}`, borderRadius: '12px', padding: '30px 20px', textAlign: 'center', cursor: 'pointer' }}>
+            <div {...getRootProps()} style={{ background: isDragActive ? 'rgba(234,88,12,0.08)' : 'var(--bg2)', border: `2px dashed ${isDragActive ? 'var(--accent)' : 'var(--border)'}`, borderRadius: '12px', padding: '30px 20px', textAlign: 'center', cursor: 'pointer' }}>
               <input {...getInputProps()} />
               <Upload size={20} color="var(--accent2)" style={{ margin: '0 auto 10px', display: 'block' }} />
               <p style={{ color: 'var(--text)', fontWeight: 500, fontSize: '14px' }}>Drop PDF here</p>
@@ -184,7 +184,7 @@ export default function TranslateToolPage({ onBack, dark, onToggleTheme, onGoHom
                 <span style={{ fontSize: '12px', color: 'var(--accent2)', fontWeight: 700 }}>{Math.round(progress)}%</span>
               </div>
               <div style={{ height: '6px', background: 'var(--bg3)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg, var(--accent), #e879f9)', borderRadius: '3px', transition: 'width 0.6s ease' }} />
+                <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg, var(--accent), var(--accent2))', borderRadius: '3px', transition: 'width 0.6s ease' }} />
               </div>
               <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
                 {PROGRESS_MESSAGES.map((_, i) => (
@@ -201,7 +201,7 @@ export default function TranslateToolPage({ onBack, dark, onToggleTheme, onGoHom
           )}
 
           <button onClick={apply} disabled={!file || state === 'loading'}
-            style={{ padding: '12px', background: state === 'done' ? 'var(--green)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: '10px', cursor: !file ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 4px 16px rgba(108,99,255,0.25)', opacity: !file ? 0.5 : 1 }}>
+            style={{ padding: '12px', background: state === 'done' ? 'var(--green)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: '10px', cursor: !file ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 4px 16px rgba(234,88,12,0.25)', opacity: !file ? 0.5 : 1 }}>
             {state === 'loading' ? <><Loader2 size={15} className="spin" />Translating…</>
               : state === 'done' ? <><CheckCircle size={15} />Downloaded!</>
               : <><Languages size={15} />Translate PDF</>}
@@ -209,7 +209,7 @@ export default function TranslateToolPage({ onBack, dark, onToggleTheme, onGoHom
         </div>
 
         {/* ── Right Info Panel ── */}
-        <div style={{ flex: 1, background: '#14141f', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', overflowY: 'auto' }}>
+        <div style={{ flex: 1, background: 'var(--bg3)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', overflowY: 'auto' }}>
           {resultInfo ? (
             <div style={{ textAlign: 'center', maxWidth: '420px' }}>
               <div style={{ fontSize: '48px', marginBottom: '20px' }}>✓</div>
@@ -217,7 +217,7 @@ export default function TranslateToolPage({ onBack, dark, onToggleTheme, onGoHom
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '20px' }}>
                 <span style={{ fontSize: '15px', color: 'var(--text2)', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '6px 14px' }}>{resultInfo.from}</span>
                 <ArrowRight size={16} color="var(--accent2)" />
-                <span style={{ fontSize: '15px', color: 'var(--text)', background: 'rgba(108,99,255,0.15)', border: '1px solid var(--accent)', borderRadius: '8px', padding: '6px 14px', fontWeight: 600 }}>{resultInfo.to}</span>
+                <span style={{ fontSize: '15px', color: 'var(--text)', background: 'rgba(234,88,12,0.15)', border: '1px solid var(--accent)', borderRadius: '8px', padding: '6px 14px', fontWeight: 600 }}>{resultInfo.to}</span>
               </div>
               <p style={{ fontSize: '13px', color: 'var(--text3)', lineHeight: 1.6 }}>Your translated PDF has been downloaded. The layout and formatting have been preserved as closely as possible.</p>
             </div>

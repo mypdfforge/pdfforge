@@ -55,18 +55,18 @@ export default function FileHistory({ onClose }) {
           padding:'16px 18px', borderBottom:'1px solid var(--border)', flexShrink:0,
         }}>
           <div>
-            <p style={{ fontSize:'14px', fontWeight:700, color:'#ffffff' }}>Recent Files</p>
-            <p style={{ fontSize:'11px', color:'#b0b0cc' }}>Last 24 hours — auto-deleted after</p>
+            <p style={{ fontSize:'14px', fontWeight:700, color:'var(--text)' }}>Recent Files</p>
+            <p style={{ fontSize:'11px', color:'var(--text3)' }}>Last 24 hours — auto-deleted after</p>
           </div>
           <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
             {items.length > 0 && (
               <button onClick={() => { clearHistory(); setItems([]) }}
-                style={{ fontSize:'11px', color:'#e5534b', background:'none', border:'none', cursor:'pointer' }}>
+                style={{ fontSize:'11px', color:'var(--red)', background:'none', border:'none', cursor:'pointer' }}>
                 Clear all
               </button>
             )}
             <button onClick={onClose}
-              style={{ background:'none', border:'none', color:'#b0b0cc', cursor:'pointer', fontSize:'18px' }}>
+              style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'18px' }}>
               ×
             </button>
           </div>
@@ -77,8 +77,8 @@ export default function FileHistory({ onClose }) {
           {items.length === 0 ? (
             <div style={{ textAlign:'center', padding:'40px 20px' }}>
               <div style={{ fontSize:'32px', marginBottom:'10px' }}>🗂️</div>
-              <p style={{ fontSize:'14px', fontWeight:600, color:'#ffffff' }}>No recent files</p>
-              <p style={{ fontSize:'12px', color:'#b0b0cc', marginTop:'4px' }}>
+              <p style={{ fontSize:'14px', fontWeight:600, color:'var(--text)' }}>No recent files</p>
+              <p style={{ fontSize:'12px', color:'var(--text3)', marginTop:'4px' }}>
                 Processed files will appear here for 24 hours
               </p>
             </div>
@@ -92,26 +92,26 @@ export default function FileHistory({ onClose }) {
                 }}>
                   <div style={{
                     width:'36px', height:'36px', borderRadius:'8px', flexShrink:0,
-                    background:'rgba(108,99,255,0.12)', border:'1px solid rgba(108,99,255,0.2)',
+                    background:'rgba(234,88,12,0.12)', border:'1px solid rgba(234,88,12,0.2)',
                     display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px',
                   }}>📄</div>
 
                   <div style={{ flex:1, minWidth:0 }}>
                     <p style={{
-                      fontSize:'13px', fontWeight:600, color:'#ffffff',
+                      fontSize:'13px', fontWeight:600, color:'var(--text)',
                       overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
                     }}>{item.name}</p>
                     <div style={{ display:'flex', gap:'8px', marginTop:'3px', flexWrap:'wrap' }}>
-                      <span style={{ fontSize:'11px', color:'#9d97ff' }}>{item.toolLabel}</span>
+                      <span style={{ fontSize:'11px', color:'var(--accent2)' }}>{item.toolLabel}</span>
                       {item.outputSize && item.originalSize && item.outputSize < item.originalSize && (
-                        <span style={{ fontSize:'11px', color:'#3ecf8e' }}>
+                        <span style={{ fontSize:'11px', color:'var(--green)' }}>
                           {formatBytes(item.originalSize)} → {formatBytes(item.outputSize)}
                         </span>
                       )}
                     </div>
                     <div style={{ display:'flex', gap:'10px', marginTop:'2px' }}>
-                      <span style={{ fontSize:'10px', color:'#7070a0' }}>{timeAgo(item.ts)}</span>
-                      <span style={{ fontSize:'10px', color:'#555570' }}>{expiresIn(item.ts)}</span>
+                      <span style={{ fontSize:'10px', color:'var(--text3)' }}>{timeAgo(item.ts)}</span>
+                      <span style={{ fontSize:'10px', color:'var(--text3)' }}>{expiresIn(item.ts)}</span>
                     </div>
                   </div>
                 </div>
@@ -125,8 +125,8 @@ export default function FileHistory({ onClose }) {
           padding:'12px 18px', borderTop:'1px solid var(--border)',
           flexShrink:0, display:'flex', alignItems:'center', gap:'6px',
         }}>
-          <span style={{ fontSize:'11px', color:'#555570' }}>🔒</span>
-          <span style={{ fontSize:'11px', color:'#7070a0' }}>
+          <span style={{ fontSize:'11px', color:'var(--text3)' }}>🔒</span>
+          <span style={{ fontSize:'11px', color:'var(--text3)' }}>
             Files are stored locally only — never on our servers after processing
           </span>
         </div>

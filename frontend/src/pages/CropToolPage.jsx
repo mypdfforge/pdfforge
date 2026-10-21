@@ -60,12 +60,12 @@ function CropCanvas({ imgSrc, initCrop, onCropCommit }) {
     ctx.fillRect(x + w, y, W - x - w, h)
 
     // crop border
-    ctx.strokeStyle = '#6c63ff'
+    ctx.strokeStyle = '#EA580C'
     ctx.lineWidth = 2
     ctx.strokeRect(x + 1, y + 1, w - 2, h - 2)
 
     // rule-of-thirds
-    ctx.strokeStyle = 'rgba(108,99,255,0.3)'
+    ctx.strokeStyle = 'rgba(234,88,12,0.3)'
     ctx.lineWidth = 1
     ctx.beginPath()
     for (let i = 1; i < 3; i++) {
@@ -81,7 +81,7 @@ function CropCanvas({ imgSrc, initCrop, onCropCommit }) {
       ctx.arc(hnd.cx, hnd.cy, HANDLE_R, 0, Math.PI * 2)
       ctx.fillStyle = '#fff'
       ctx.fill()
-      ctx.strokeStyle = '#6c63ff'
+      ctx.strokeStyle = '#EA580C'
       ctx.lineWidth = 2
       ctx.stroke()
     })
@@ -279,10 +279,10 @@ function CropModal({ thumb, pageNum, totalPages, cropBox, onCropChange, onClose,
         {/* Icon + title */}
         <div style={{
           width: '34px', height: '34px', borderRadius: '9px',
-          background: 'rgba(108,99,255,0.15)', border: '1px solid rgba(108,99,255,0.35)',
+          background: 'rgba(234,88,12,0.15)', border: '1px solid rgba(234,88,12,0.35)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         }}>
-          <Crop size={16} color="#9d97ff"/>
+          <Crop size={16} color="var(--accent2)"/>
         </div>
         <div style={{ marginRight: 'auto' }}>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)', lineHeight: 1.1 }}>
@@ -302,7 +302,7 @@ function CropModal({ thumb, pageNum, totalPages, cropBox, onCropChange, onClose,
           style={{
             display: 'flex', alignItems: 'center', gap: '7px',
             padding: '9px 16px', borderRadius: '9px',
-            border: '1px solid #e5534b44', background: 'rgba(229,83,75,0.1)',
+            border: '1px solid var(--red)44', background: 'rgba(229,83,75,0.1)',
             color: 'var(--red)', fontSize: '13px', fontWeight: 600,
             cursor: 'pointer', transition: 'background 0.15s', whiteSpace: 'nowrap',
           }}
@@ -315,12 +315,12 @@ function CropModal({ thumb, pageNum, totalPages, cropBox, onCropChange, onClose,
           style={{
             display: 'flex', alignItems: 'center', gap: '7px',
             padding: '9px 16px', borderRadius: '9px',
-            border: '2px solid var(--accent)', background: 'rgba(108,99,255,0.12)',
+            border: '2px solid var(--accent)', background: 'rgba(234,88,12,0.12)',
             color: '#a9a4ff', fontSize: '13px', fontWeight: 700,
             cursor: 'pointer', transition: 'background 0.15s', whiteSpace: 'nowrap',
           }}
-          onMouseEnter={e => e.currentTarget.style.background = 'rgba(108,99,255,0.25)'}
-          onMouseLeave={e => e.currentTarget.style.background = 'rgba(108,99,255,0.12)'}>
+          onMouseEnter={e => e.currentTarget.style.background = 'rgba(234,88,12,0.25)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'rgba(234,88,12,0.12)'}>
           <Crop size={14}/> Apply to All Pages
         </button>
 
@@ -348,7 +348,7 @@ function CropModal({ thumb, pageNum, totalPages, cropBox, onCropChange, onClose,
             background: 'var(--green)', color: '#fff',
             fontSize: '14px', fontWeight: 700,
             cursor: 'pointer', transition: 'opacity 0.15s',
-            boxShadow: '0 2px 14px rgba(62,207,142,0.4)',
+            boxShadow: '0 2px 14px rgba(21,128,61,0.4)',
             whiteSpace: 'nowrap',
           }}
           onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
@@ -453,7 +453,7 @@ function PageCard({ thumb, pageNum, isModified, cropBox, onClick }) {
               padding: '8px 14px', borderRadius: '8px',
               background: 'var(--accent)', color: '#fff', border: 'none',
               fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-              boxShadow: '0 2px 10px rgba(108,99,255,0.6)',
+              boxShadow: '0 2px 10px rgba(234,88,12,0.6)',
             }}>
             <Crop size={13}/> Crop
           </button>
@@ -474,7 +474,7 @@ function PageCard({ thumb, pageNum, isModified, cropBox, onClick }) {
       <div style={{ textAlign: 'center', marginTop: '5px' }}>
         <span style={{
           fontSize: '11px',
-          color: isModified ? 'var(--accent2)' : '#b0b0cc',
+          color: isModified ? 'var(--accent2)' : 'var(--text3)',
           fontWeight: isModified ? 700 : 400,
         }}>
           Page {pageNum}
@@ -613,7 +613,7 @@ export default function CropToolPage({
         }
         .crop-card:hover .crop-thumb {
           border-color: var(--accent);
-          box-shadow: 0 6px 24px rgba(108,99,255,0.25);
+          box-shadow: 0 6px 24px rgba(234,88,12,0.25);
         }
         .crop-actions {
           position: absolute; inset: 0;
@@ -645,8 +645,8 @@ export default function CropToolPage({
             }}>
               <input {...getInputProps()}/>
               <div style={{
-                width: '56px', height: '56px', background: 'rgba(108,99,255,0.1)',
-                border: '1px solid rgba(108,99,255,0.3)', borderRadius: '14px',
+                width: '56px', height: '56px', background: 'rgba(234,88,12,0.1)',
+                border: '1px solid rgba(234,88,12,0.3)', borderRadius: '14px',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 margin: '0 auto 16px', fontSize: '24px',
               }}>⬚</div>

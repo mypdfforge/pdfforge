@@ -153,22 +153,22 @@ export default function PDFEditor({ sessionId, pages: initialPages, onBlocksChan
           onClick={e => { if (e.target === e.currentTarget) setPopup(null) }}
           style={{ position:'fixed', inset:0, zIndex:99999, background:'rgba(0,0,0,0.65)', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(4px)' }}
         >
-          <div onClick={e => e.stopPropagation()} style={{ background:'#1e1e28', border:'2px solid #6c63ff', borderRadius:'16px', padding:'28px', width:'520px', maxWidth:'92vw', boxShadow:'0 24px 80px rgba(0,0,0,0.9)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:'var(--bg3)', border:'2px solid var(--accent)', borderRadius:'16px', padding:'28px', width:'520px', maxWidth:'92vw', boxShadow:'0 24px 80px rgba(0,0,0,0.9)' }}>
 
             {/* Header */}
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px' }}>
-              <span style={{ fontSize:'16px', fontWeight:700, color:'#eeeef2' }}>✎ Edit Text</span>
-              <button onClick={() => setPopup(null)} style={{ background:'none', border:'none', color:'#9898b0', cursor:'pointer', fontSize:'22px' }}>×</button>
+              <span style={{ fontSize:'16px', fontWeight:700, color:'var(--text)' }}>✎ Edit Text</span>
+              <button onClick={() => setPopup(null)} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'22px' }}>×</button>
             </div>
 
             {/* Original */}
-            <div style={{ fontSize:'12px', color:'#5a5a70', marginBottom:'6px' }}>Original:</div>
-            <div style={{ fontSize:'13px', color:'#9898b0', background:'#111118', borderRadius:'8px', padding:'10px 14px', marginBottom:'18px', fontFamily:'Calibri,Arial,sans-serif', fontWeight: popup.block.bold ? 700 : 400, wordBreak:'break-word', whiteSpace:'pre-wrap' }}>
+            <div style={{ fontSize:'12px', color:'var(--text3)', marginBottom:'6px' }}>Original:</div>
+            <div style={{ fontSize:'13px', color:'var(--text3)', background:'var(--bg)', borderRadius:'8px', padding:'10px 14px', marginBottom:'18px', fontFamily:'Calibri,Arial,sans-serif', fontWeight: popup.block.bold ? 700 : 400, wordBreak:'break-word', whiteSpace:'pre-wrap' }}>
               {popup.block.original}
             </div>
 
             {/* Textarea — Enter = new line, Ctrl+Enter = save */}
-            <div style={{ fontSize:'12px', color:'#9d97ff', marginBottom:'8px', fontWeight:600 }}>✏ Your edit:</div>
+            <div style={{ fontSize:'12px', color:'var(--accent2)', marginBottom:'8px', fontWeight:600 }}>✏ Your edit:</div>
             <textarea
               ref={textareaRef}
               value={inputVal}
@@ -189,29 +189,29 @@ export default function PDFEditor({ sessionId, pages: initialPages, onBlocksChan
                 fontWeight: popup.block.bold   ? 700 : 400,
                 fontStyle:  popup.block.italic ? 'italic' : 'normal',
                 fontFamily: 'Calibri,Arial,sans-serif',
-                color:'#fff', background:'#111118',
-                border:'2px solid #6c63ff', borderRadius:'10px',
+                color:'var(--text)', background:'var(--bg)',
+                border:'2px solid var(--accent)', borderRadius:'10px',
                 padding:'12px 16px', outline:'none',
                 marginBottom:'12px', boxSizing:'border-box',
-                boxShadow:'0 0 0 4px rgba(108,99,255,0.2)',
+                boxShadow:'0 0 0 4px rgba(234,88,12,0.2)',
                 resize:'vertical', lineHeight:'1.5',
                 minHeight:'52px',
               }}
             />
 
             {/* Hint */}
-            <p style={{ fontSize:'11px', color:'#5a5a70', marginBottom:'16px' }}>
-              <kbd style={{ background:'#242432', border:'1px solid #363650', borderRadius:'4px', padding:'1px 6px', color:'#9898b0', fontSize:'11px' }}>Enter</kbd> = new line &nbsp;·&nbsp;
-              <kbd style={{ background:'#242432', border:'1px solid #363650', borderRadius:'4px', padding:'1px 6px', color:'#9898b0', fontSize:'11px' }}>Ctrl+Enter</kbd> = save &nbsp;·&nbsp;
-              <kbd style={{ background:'#242432', border:'1px solid #363650', borderRadius:'4px', padding:'1px 6px', color:'#9898b0', fontSize:'11px' }}>Esc</kbd> = cancel
+            <p style={{ fontSize:'11px', color:'var(--text3)', marginBottom:'16px' }}>
+              <kbd style={{ background:'var(--bg3)', border:'1px solid var(--border2)', borderRadius:'4px', padding:'1px 6px', color:'var(--text3)', fontSize:'11px' }}>Enter</kbd> = new line &nbsp;·&nbsp;
+              <kbd style={{ background:'var(--bg3)', border:'1px solid var(--border2)', borderRadius:'4px', padding:'1px 6px', color:'var(--text3)', fontSize:'11px' }}>Ctrl+Enter</kbd> = save &nbsp;·&nbsp;
+              <kbd style={{ background:'var(--bg3)', border:'1px solid var(--border2)', borderRadius:'4px', padding:'1px 6px', color:'var(--text3)', fontSize:'11px' }}>Esc</kbd> = cancel
             </p>
 
             {/* Buttons */}
             <div style={{ display:'flex', gap:'10px' }}>
-              <button onClick={saveEdit} style={{ flex:1, padding:'12px', background:'#6c63ff', color:'#fff', border:'none', borderRadius:'10px', cursor:'pointer', fontWeight:700, fontSize:'15px', boxShadow:'0 4px 16px rgba(108,99,255,0.35)' }}>
+              <button onClick={saveEdit} style={{ flex:1, padding:'12px', background:'var(--accent)', color:'#fff', border:'none', borderRadius:'10px', cursor:'pointer', fontWeight:700, fontSize:'15px', boxShadow:'0 4px 16px rgba(234,88,12,0.35)' }}>
                 ✓ Save  (Ctrl+Enter)
               </button>
-              <button onClick={() => setPopup(null)} style={{ padding:'12px 20px', background:'#242432', color:'#9898b0', border:'1px solid #363650', borderRadius:'10px', cursor:'pointer', fontSize:'14px' }}>
+              <button onClick={() => setPopup(null)} style={{ padding:'12px 20px', background:'var(--bg3)', color:'var(--text3)', border:'1px solid var(--border2)', borderRadius:'10px', cursor:'pointer', fontSize:'14px' }}>
                 Cancel
               </button>
             </div>
@@ -223,12 +223,12 @@ export default function PDFEditor({ sessionId, pages: initialPages, onBlocksChan
       <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'24px' }}>
 
         {/* Controls */}
-        <div style={{ position:'sticky', top:'58px', zIndex:40, display:'flex', alignItems:'center', gap:'10px', background:'rgba(17,17,24,0.97)', backdropFilter:'blur(8px)', border:'1px solid #2a2a3a', borderRadius:'10px', padding:'8px 16px' }}>
+        <div style={{ position:'sticky', top:'58px', zIndex:40, display:'flex', alignItems:'center', gap:'10px', background:'rgba(17,17,24,0.97)', backdropFilter:'blur(8px)', border:'1px solid var(--border)', borderRadius:'10px', padding:'8px 16px' }}>
           <button onClick={() => setScale(s => Math.max(0.6, +(s-0.15).toFixed(2)))} style={zBtn}>−</button>
-          <span style={{ fontSize:'13px', color:'#9898b0', fontFamily:'monospace', width:'44px', textAlign:'center' }}>{Math.round(scale*100)}%</span>
+          <span style={{ fontSize:'13px', color:'var(--text3)', fontFamily:'monospace', width:'44px', textAlign:'center' }}>{Math.round(scale*100)}%</span>
           <button onClick={() => setScale(s => Math.min(2.5, +(s+0.15).toFixed(2)))} style={zBtn}>+</button>
-          <div style={{ width:'1px', height:'16px', background:'#2a2a3a', margin:'0 4px' }} />
-          <span style={{ fontSize:'12px', color: pdfReady ? '#3ecf8e' : '#f5a623' }}>
+          <div style={{ width:'1px', height:'16px', background:'var(--border)', margin:'0 4px' }} />
+          <span style={{ fontSize:'12px', color: pdfReady ? 'var(--green)' : 'var(--gold)' }}>
             {pdfReady ? `✓ ${totalBlocks} zones — click any to edit` : 'Loading PDF…'}
           </span>
         </div>
@@ -254,17 +254,17 @@ export default function PDFEditor({ sessionId, pages: initialPages, onBlocksChan
                     width:  Math.max(px(block.width) + 4, 20),
                     height: Math.max(px(block.height) + 2, 12),
                     zIndex: 10, cursor:'pointer', borderRadius:'2px', boxSizing:'border-box',
-                    background: isActive  ? 'rgba(108,99,255,0.3)'
-                              : isChanged ? 'rgba(62,207,142,0.3)'
+                    background: isActive  ? 'rgba(234,88,12,0.3)'
+                              : isChanged ? 'rgba(21,128,61,0.3)'
                               : 'rgba(255,210,0,0.2)',
-                    border: isActive  ? '2px solid #6c63ff'
-                          : isChanged ? '1.5px solid #3ecf8e'
+                    border: isActive  ? '2px solid var(--accent)'
+                          : isChanged ? '1.5px solid var(--green)'
                           : '1px solid rgba(200,160,0,0.5)',
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.background='rgba(108,99,255,0.25)'; e.currentTarget.style.border='2px solid #6c63ff' }}
+                  onMouseEnter={e => { e.currentTarget.style.background='rgba(234,88,12,0.25)'; e.currentTarget.style.border='2px solid var(--accent)' }}
                   onMouseLeave={e => {
-                    e.currentTarget.style.background = isActive ? 'rgba(108,99,255,0.3)' : isChanged ? 'rgba(62,207,142,0.3)' : 'rgba(255,210,0,0.2)'
-                    e.currentTarget.style.border     = isActive ? '2px solid #6c63ff' : isChanged ? '1.5px solid #3ecf8e' : '1px solid rgba(200,160,0,0.5)'
+                    e.currentTarget.style.background = isActive ? 'rgba(234,88,12,0.3)' : isChanged ? 'rgba(21,128,61,0.3)' : 'rgba(255,210,0,0.2)'
+                    e.currentTarget.style.border     = isActive ? '2px solid var(--accent)' : isChanged ? '1.5px solid var(--green)' : '1px solid rgba(200,160,0,0.5)'
                   }}
                 />
               )
@@ -276,4 +276,4 @@ export default function PDFEditor({ sessionId, pages: initialPages, onBlocksChan
   )
 }
 
-const zBtn = { width:'28px', height:'28px', background:'#1e1e28', border:'1px solid #2a2a3a', borderRadius:'6px', color:'#9898b0', cursor:'pointer', fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center' }
+const zBtn = { width:'28px', height:'28px', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'6px', color:'var(--text3)', cursor:'pointer', fontSize:'18px', display:'flex', alignItems:'center', justifyContent:'center' }

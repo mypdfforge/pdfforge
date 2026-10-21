@@ -70,7 +70,7 @@ export default function PageSelector({ file, onChange, selectionMode = 'multiple
             return (
               <div key={t.page} onClick={() => toggle(t.page)}
                 style={{ cursor:'pointer', position:'relative', flexShrink:0, width:'80px' }}>
-                <div style={{ border:`2px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`, borderRadius:'8px', overflow:'hidden', transition:'all 0.15s', boxShadow: isSel ? '0 0 0 3px rgba(108,99,255,0.25)' : 'none', background: isSel ? 'rgba(108,99,255,0.08)' : 'transparent' }}>
+                <div style={{ border:`2px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`, borderRadius:'8px', overflow:'hidden', transition:'all 0.15s', boxShadow: isSel ? '0 0 0 3px rgba(234,88,12,0.25)' : 'none', background: isSel ? 'rgba(234,88,12,0.08)' : 'transparent' }}>
                   <img src={t.img} alt={`Page ${t.page}`} style={{ width:'100%', display:'block' }}/>
                 </div>
                 {/* Checkbox overlay */}

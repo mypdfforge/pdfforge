@@ -21,17 +21,17 @@ const NEXT_ACTIONS = {
 }
 
 const ACTION_META = {
-  compress:      { icon:'⬡', label:'Compress PDF',      color:'#f5a623' },
-  merge:         { icon:'⊕', label:'Merge PDF',         color:'#3ecf8e' },
-  split:         { icon:'⊘', label:'Split PDF',         color:'#3ecf8e' },
-  watermark:     { icon:'◈', label:'Watermark',         color:'#e879f9' },
-  sign:          { icon:'✍', label:'Sign PDF',          color:'#e879f9' },
-  protect:       { icon:'🔐', label:'Protect PDF',      color:'#e879f9' },
-  'pdf-to-word': { icon:'📝', label:'Convert to Word',  color:'#9d97ff' },
-  'word-to-pdf': { icon:'📋', label:'Word → PDF',       color:'#f5a623' },
-  translate:     { icon:'⇄', label:'Translate',         color:'#9d97ff' },
-  organize:      { icon:'⊞', label:'Organize Pages',    color:'#3ecf8e' },
-  ocr:           { icon:'⌕', label:'OCR',               color:'#f5a623' },
+  compress:      { icon:'⬡', label:'Compress PDF',      color:'var(--gold)' },
+  merge:         { icon:'⊕', label:'Merge PDF',         color:'var(--green)' },
+  split:         { icon:'⊘', label:'Split PDF',         color:'var(--green)' },
+  watermark:     { icon:'◈', label:'Watermark',         color:'var(--accent2)' },
+  sign:          { icon:'✍', label:'Sign PDF',          color:'var(--accent2)' },
+  protect:       { icon:'🔐', label:'Protect PDF',      color:'var(--accent2)' },
+  'pdf-to-word': { icon:'📝', label:'Convert to Word',  color:'var(--accent2)' },
+  'word-to-pdf': { icon:'📋', label:'Word → PDF',       color:'var(--gold)' },
+  translate:     { icon:'⇄', label:'Translate',         color:'var(--accent2)' },
+  organize:      { icon:'⊞', label:'Organize Pages',    color:'var(--green)' },
+  ocr:           { icon:'⌕', label:'OCR',               color:'var(--gold)' },
 }
 
 export default function SmartDownload({
@@ -91,15 +91,15 @@ export default function SmartDownload({
       {/* Success icon */}
       <div style={{
         width:'72px', height:'72px', borderRadius:'50%', margin:'0 auto 20px',
-        background:'rgba(62,207,142,0.15)', border:'2px solid rgba(62,207,142,0.4)',
+        background:'rgba(21,128,61,0.15)', border:'2px solid rgba(21,128,61,0.4)',
         display:'flex', alignItems:'center', justifyContent:'center', fontSize:'32px',
         animation:'sdPop 0.5s ease forwards',
       }}>✓</div>
 
-      <h2 style={{ fontSize:'22px', fontWeight:800, color:'#ffffff', marginBottom:'6px' }}>
+      <h2 style={{ fontSize:'22px', fontWeight:800, color:'var(--text)', marginBottom:'6px' }}>
         Done! Your file is ready
       </h2>
-      <p style={{ fontSize:'14px', color:'#b0b0cc', marginBottom:'28px' }}>
+      <p style={{ fontSize:'14px', color:'var(--text3)', marginBottom:'28px' }}>
         {downloaded ? 'Download started automatically' : 'Click below to download'}
       </p>
 
@@ -130,7 +130,7 @@ export default function SmartDownload({
         onClick={triggerDownload}
         style={{
           width:'100%', padding:'14px', borderRadius:'12px', border:'none',
-          background:'linear-gradient(135deg,#6c63ff,#8b83ff)', color:'#ffffff',
+          background:'linear-gradient(135deg,var(--accent),#8b83ff)', color:'var(--text)',
           fontSize:'15px', fontWeight:700, cursor:'pointer',
           display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
           marginBottom:'14px', transition:'opacity 0.15s',
@@ -145,7 +145,7 @@ export default function SmartDownload({
         style={{
           width:'100%', padding:'11px', borderRadius:'12px',
           border:'1px solid var(--border)', background:'transparent',
-          color:'#b0b0cc', fontSize:'13px', fontWeight:500, cursor:'pointer',
+          color:'var(--text3)', fontSize:'13px', fontWeight:500, cursor:'pointer',
           marginBottom:'32px',
         }}
       >Process another file</button>
@@ -155,7 +155,7 @@ export default function SmartDownload({
         <div style={{ animation:'sdFadeUp 0.4s ease 0.25s both' }}>
           <p style={{
             fontSize:'11px', fontWeight:700, letterSpacing:'.1em',
-            textTransform:'uppercase', color:'#b0b0cc', marginBottom:'12px',
+            textTransform:'uppercase', color:'var(--text3)', marginBottom:'12px',
           }}>What's next?</p>
           <div style={{ display:'flex', gap:'10px', justifyContent:'center', flexWrap:'wrap' }}>
             {nextIds.map(id => {
@@ -170,7 +170,7 @@ export default function SmartDownload({
                     padding:'8px 14px', borderRadius:'999px',
                     border:`1px solid ${meta.color}33`,
                     background:`rgba(${hexToRgb(meta.color)},0.08)`,
-                    color:'#d0d0e8', fontSize:'12px', fontWeight:500,
+                    color:'var(--text2)', fontSize:'12px', fontWeight:500,
                     cursor:'pointer', transition:'all 0.15s',
                   }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = meta.color+'88'}
@@ -190,7 +190,7 @@ export default function SmartDownload({
         marginTop:'32px', paddingTop:'24px', borderTop:'1px solid var(--border)',
       }}>
         {['🔒 No watermark','🚫 No signup needed','🗑 Auto-deleted in 24h'].map(b => (
-          <span key={b} style={{ fontSize:'11px', color:'#b0b0cc' }}>{b}</span>
+          <span key={b} style={{ fontSize:'11px', color:'var(--text3)' }}>{b}</span>
         ))}
       </div>
     </div>
@@ -205,9 +205,9 @@ function StatBox({ label, value, highlight, green }) {
     }}>
       <div style={{
         fontSize:'18px', fontWeight:800, lineHeight:1, marginBottom:'4px',
-        color: green ? '#3ecf8e' : highlight ? '#6c63ff' : '#ffffff',
+        color: green ? 'var(--green)' : highlight ? 'var(--accent)' : '#ffffff',
       }}>{value}</div>
-      <div style={{ fontSize:'11px', color:'#b0b0cc' }}>{label}</div>
+      <div style={{ fontSize:'11px', color:'var(--text3)' }}>{label}</div>
     </div>
   )
 }

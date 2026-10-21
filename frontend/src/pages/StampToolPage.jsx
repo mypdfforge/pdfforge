@@ -112,7 +112,7 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
       {!file ? (
         <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px' }}>
           <div style={{ maxWidth:'460px', width:'100%' }}>
-            <div {...getRootProps()} style={{ background:isDragActive?'rgba(108,99,255,0.08)':'var(--bg2)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'16px', padding:'56px 40px', textAlign:'center', cursor:'pointer' }}>
+            <div {...getRootProps()} style={{ background:isDragActive?'rgba(234,88,12,0.08)':'var(--bg2)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'16px', padding:'56px 40px', textAlign:'center', cursor:'pointer' }}>
               <input {...getInputProps()}/><div style={{ fontSize:'38px', marginBottom:'14px', opacity:0.5 }}>◆</div>
               <p style={{ color:'var(--text)', fontWeight:600, fontSize:'15px', marginBottom:'7px' }}>Drop your PDF here</p>
               <p style={{ color:'var(--text3)', fontSize:'12px' }}>or click to browse</p>
@@ -196,7 +196,7 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
               <p style={{ fontSize:'10px', fontWeight:700, letterSpacing:'.07em', textTransform:'uppercase', color:'var(--text3)', margin:0 }}>Apply to Pages</p>
               <div style={{ display:'flex', gap:'3px', flexWrap:'wrap' }}>
                 {[['all','All'],['1','First'],['last','Last'],['odd','Odd'],['even','Even']].map(([v,l])=>(
-                  <button key={v} onClick={()=>setPagesRange(v)} style={{ flex:1, padding:'3px 0', fontSize:'10px', fontWeight:600, borderRadius:'5px', border:`1px solid ${pagesRange===v?'var(--accent)':'var(--border)'}`, background:pagesRange===v?'rgba(108,99,255,0.15)':'var(--bg4)', color:pagesRange===v?'var(--accent2)':'var(--text3)', cursor:'pointer' }}>{l}</button>
+                  <button key={v} onClick={()=>setPagesRange(v)} style={{ flex:1, padding:'3px 0', fontSize:'10px', fontWeight:600, borderRadius:'5px', border:`1px solid ${pagesRange===v?'var(--accent)':'var(--border)'}`, background:pagesRange===v?'rgba(234,88,12,0.15)':'var(--bg4)', color:pagesRange===v?'var(--accent2)':'var(--text3)', cursor:'pointer' }}>{l}</button>
                 ))}
               </div>
               <input value={pagesRange} onChange={e=>setPagesRange(e.target.value)} placeholder="e.g. 1, 3-5"
@@ -216,7 +216,7 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
               const sel=isPageSelected(p.page,pages.length,pagesRange)
               return (
                 <div key={p.page} onClick={()=>setActivePage(p.page)}
-                  style={{ padding:'6px', cursor:'pointer', background:activePage===p.page?'rgba(108,99,255,0.12)':'transparent', borderBottom:'1px solid var(--border)', position:'relative', transition:'background 0.1s' }}>
+                  style={{ padding:'6px', cursor:'pointer', background:activePage===p.page?'rgba(234,88,12,0.12)':'transparent', borderBottom:'1px solid var(--border)', position:'relative', transition:'background 0.1s' }}>
                   <div style={{ border:`2px solid ${activePage===p.page?'var(--accent)':'var(--border)'}`, borderRadius:'4px', overflow:'hidden' }}>
                     <img src={p.img} alt={`p${p.page}`} style={{ width:'100%', display:'block', opacity:sel?1:0.4 }}/>
                   </div>
@@ -228,7 +228,7 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
           </div>
 
           {/* ━━ Panel 3: Large preview workspace ━━ */}
-          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'#12121c' }}>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'var(--bg3)' }}>
             <div style={{ padding:'8px 16px', borderBottom:'1px solid var(--border)', background:'var(--bg2)', display:'flex', alignItems:'center', gap:'10px', flexShrink:0 }}>
               <span style={{ fontSize:'12px', color:'var(--text)', fontWeight:600 }}>Page {activePage} of {pages.length}</span>
               <span style={{ fontSize:'11px', color:isPageSelected(activePage,pages.length,pagesRange)?'var(--green)':'var(--text3)' }}>
@@ -275,7 +275,7 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
       {/* Floating download button */}
       {file && (
         <button onClick={apply} disabled={!file||status==='loading'}
-          style={{ position:'fixed', bottom:'20px', right:'20px', zIndex:9000, display:'flex', alignItems:'center', gap:'8px', padding:'11px 20px', borderRadius:'50px', border:'none', background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)', color:status==='loading'?'var(--text2)':'#fff', fontWeight:700, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 18px rgba(108,99,255,0.4),0 2px 6px rgba(0,0,0,0.4)', transition:'all 0.2s', opacity:!file?0.5:1 }}>
+          style={{ position:'fixed', bottom:'20px', right:'20px', zIndex:9000, display:'flex', alignItems:'center', gap:'8px', padding:'11px 20px', borderRadius:'50px', border:'none', background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)', color:status==='loading'?'var(--text2)':'#fff', fontWeight:700, fontSize:'13px', cursor:'pointer', boxShadow:'0 4px 18px rgba(234,88,12,0.4),0 2px 6px rgba(0,0,0,0.4)', transition:'all 0.2s', opacity:!file?0.5:1 }}>
           {status==='loading'?<><Loader2 size={13} className="spin"/> Processing {pct}%</>:status==='done'?<><CheckCircle size={13}/> Downloaded!</>:<><Download size={13}/> Download Stamped PDF</>}
         </button>
       )}

@@ -91,7 +91,7 @@ function TypeTab({ onSig }) {
         style={{ background:'var(--bg4)', color:'var(--text)', border:'1px solid var(--border)', borderRadius:'7px', padding:'7px 10px', fontSize:'12px', outline:'none', width:'100%', boxSizing:'border-box' }}/>
       {HANDWRITING_FONTS.map((f,i) => (
         <button key={f.name} onClick={() => setSel(i)}
-          style={{ padding:'8px 10px', borderRadius:'8px', textAlign:'left', cursor:'pointer', border:`2px solid ${sel===i?'var(--accent)':'var(--border)'}`, background:sel===i?'rgba(108,99,255,0.08)':'var(--bg4)', color:'#111', fontFamily:f.css, fontSize:'18px' }}>
+          style={{ padding:'8px 10px', borderRadius:'8px', textAlign:'left', cursor:'pointer', border:`2px solid ${sel===i?'var(--accent)':'var(--border)'}`, background:sel===i?'rgba(234,88,12,0.08)':'var(--bg4)', color:'#111', fontFamily:f.css, fontSize:'18px' }}>
           {text || 'Signature'}
         </button>
       ))}
@@ -108,7 +108,7 @@ function UploadTab({ onSig }) {
   const onDrop = useCallback(a => { const r=new FileReader(); r.onload=e=>onSig(e.target.result); r.readAsDataURL(a[0]) }, [onSig])
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept:{'image/*':[]}, maxFiles:1 })
   return (
-    <div {...getRootProps()} style={{ background:isDragActive?'rgba(108,99,255,0.08)':'var(--bg4)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'8px', padding:'18px', textAlign:'center', cursor:'pointer' }}>
+    <div {...getRootProps()} style={{ background:isDragActive?'rgba(234,88,12,0.08)':'var(--bg4)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'8px', padding:'18px', textAlign:'center', cursor:'pointer' }}>
       <input {...getInputProps()}/>
       <ImageIcon size={16} color="var(--accent2)" style={{ display:'block', margin:'0 auto 6px' }}/>
       <p style={{ fontSize:'11px', color:'var(--text2)', fontWeight:500 }}>PNG / JPG / SVG</p>
@@ -257,7 +257,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
       {!file ? (
         <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px' }}>
           <div style={{ maxWidth:'460px', width:'100%' }}>
-            <div {...getRootProps()} style={{ background:isDragActive?'rgba(108,99,255,0.08)':'var(--bg2)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'16px', padding:'56px 40px', textAlign:'center', cursor:'pointer' }}>
+            <div {...getRootProps()} style={{ background:isDragActive?'rgba(234,88,12,0.08)':'var(--bg2)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'16px', padding:'56px 40px', textAlign:'center', cursor:'pointer' }}>
               <input {...getInputProps()}/>
               <div style={{ fontSize:'38px', marginBottom:'14px', opacity:0.5 }}>✍</div>
               <p style={{ color:'var(--text)', fontWeight:600, fontSize:'15px', marginBottom:'7px' }}>Drop your PDF here</p>
@@ -361,7 +361,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
               const sigCount = (sigsByPage[p.page]||[]).filter(s=>s.locked).length
               return (
                 <div key={p.page} onClick={()=>setActivePage(p.page)}
-                  style={{ padding:'6px', cursor:'pointer', background:activePage===p.page?'rgba(108,99,255,0.12)':'transparent', borderBottom:'1px solid var(--border)', position:'relative', transition:'background 0.1s' }}>
+                  style={{ padding:'6px', cursor:'pointer', background:activePage===p.page?'rgba(234,88,12,0.12)':'transparent', borderBottom:'1px solid var(--border)', position:'relative', transition:'background 0.1s' }}>
                   <div style={{ border:`2px solid ${activePage===p.page?'var(--accent)':'var(--border)'}`, borderRadius:'4px', overflow:'hidden' }}>
                     <img src={p.img} alt={`p${p.page}`} style={{ width:'100%', display:'block' }}/>
                   </div>
@@ -378,7 +378,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
           </div>
 
           {/* ━━ Panel 3: Interactive preview — scrolls independently ━━ */}
-          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'#12121c' }}>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'var(--bg3)' }}>
             {/* Workspace header */}
             <div style={{ padding:'8px 16px', borderBottom:'1px solid var(--border)', background:'var(--bg2)', display:'flex', alignItems:'center', gap:'10px', flexShrink:0 }}>
               <span style={{ fontSize:'12px', color:'var(--text)', fontWeight:600 }}>Page {activePage} of {pages.length}</span>
@@ -449,7 +449,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
                         {/* ✓ Done button floats above sig box */}
                         {!sig.locked && (
                           <button onClick={()=>lockSig(activePage,sig.id)}
-                            style={{ position:'absolute', top:-30, left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', gap:'4px', padding:'3px 10px', borderRadius:'20px', border:'none', background:'var(--green)', color:'#fff', fontSize:'10px', fontWeight:700, cursor:'pointer', whiteSpace:'nowrap', boxShadow:'0 2px 8px rgba(62,207,142,0.5)', zIndex:10 }}>
+                            style={{ position:'absolute', top:-30, left:'50%', transform:'translateX(-50%)', display:'flex', alignItems:'center', gap:'4px', padding:'3px 10px', borderRadius:'20px', border:'none', background:'var(--green)', color:'#fff', fontSize:'10px', fontWeight:700, cursor:'pointer', whiteSpace:'nowrap', boxShadow:'0 2px 8px rgba(21,128,61,0.5)', zIndex:10 }}>
                             <Check size={10}/> Done
                           </button>
                         )}
@@ -487,7 +487,7 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
             color: (status==='loading'||totalLocked===0)?'var(--text2)':'#fff',
             fontWeight:700, fontSize:'13px',
             cursor: totalLocked===0?'not-allowed':'pointer',
-            boxShadow:'0 4px 18px rgba(108,99,255,0.4),0 2px 6px rgba(0,0,0,0.4)',
+            boxShadow:'0 4px 18px rgba(234,88,12,0.4),0 2px 6px rgba(0,0,0,0.4)',
             transition:'all 0.2s', opacity:totalLocked===0?0.5:1 }}>
           {status==='loading' ? <><Loader2 size={13} className="spin"/> Signing {pct}%</>
             : status==='done' ? <><CheckCircle size={13}/> Downloaded!</>

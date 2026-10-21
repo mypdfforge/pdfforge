@@ -104,30 +104,30 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
           <div style={{ width:'100%', maxWidth:'480px' }}>
             <div {...getRootProps()} style={{ background:isDragActive?'rgba(91,91,214,0.08)':'var(--bg2)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'16px', padding:'60px 40px', textAlign:'center', cursor:'pointer', transition:'all 0.15s' }}>
               <input {...getInputProps()}/>
-              <div style={{ width:'56px', height:'56px', background:'rgba(62,207,142,0.1)', border:'1px solid rgba(62,207,142,0.3)', borderRadius:'14px', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px', fontSize:'24px' }}>↻</div>
-              <p style={{ color:'#ffffff', fontWeight:600, fontSize:'16px', marginBottom:'8px' }}>Drop your PDF here</p>
-              <p style={{ color:'#b0b0cc', fontSize:'13px' }}>or click to browse</p>
+              <div style={{ width:'56px', height:'56px', background:'rgba(21,128,61,0.1)', border:'1px solid rgba(21,128,61,0.3)', borderRadius:'14px', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px', fontSize:'24px' }}>↻</div>
+              <p style={{ color:'var(--text)', fontWeight:600, fontSize:'16px', marginBottom:'8px' }}>Drop your PDF here</p>
+              <p style={{ color:'var(--text3)', fontSize:'13px' }}>or click to browse</p>
             </div>
           </div>
         </div>
 
       ) : loading ? (
-        <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:'12px', color:'#b0b0cc' }}>
+        <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:'12px', color:'var(--text3)' }}>
           <Loader2 size={32} className="spin" color="var(--accent)"/>
           <p>Loading pages…</p>
         </div>
 
       ) : (
-        <div style={{ display:'flex', flex:1, flexDirection:'column', height:'calc(100vh - 90px)', overflow:'hidden' }}>
+        <div style={{ display:'flex', flex:1, flexDirection:'column', height:'calc(100vh - 52px)', overflow:'hidden' }}>
 
           {/* ── Toolbar ── */}
           <div style={{ padding:'10px 20px', borderBottom:'1px solid var(--border)', background:'var(--bg2)', display:'flex', alignItems:'center', gap:'8px', flexShrink:0, flexWrap:'wrap' }}>
 
             {/* Selection */}
-            <span style={{ fontSize:'12px', color:'#b0b0cc', fontWeight:600, marginRight:'4px' }}>Select:</span>
+            <span style={{ fontSize:'12px', color:'var(--text3)', fontWeight:600, marginRight:'4px' }}>Select:</span>
             {[['All', selectAll], ['None', selectNone], ['Odd', selectOdd], ['Even', selectEven]].map(([l, fn]) => (
               <button key={l} onClick={fn}
-                style={{ fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'var(--bg3)', color:'#d0d0e8', cursor:'pointer' }}>
+                style={{ fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'var(--bg3)', color:'var(--text2)', cursor:'pointer' }}>
                 {l}
               </button>
             ))}
@@ -135,15 +135,15 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
             <div style={{ width:'1px', height:'20px', background:'var(--border)', margin:'0 4px' }}/>
 
             {/* Batch rotate */}
-            <span style={{ fontSize:'12px', color:'#b0b0cc', fontWeight:600 }}>
+            <span style={{ fontSize:'12px', color:'var(--text3)', fontWeight:600 }}>
               Rotate {selected.size > 0 ? `${selected.size} selected` : 'selected'}:
             </span>
             <button onClick={() => rotateSelected('ccw')} disabled={selected.size === 0}
-              style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:selected.size>0?'var(--bg3)':'var(--bg2)', color:selected.size>0?'#d0d0e8':'#555566', cursor:selected.size>0?'pointer':'not-allowed' }}>
+              style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:selected.size>0?'var(--bg3)':'var(--bg2)', color:selected.size>0?'var(--text2)':'#555566', cursor:selected.size>0?'pointer':'not-allowed' }}>
               <RotateCcw size={13}/> 90° CCW
             </button>
             <button onClick={() => rotateSelected('cw')} disabled={selected.size === 0}
-              style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:selected.size>0?'var(--bg3)':'var(--bg2)', color:selected.size>0?'#d0d0e8':'#555566', cursor:selected.size>0?'pointer':'not-allowed' }}>
+              style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:selected.size>0?'var(--bg3)':'var(--bg2)', color:selected.size>0?'var(--text2)':'#555566', cursor:selected.size>0?'pointer':'not-allowed' }}>
               <RotateCw size={13}/> 90° CW
             </button>
 
@@ -151,7 +151,7 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
 
             {modifiedCount > 0 && (
               <button onClick={resetAll}
-                style={{ fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'none', color:'#b0b0cc', cursor:'pointer' }}>
+                style={{ fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'none', color:'var(--text3)', cursor:'pointer' }}>
                 Reset All
               </button>
             )}
@@ -163,7 +163,7 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
             )}
 
             {modifiedCount > 0 && (
-              <span style={{ fontSize:'12px', color:'#b0b0cc' }}>
+              <span style={{ fontSize:'12px', color:'var(--text3)' }}>
                 {modifiedCount} page{modifiedCount !== 1 ? 's' : ''} rotated
               </span>
             )}
@@ -171,8 +171,8 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
             <button onClick={download} disabled={!modifiedCount || status === 'loading'}
               style={{ display:'flex', alignItems:'center', gap:'7px', padding:'8px 20px', borderRadius:'8px', border:'none', fontWeight:700, fontSize:'13px', cursor: modifiedCount ? 'pointer' : 'not-allowed', opacity: modifiedCount ? 1 : 0.45, transition:'all 0.15s',
                 background: status==='done' ? 'var(--green)' : status==='loading' ? 'var(--bg3)' : 'var(--accent)',
-                color: status==='loading' ? '#b0b0cc' : '#fff',
-                boxShadow: modifiedCount ? '0 2px 12px rgba(108,99,255,0.35)' : 'none' }}>
+                color: status==='loading' ? 'var(--text3)' : '#fff',
+                boxShadow: modifiedCount ? '0 2px 12px rgba(234,88,12,0.35)' : 'none' }}>
               {status==='loading' ? <><Loader2 size={13} className="spin"/>Applying {pct}%</>
                : status==='done'  ? <><CheckCircle size={13}/>Downloaded!</>
                :                    <><Download size={13}/>Download Rotated PDF</>}
@@ -188,8 +188,8 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
                 <div key={p.id}
                   style={{ position:'relative', width:'140px', flexShrink:0, cursor:'pointer',
                     borderRadius:'12px', border:`2px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`,
-                    background: isSel ? 'rgba(108,99,255,0.08)' : 'var(--bg2)',
-                    boxShadow: isSel ? '0 0 0 3px rgba(108,99,255,0.2)' : 'none',
+                    background: isSel ? 'rgba(234,88,12,0.08)' : 'var(--bg2)',
+                    boxShadow: isSel ? '0 0 0 3px rgba(234,88,12,0.2)' : 'none',
                     transition:'all 0.15s', overflow:'visible' }}>
 
                   {/* Thumbnail — click to select */}
@@ -210,7 +210,7 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
 
                   {/* Page label + rotation badge */}
                   <div style={{ padding:'4px 8px 6px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <span style={{ fontSize:'11px', color: isSel ? '#ffffff' : '#b0b0cc', fontWeight:600 }}>p.{p.id}</span>
+                    <span style={{ fontSize:'11px', color: isSel ? '#ffffff' : 'var(--text3)', fontWeight:600 }}>p.{p.id}</span>
                     {isRotated && (
                       <span style={{ fontSize:'10px', background:'var(--green)', color:'#000', borderRadius:'4px', padding:'1px 5px', fontWeight:700 }}>
                         {p.rotation}°
@@ -222,16 +222,16 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
                   <div style={{ position:'absolute', bottom:'-18px', left:'50%', transform:'translateX(-50%)', display:'flex', gap:'4px', zIndex:10 }}>
                     <button onClick={e => { e.stopPropagation(); rotate(p.id, 'ccw') }}
                       title="Rotate 90° counter-clockwise"
-                      style={{ width:'32px', height:'32px', borderRadius:'50%', border:'2px solid var(--border)', background:'var(--bg3)', color:'#d0d0e8', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s', boxShadow:'0 2px 8px rgba(0,0,0,0.3)' }}
+                      style={{ width:'32px', height:'32px', borderRadius:'50%', border:'2px solid var(--border)', background:'var(--bg3)', color:'var(--text2)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s', boxShadow:'0 2px 8px rgba(0,0,0,0.3)' }}
                       onMouseEnter={e => { e.currentTarget.style.background='var(--accent)'; e.currentTarget.style.color='#fff' }}
-                      onMouseLeave={e => { e.currentTarget.style.background='var(--bg3)'; e.currentTarget.style.color='#d0d0e8' }}>
+                      onMouseLeave={e => { e.currentTarget.style.background='var(--bg3)'; e.currentTarget.style.color='var(--text2)' }}>
                       <RotateCcw size={14}/>
                     </button>
                     <button onClick={e => { e.stopPropagation(); rotate(p.id, 'cw') }}
                       title="Rotate 90° clockwise"
-                      style={{ width:'32px', height:'32px', borderRadius:'50%', border:'2px solid var(--border)', background:'var(--bg3)', color:'#d0d0e8', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s', boxShadow:'0 2px 8px rgba(0,0,0,0.3)' }}
+                      style={{ width:'32px', height:'32px', borderRadius:'50%', border:'2px solid var(--border)', background:'var(--bg3)', color:'var(--text2)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s', boxShadow:'0 2px 8px rgba(0,0,0,0.3)' }}
                       onMouseEnter={e => { e.currentTarget.style.background='var(--accent)'; e.currentTarget.style.color='#fff' }}
-                      onMouseLeave={e => { e.currentTarget.style.background='var(--bg3)'; e.currentTarget.style.color='#d0d0e8' }}>
+                      onMouseLeave={e => { e.currentTarget.style.background='var(--bg3)'; e.currentTarget.style.color='var(--text2)' }}>
                       <RotateCw size={14}/>
                     </button>
                   </div>

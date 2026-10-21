@@ -1,92 +1,111 @@
-import React, { useState, useEffect } from 'react'
-import Dashboard          from './pages/Dashboard'
-import EditorPage         from './pages/EditorPage'
-import ToolPage           from './pages/ToolPage'
-import StampToolPage      from './pages/StampToolPage'
-import WatermarkToolPage  from './pages/WatermarkToolPage'
-import PageNumberToolPage from './pages/PageNumberToolPage'
-import CropToolPage       from './pages/CropToolPage'
-import RotateToolPage     from './pages/RotateToolPage'
-import OrganizePDFPage    from './pages/OrganizePDFPage'
-import SignPDFPage        from './pages/SignPDFPage'
-import OCRToolPage        from './pages/OCRToolPage'
-import TranslateToolPage  from './pages/TranslateToolPage'
-import RedactToolPage     from './pages/RedactToolPage'
-import { consume } from './utils/credits'
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react'
+import Dashboard from './pages/Dashboard'
+import Sidebar from './components/Sidebar'
+import CommandPalette from './components/CommandPalette'
+import FileHistory from './components/FileHistory'
+import { toolById } from './utils/tools'
 import './index.css'
 
+// Heavy tool pages load on demand.
+const STANDALONE = {
+  editor:    lazy(() => import('./pages/EditorPage')),
+  stamp:     lazy(() => import('./pages/StampToolPage')),
+  watermark: lazy(() => import('./pages/WatermarkToolPage')),
+  pagenums:  lazy(() => import('./pages/PageNumberToolPage')),
+  crop:      lazy(() => import('./pages/CropToolPage')),
+  rotate:    lazy(() => import('./pages/RotateToolPage')),
+  organize:  lazy(() => import('./pages/OrganizePDFPage')),
+  sign:      lazy(() => import('./pages/SignPDFPage')),
+  ocr:       lazy(() => import('./pages/OCRToolPage')),
+  translate: lazy(() => import('./pages/TranslateToolPage')),
+  redact:    lazy(() => import('./pages/RedactToolPage')),
+}
+const GenericTool = lazy(() => import('./pages/ToolPage'))
+
+const THEME_KEY = 'pdfforge-theme'
+const idFromHash = () => {
+  const id = window.location.hash.replace(/^#\/?/, '')
+  return toolById(id) ? id : null
+}
+
 export default function App() {
-  const [page,         setPage]         = useState({ type:'dashboard' })
-  const [lastCategory, setLastCategory] = useState('all')
-  const [search,       setSearch]       = useState('')
-  const [dark,         setDark]         = useState(true)
-  // pendingFiles: files passed from SmartUpload through to tool pages
+  const [toolId,       setToolId]       = useState(idFromHash)
+  const [dark,         setDark]         = useState(() => document.documentElement.getAttribute('data-theme') === 'dark')
+  const [collapsed,    setCollapsed]    = useState(() => !!idFromHash())
+  const [drawer,       setDrawer]       = useState(false)
+  const [palette,      setPalette]      = useState(false)
+  const [history,      setHistory]      = useState(false)
+  // Files chosen on the home page, carried into the tool the user picks.
   const [pendingFiles, setPendingFiles] = useState(null)
+
+  // Browser back/forward and refresh work because the tool lives in the URL hash.
+  useEffect(() => {
+    const h = () => { setToolId(idFromHash()); setDrawer(false) }
+    window.addEventListener('hashchange', h)
+    return () => window.removeEventListener('hashchange', h)
+  }, [])
+
+  useEffect(() => {
+    setCollapsed(!!toolId)
+    document.title = toolId ? `${toolById(toolId).label} — PDFForge` : 'PDFForge — PDF tools that run in your browser'
+  }, [toolId])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
   }, [dark])
 
-  const goHome = () => {
-    setPage({ type:'dashboard' })
-    setSearch('')
-    setPendingFiles(null)
-  }
+  useEffect(() => {
+    const key = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(p => !p) }
+      if (e.key === 'Escape') setDrawer(false)
+    }
+    const openMenu   = () => setDrawer(true)
+    const openSearch = () => setPalette(true)
+    window.addEventListener('keydown', key)
+    window.addEventListener('pdfforge:menu', openMenu)
+    window.addEventListener('pdfforge:search', openSearch)
+    return () => {
+      window.removeEventListener('keydown', key)
+      window.removeEventListener('pdfforge:menu', openMenu)
+      window.removeEventListener('pdfforge:search', openSearch)
+    }
+  }, [])
 
-  const toggleTheme = () => setDark(d => !d)
+  const toggleTheme = () => setDark(d => {
+    try { localStorage.setItem(THEME_KEY, d ? 'light' : 'dark') } catch {}
+    return !d
+  })
 
-  const handleCategoryChange = (cat) => {
-    setLastCategory(cat)
-    setSearch('')
-    setPage({ type:'dashboard' })
-  }
-
-  const handleTool = (id, fromCategory, files) => {
-    if (fromCategory) setLastCategory(fromCategory)
-    setSearch('')
-    // Store files that were pre-selected (e.g. from SmartUpload)
+  // handleTool keeps the (id, category, files) signature SmartUpload/ToolPage already call.
+  const go = useCallback((id, _category, files) => {
     if (files) setPendingFiles(files)
+    if (!id) setPendingFiles(null)
+    window.location.hash = id ? `/${id}` : '/'
+    setToolId(id || null)
+    setDrawer(false)
+  }, [])
 
-    // Consume a credit for this action
-    consume(id)
-    window.dispatchEvent(new Event('pdfforge:credits'))
-
-    if (id === 'editor')    return setPage({ type:'editor' })
-    if (id === 'stamp')     return setPage({ type:'stamp' })
-    if (id === 'watermark') return setPage({ type:'watermark' })
-    if (id === 'pagenums')  return setPage({ type:'pagenums' })
-    if (id === 'crop')      return setPage({ type:'crop' })
-    if (id === 'rotate')    return setPage({ type:'rotate' })
-    if (id === 'organize')  return setPage({ type:'organize' })
-    if (id === 'sign')      return setPage({ type:'sign' })
-    if (id === 'ocr')       return setPage({ type:'ocr' })
-    if (id === 'translate') return setPage({ type:'translate' })
-    if (id === 'redact')    return setPage({ type:'redact' })
-    setPage({ type:'tool', toolId: id })
-  }
-
-  const shared = {
-    dark, onToggleTheme: toggleTheme, onGoHome: goHome,
-    showCategories: true,
-    activeCategory: lastCategory,
-    onCategoryChange: handleCategoryChange,
-    search, onSearch: setSearch,
-  }
-
-  // Pass pendingFiles as initialFile to tool pages that support it
+  const goHome = () => go(null)
+  const shared = { dark, onToggleTheme: toggleTheme, onGoHome: goHome, onBack: goHome }
   const fileProps = pendingFiles ? { initialFiles: pendingFiles } : {}
+  const Page = toolId && STANDALONE[toolId]
 
-  if (page.type === 'editor')    return <EditorPage         onBack={goHome} dark={dark} onToggleTheme={toggleTheme} onGoHome={goHome} showCategories={false} {...fileProps}/>
-  if (page.type === 'stamp')     return <StampToolPage      onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'watermark') return <WatermarkToolPage  onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'pagenums')  return <PageNumberToolPage onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'crop')      return <CropToolPage       onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'rotate')    return <RotateToolPage     onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'organize')  return <OrganizePDFPage    onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'sign')      return <SignPDFPage        onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'ocr')       return <OCRToolPage        onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'translate') return <TranslateToolPage  onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'redact')    return <RedactToolPage     onBack={goHome} {...shared} {...fileProps}/>
-  if (page.type === 'tool')      return <ToolPage toolId={page.toolId} onBack={goHome} onSelectTool={handleTool} {...shared} {...fileProps}/>
-  return <Dashboard onSelectTool={handleTool} initialCategory={lastCategory} {...shared}/>
+  return (
+    <div className={`app${collapsed ? ' collapsed' : ''}${drawer ? ' drawer-open' : ''}`}>
+      <Sidebar current={toolId} collapsed={collapsed} onToggle={() => setCollapsed(c => !c)}
+        onNavigate={go} onSearch={() => { setDrawer(false); setPalette(true) }}
+        onHistory={() => { setDrawer(false); setHistory(true) }}
+        dark={dark} onToggleTheme={toggleTheme}/>
+      <div className="scrim" onClick={() => setDrawer(false)}/>
+      <main className="main" id="main">
+        <Suspense fallback={<p role="status" style={{ padding:40, color:'var(--text3)' }}>Loading…</p>}>
+          {!toolId ? <Dashboard onSelectTool={go} onHistory={() => setHistory(true)} {...shared}/>
+           : Page  ? <Page {...shared} {...fileProps}/>
+           : <GenericTool key={toolId} toolId={toolId} onSelectTool={go} {...shared} {...fileProps}/>}
+        </Suspense>
+      </main>
+      {palette && <CommandPalette onClose={() => setPalette(false)} onSelect={id => go(id)}/>}
+      {history && <FileHistory onClose={() => setHistory(false)}/>}
+    </div>
+  )
 }

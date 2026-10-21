@@ -51,46 +51,41 @@ export default function SectionCard({ section, onChange }) {
     <div
       onClick={() => { if (!editing) setEditing(true) }}
       style={{
-        background:   editing ? '#1e1e2e' : section.changed ? 'rgba(62,207,142,0.04)' : '#13131e',
-        border:       `1px solid ${editing ? '#6c63ff' : section.changed ? 'rgba(62,207,142,0.4)' : '#252538'}`,
-        borderLeft:   section.changed && !editing ? '3px solid #3ecf8e' : undefined,
+        background:   editing ? 'var(--bg3)' : section.changed ? 'rgba(21,128,61,0.04)' : 'var(--bg2)',
+        border:       `1px solid ${editing ? 'var(--accent)' : section.changed ? 'rgba(21,128,61,0.4)' : 'var(--border)'}`,
+        borderLeft:   section.changed && !editing ? '3px solid var(--green)' : undefined,
         borderRadius: '10px',
         padding:      editing ? '12px 14px' : '9px 14px',
         cursor:       editing ? 'default' : 'pointer',
         transition:   'border-color 0.12s',
       }}
-      onMouseEnter={e => { if (!editing) e.currentTarget.style.borderColor='#2e2e48' }}
-      onMouseLeave={e => { if (!editing) e.currentTarget.style.borderColor=section.changed?'rgba(62,207,142,0.4)':'#252538' }}
+      onMouseEnter={e => { if (!editing) e.currentTarget.style.borderColor='var(--border2)' }}
+      onMouseLeave={e => { if (!editing) e.currentTarget.style.borderColor=section.changed?'rgba(21,128,61,0.4)':'var(--border)' }}
     >
       {editing ? (
         <div onClick={e => e.stopPropagation()}>
           {/* Toolbar */}
-          <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'10px', padding:'5px 8px', background:'#0d0d14', borderRadius:'8px', border:'1px solid #1e1e2e', flexWrap:'wrap' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'10px', padding:'5px 8px', background:'var(--bg)', borderRadius:'8px', border:'1px solid var(--bg3)', flexWrap:'wrap' }}>
             <select value={fontSize} onChange={e=>setFontSize(Number(e.target.value))}
-              style={{ fontSize:'12px', background:'#13131e', color:'#eeeef5', border:'1px solid #252538', borderRadius:'6px', padding:'3px 6px', height:'28px', cursor:'pointer' }}>
+              style={{ fontSize:'12px', background:'var(--bg2)', color:'var(--text)', border:'1px solid var(--border)', borderRadius:'6px', padding:'3px 6px', height:'28px', cursor:'pointer' }}>
               {FONT_SIZES.map(s => <option key={s} value={s}>{s}pt</option>)}
             </select>
-            <div style={{ width:'1px', height:'18px', background:'#252538' }}/>
+            <div style={{ width:'1px', height:'18px', background:'var(--border)' }}/>
             <button onClick={()=>setBold(b=>!b)}
-              style={{ width:'28px', height:'28px', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'6px', border:'1px solid #252538', background:bold?'#6c63ff':'#1e1e2e', color:bold?'#fff':'#9898b8', cursor:'pointer', fontWeight:700, fontSize:'13px' }}>B</button>
-            {['I','U'].map(icon=>(
-              <button key={icon} title="Pro feature"
-                style={{ width:'28px', height:'28px', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'6px', border:'1px solid #1e1e2e', background:'#13131e', color:'#3a3a58', cursor:'not-allowed', fontSize:'12px' }}>{icon}</button>
-            ))}
-            <span style={{ fontSize:'9px', fontWeight:700, background:'linear-gradient(135deg,#f5a623,#e5534b)', color:'#fff', padding:'2px 5px', borderRadius:'4px' }}>PRO</span>
+              style={{ width:'28px', height:'28px', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'6px', border:'1px solid var(--border)', background:bold?'var(--accent)':'var(--bg3)', color:bold?'#fff':'var(--text3)', cursor:'pointer', fontWeight:700, fontSize:'13px' }}>B</button>
             <div style={{ flex:1 }}/>
             {/* Char counter */}
             {charLimit < 999 && (
-              <span style={{ fontSize:'11px', color: isOverLimit ? '#e5534b' : '#5a5a78', fontFamily:'monospace' }}>
+              <span style={{ fontSize:'11px', color: isOverLimit ? 'var(--red)' : 'var(--text3)', fontFamily:'monospace' }}>
                 {draft.replace(/\n/g,'').length}/{charLimit} chars
               </span>
             )}
             <button onClick={cancel}
-              style={{ display:'flex', alignItems:'center', gap:'3px', fontSize:'12px', color:'#9898b8', background:'none', border:'1px solid #252538', borderRadius:'6px', padding:'4px 10px', cursor:'pointer' }}>
+              style={{ display:'flex', alignItems:'center', gap:'3px', fontSize:'12px', color:'var(--text3)', background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 10px', cursor:'pointer' }}>
               <RotateCcw size={10}/> Cancel
             </button>
             <button onClick={commit}
-              style={{ display:'flex', alignItems:'center', gap:'3px', fontSize:'12px', color:'#fff', background:'#6c63ff', border:'none', borderRadius:'6px', padding:'4px 12px', cursor:'pointer' }}>
+              style={{ display:'flex', alignItems:'center', gap:'3px', fontSize:'12px', color:'#fff', background:'var(--accent)', border:'none', borderRadius:'6px', padding:'4px 12px', cursor:'pointer' }}>
               <Check size={10}/> Save
             </button>
           </div>
@@ -105,8 +100,8 @@ export default function SectionCard({ section, onChange }) {
             style={{
               width:'100%', fontSize:`${fontSize}px`, fontWeight:bold?700:400,
               fontFamily:'Calibri,"Segoe UI",Arial,sans-serif',
-              color:'#eeeef5', background:'#0d0d14',
-              border:`1px solid ${isOverLimit?'#e5534b':'#252538'}`,
+              color:'var(--text)', background:'var(--bg)',
+              border:`1px solid ${isOverLimit?'var(--red)':'var(--border)'}`,
               borderRadius:'7px', padding:'9px 12px',
               outline:'none', resize:'none', lineHeight:1.6,
               minHeight:'40px', overflow:'hidden',
@@ -116,22 +111,22 @@ export default function SectionCard({ section, onChange }) {
 
           {/* Hints */}
           <div style={{ display:'flex', justifyContent:'space-between', marginTop:'5px' }}>
-            <p style={{ fontSize:'11px', color:'#5a5a78' }}>
-              <span style={{ color:'#9d97ff' }}>Enter</span> = new line &nbsp;·&nbsp;
-              <span style={{ color:'#9d97ff' }}>Esc</span> = cancel
-              {isChanged && <span style={{ color:'#f5a623', marginLeft:'8px' }}>● unsaved</span>}
+            <p style={{ fontSize:'11px', color:'var(--text3)' }}>
+              <span style={{ color:'var(--accent2)' }}>Enter</span> = new line &nbsp;·&nbsp;
+              <span style={{ color:'var(--accent2)' }}>Esc</span> = cancel
+              {isChanged && <span style={{ color:'var(--gold)', marginLeft:'8px' }}>● unsaved</span>}
             </p>
             {isOverLimit && (
-              <p style={{ fontSize:'11px', color:'#e5534b' }}>⚠ May overflow line</p>
+              <p style={{ fontSize:'11px', color:'var(--red)' }}>⚠ May overflow line</p>
             )}
           </div>
         </div>
       ) : (
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'8px' }}>
-          <p style={{ fontSize:displaySize, fontWeight:section.bold?700:400, color:'#eeeef5', flex:1, margin:0, whiteSpace:'pre-wrap', wordBreak:'break-word', lineHeight:1.6, fontFamily:'Calibri,"Segoe UI",Arial,sans-serif' }}>
-            {section.text || <span style={{ color:'#5a5a78', fontStyle:'italic' }}>Empty</span>}
+          <p style={{ fontSize:displaySize, fontWeight:section.bold?700:400, color:'var(--text)', flex:1, margin:0, whiteSpace:'pre-wrap', wordBreak:'break-word', lineHeight:1.6, fontFamily:'Calibri,"Segoe UI",Arial,sans-serif' }}>
+            {section.text || <span style={{ color:'var(--text3)', fontStyle:'italic' }}>Empty</span>}
           </p>
-          <span style={{ fontSize:'10px', color:'#5a5a78', whiteSpace:'nowrap', flexShrink:0 }}>
+          <span style={{ fontSize:'10px', color:'var(--text3)', whiteSpace:'nowrap', flexShrink:0 }}>
             {section.fontSize}pt
           </span>
         </div>

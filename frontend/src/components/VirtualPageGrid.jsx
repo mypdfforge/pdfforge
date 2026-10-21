@@ -158,7 +158,7 @@ function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onD
         alignItems:     'center',
         justifyContent: 'center',
         transition:     'border-color 0.15s',
-        boxShadow:      isHovered ? '0 8px 24px rgba(108,99,255,0.2)' : '0 2px 8px rgba(0,0,0,0.3)',
+        boxShadow:      isHovered ? '0 8px 24px rgba(234,88,12,0.2)' : '0 2px 8px rgba(0,0,0,0.3)',
       }}>
         {pg.blank ? (
           <BlankPageIcon />
@@ -195,7 +195,7 @@ function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onD
             <ActionBtn
               onClick={() => onRotate(pg.id)}
               title="Rotate 90°"
-              color="rgba(108,99,255,0.9)"
+              color="rgba(234,88,12,0.9)"
               icon={<RotateCw size={13} />}
             />
           )}
