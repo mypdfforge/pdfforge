@@ -3,7 +3,8 @@ import { useDropzone } from 'react-dropzone'
 import {
   Loader2, CheckCircle, AlertCircle,
   ChevronLeft, ChevronRight, Download,
-  Plus, X, ShieldCheck, Eye, EyeOff
+  Plus, X, ShieldCheck, Eye, EyeOff,
+  Lock, FileText
 } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import { downloadBlob } from '../utils/api'
@@ -211,7 +212,9 @@ export default function RedactToolPage({
               style={{ background: isDragActive ? 'rgba(229,57,53,0.08)' : 'var(--bg2)', border: `2px dashed ${isDragActive ? '#e53935' : 'var(--border)'}`, borderRadius: '16px', padding: '56px 40px', textAlign: 'center', cursor: 'pointer' }}
             >
               <input {...getInputProps()} />
-              <div style={{ fontSize: '38px', marginBottom: '14px', opacity: 0.55 }}>🔒</div>
+              <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: 'var(--bg3)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px', color: 'var(--brand)' }}>
+                <Lock size={24} />
+              </div>
               <p style={{ color: 'var(--text)', fontWeight: 600, fontSize: '15px', marginBottom: '7px' }}>Drop your PDF here</p>
               <p style={{ color: 'var(--text3)', fontSize: '12px' }}>or click to browse</p>
             </div>
@@ -226,8 +229,11 @@ export default function RedactToolPage({
 
             {/* File chip */}
             <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '8px', padding: '6px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '11px', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {file.name}</span>
-              <button onClick={() => { setFile(null); setPages([]); pdfDocRef.current = null }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '15px' }}>×</button>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: '11px', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth:0 }}>
+                <FileText size={13} color="var(--brand)" style={{ flexShrink:0 }} />
+                <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{file.name}</span>
+              </span>
+              <button onClick={() => { setFile(null); setPages([]); pdfDocRef.current = null }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding:'2px', display:'flex', alignItems:'center' }} aria-label="Remove file"><X size={13} /></button>
             </div>
 
             {/* ── Redact Terms ── */}

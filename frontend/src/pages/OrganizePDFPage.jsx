@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
-import { Upload, Loader2, CheckCircle, AlertCircle, Plus } from 'lucide-react'
+import { Upload, Loader2, CheckCircle, AlertCircle, Plus, FileText } from 'lucide-react'
 import { clientOrganize } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
@@ -102,8 +102,9 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
             borderBottom: '1px solid var(--border)', background: 'var(--bg2)',
             padding: '10px 24px', display: 'flex', alignItems: 'center', gap: '10px',
           }}>
-            <span style={{ fontSize: '13px', color: 'var(--text2)', marginRight: 'auto' }}>
-              📄 <strong style={{ color: 'var(--text)' }}>{file.name}</strong>
+            <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: '13px', color: 'var(--text2)', marginRight: 'auto' }}>
+              <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
+              <strong style={{ color: 'var(--text)' }}>{file.name}</strong>
               <span style={{ color: 'var(--text3)', marginLeft: '8px' }}>{pages.length} pages</span>
             </span>
             <button onClick={addBlank}

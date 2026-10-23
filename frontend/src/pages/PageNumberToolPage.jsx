@@ -3,7 +3,8 @@ import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
 import {
   Upload, Loader2, CheckCircle, AlertCircle,
-  Bold, Italic, ChevronDown, Hash
+  Bold, Italic, ChevronDown, Hash,
+  FileText, X, BookOpen
 } from 'lucide-react'
 import { clientPageNumbers, previewPageNumbers } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
@@ -242,11 +243,15 @@ export default function PageNumberToolPage({
               borderRadius: '10px', padding: '9px 14px',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             }}>
-              <span style={{ fontSize: '13px', color: 'var(--text)' }}>📄 {file.name}</span>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: '13px', color: 'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>
+                <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
+                <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{file.name}</span>
+              </span>
               <button
                 onClick={() => { setFile(null); setPreview(null); setErrMsg('') }}
-                style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '18px' }}
-              >×</button>
+                style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding:'2px', display:'flex', alignItems:'center' }}
+                aria-label="Remove file"
+              ><X size={14} /></button>
             </div>
           )}
 
@@ -378,7 +383,9 @@ export default function PageNumberToolPage({
                       cursor: 'pointer',
                     }}
                   >
-                    {val === 'facing' ? '📖' : '📄'} {label}
+                    <span style={{ display:'inline-flex', alignItems:'center', gap:'4px' }}>
+                      {val === 'facing' ? <BookOpen size={11} /> : <FileText size={11} />} {label}
+                    </span>
                   </button>
                 ))}
                 {facingPages && (

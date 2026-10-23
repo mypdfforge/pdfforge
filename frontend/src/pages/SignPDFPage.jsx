@@ -5,6 +5,7 @@ import {
   Loader2, CheckCircle, AlertCircle,
   Trash2, PenTool, Type, Image as ImageIcon,
   ChevronLeft, ChevronRight, Download, Check, Lock, Plus,
+  FileText, X,
 } from 'lucide-react'
 import { clientSign } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
@@ -274,8 +275,11 @@ export default function SignPDFPage({ onBack, dark, onToggleTheme, onGoHome, sho
 
             {/* File chip */}
             <div style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'8px', padding:'6px 10px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-              <span style={{ fontSize:'11px', color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>📄 {file.name}</span>
-              <button onClick={()=>{setFile(null);setPages([]);setSigData(null);setSigsByPage({})}} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'15px', flexShrink:0 }}>×</button>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'11px', color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>
+                <FileText size={13} color="var(--brand)" style={{ flexShrink:0 }} />
+                <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{file.name}</span>
+              </span>
+              <button onClick={()=>{setFile(null);setPages([]);setSigData(null);setSigsByPage({})}} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', padding:'2px', display:'flex', alignItems:'center', flexShrink:0 }} aria-label="Remove file"><X size={13}/></button>
             </div>
 
             {/* Signature creator */}

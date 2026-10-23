@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import {
   Loader2, CheckCircle, AlertCircle, Download,
-  RotateCcw, Crop, ChevronsRight, Maximize2, Check, X,
+  RotateCcw, Crop, ChevronsRight, Maximize2, Check, X, FileText
 } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import { clientCropVisual } from '../utils/editClient'
@@ -666,9 +666,10 @@ export default function CropToolPage({
             background: 'var(--bg2)', display: 'flex', alignItems: 'center',
             gap: '10px', flexShrink: 0,
           }}>
-            <span style={{ fontSize: '13px', color: 'var(--text2)' }}>
-              📄 <strong style={{ color: 'var(--text)' }}>{file.name}</strong>
-              <span style={{ color: 'var(--text3)', marginLeft: '8px' }}>
+            <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: '13px', color: 'var(--text2)' }}>
+              <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
+              <strong style={{ color: 'var(--text)' }}>{file.name}</strong>
+              <span style={{ color: 'var(--text3)', marginLeft: '6px' }}>
                 {pages.length}{loading ? '…' : ''} pages
               </span>
             </span>

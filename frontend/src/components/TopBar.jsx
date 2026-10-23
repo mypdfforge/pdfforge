@@ -21,7 +21,17 @@ export default function TopBar({ onBack, title, subtitle, extraRight }) {
           {tool.runs === 'browser' ? <ShieldCheck size={12}/> : <Server size={12}/>} {RUNS_LABEL[tool.runs]}
         </span>
       )}
-      <button className="icon-btn" onClick={() => open('pdfforge:search')} aria-label="Search tools (Ctrl+K)"><Search size={15}/></button>
+      <button
+        className="btn btn-ghost hide-sm"
+        onClick={() => open('pdfforge:search')}
+        aria-label="Search tools (Ctrl+K)"
+        style={{ height: '30px', padding: '0 8px', fontSize: '12px', color: 'var(--text3)', gap: '6px' }}
+      >
+        <Search size={13}/>
+        <span>Search</span>
+        <kbd style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', background: 'var(--bg3)', border: '1px solid var(--border)', fontFamily: 'inherit', color: 'var(--text3)' }}>Ctrl+K</kbd>
+      </button>
+      <button className="icon-btn menu-btn" onClick={() => open('pdfforge:search')} aria-label="Search tools (Ctrl+K)"><Search size={15}/></button>
     </header>
   )
 }

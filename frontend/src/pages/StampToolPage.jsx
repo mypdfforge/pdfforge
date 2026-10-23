@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Loader2, CheckCircle, AlertCircle, ImageIcon, ChevronLeft, ChevronRight, Download } from 'lucide-react'
+import { Loader2, CheckCircle, AlertCircle, ImageIcon, ChevronLeft, ChevronRight, Download, FileText, X } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import { clientStamp } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
@@ -125,8 +125,11 @@ export default function StampToolPage({ onBack, dark, onToggleTheme, onGoHome, s
           {/* ━━ Panel 1: Settings (255px) ━━ */}
           <div style={{ width:'255px', flexShrink:0, borderRight:'1px solid var(--border)', overflowY:'auto', padding:'12px', display:'flex', flexDirection:'column', gap:'8px', background:'var(--bg2)' }}>
             <div style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'8px', padding:'6px 10px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-              <span style={{ fontSize:'11px', color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>📄 {file.name}</span>
-              <button onClick={()=>{setFile(null);setPages([])}} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'15px' }}>×</button>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'11px', color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>
+                <FileText size={13} color="var(--brand)" style={{ flexShrink:0 }} />
+                <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{file.name}</span>
+              </span>
+              <button onClick={()=>{setFile(null);setPages([])}} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', padding:'2px', display:'flex', alignItems:'center' }} aria-label="Remove file"><X size={13}/></button>
             </div>
 
             {/* Stamp gallery */}

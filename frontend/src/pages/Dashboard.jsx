@@ -1,23 +1,62 @@
-import React, { useState } from 'react'
-import { Search, LayoutGrid, List, ShieldCheck, Server, Clock } from 'lucide-react'
+import React, { useState, useRef, useCallback } from 'react'
+import { Search, LayoutGrid, List, ShieldCheck, Server, Clock, Sparkles, Zap, ArrowUpRight } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import SmartUpload from '../components/SmartUpload'
 import { TOOLS, CATEGORIES, RUNS_LABEL } from '../utils/tools'
 
 function ToolCard({ tool, onClick }) {
   const browser = tool.runs === 'browser'
+  const cardRef = useRef(null)
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0, hover: false })
+
+  const handleMouseMove = useCallback((e) => {
+    if (!cardRef.current) return
+    const rect = cardRef.current.getBoundingClientRect()
+    setMousePos({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      hover: true,
+    })
+  }, [])
+
   return (
-    <button className="tool-card" onClick={() => onClick(tool.id, tool.category)}>
-      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-        <span className="tool-icon"><tool.icon size={17}/></span>
-        <div className="tool-body" style={{ minWidth:0 }}>
-          <div style={{ fontSize:14, fontWeight:600 }}>{tool.label}</div>
-          <p className="tool-desc" style={{ fontSize:12, color:'var(--text3)', lineHeight:1.5, marginTop:2 }}>{tool.desc}</p>
+    <button
+      ref={cardRef}
+      className="tool-card saas-spotlight"
+      onClick={() => onClick(tool.id, tool.category)}
+      onMouseMove={handleMouseMove}
+      onMouseEnter={() => setMousePos(p => ({ ...p, hover: true }))}
+      onMouseLeave={() => setMousePos(p => ({ ...p, hover: false }))}
+    >
+      {/* Interactive Cursor Spotlight Glow */}
+      <div
+        className="saas-spotlight-layer"
+        style={{
+          opacity: mousePos.hover ? 1 : 0,
+          background: `radial-gradient(260px circle at ${mousePos.x}px ${mousePos.y}px, var(--spotlight), transparent 75%)`,
+        }}
+      />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, position: 'relative', zIndex: 2 }}>
+        <span className="tool-icon">
+          <tool.icon size={17} />
+        </span>
+        <div className="tool-body" style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{tool.label}</span>
+            <ArrowUpRight size={13} color="var(--text3)" style={{ opacity: mousePos.hover ? 1 : 0, transition: 'opacity 0.15s ease' }} />
+          </div>
+          <p className="tool-desc" style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5, marginTop: 2 }}>
+            {tool.desc}
+          </p>
         </div>
       </div>
-      <span className={`badge ${browser ? 'badge-browser' : ''}`} style={{ alignSelf:'flex-start' }}>
-        {browser ? <ShieldCheck size={11}/> : <Server size={11}/>} {RUNS_LABEL[tool.runs]}
-      </span>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto', position: 'relative', zIndex: 2 }}>
+        <span className={`badge ${browser ? 'badge-browser' : ''}`}>
+          {browser ? <ShieldCheck size={11} /> : <Server size={11} />} {RUNS_LABEL[tool.runs]}
+        </span>
+      </div>
     </button>
   )
 }
@@ -37,49 +76,115 @@ export default function Dashboard({ onSelectTool, onHistory, onGoHome }) {
 
   return (
     <>
-      <TopBar title="All tools" extraRight={
-        <button className="btn btn-ghost" onClick={onHistory}><Clock size={14}/><span className="hide-sm">Recent files</span></button>
-      }/>
-      <div className="home">
-        <h1 style={{ fontSize:28, fontWeight:700, letterSpacing:'-0.02em', lineHeight:1.2 }}>Everything you need to work with PDFs.</h1>
-        <p style={{ fontSize:15, color:'var(--text3)', margin:'8px 0 20px', maxWidth:560, lineHeight:1.6 }}>
-          Edit, organize, convert, and optimize your documents in one simple workspace.
-        </p>
-
-        <SmartUpload onSelectTool={onSelectTool}/>
-
-        <p style={{ display:'flex', gap:8, alignItems:'flex-start', fontSize:13, color:'var(--text3)', margin:'16px 0 28px', lineHeight:1.6 }}>
-          <ShieldCheck size={16} color="var(--green)" style={{ flexShrink:0, marginTop:2 }}/>
-          <span><strong style={{ color:'var(--text2)' }}>{nBrowser} of {TOOLS.length} tools run entirely in your browser</strong> — the file never leaves your device. The rest upload the file to our server to process it (up to 50 MB). Each tool is labelled.</span>
-        </p>
-
-        <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:16 }}>
-          <div className="seg" role="group" aria-label="Filter by category">
-            {CATEGORIES.map(c => <button key={c.id} aria-pressed={cat === c.id} onClick={() => setCat(c.id)}>{c.label}</button>)}
-          </div>
-          <div style={{ flex:1 }}/>
-          <button className="btn btn-ghost" aria-pressed={browserOnly} onClick={() => setBrowserOnly(b => !b)}
-            style={browserOnly ? { borderColor:'var(--brand)', color:'var(--text)' } : undefined}>
-            <ShieldCheck size={14}/> Browser only
+      <TopBar
+        title="PDFForge Workspace"
+        extraRight={
+          <button className="btn btn-ghost" onClick={onHistory}>
+            <Clock size={14} />
+            <span className="hide-sm">Recent files</span>
           </button>
-          <label style={{ position:'relative', display:'flex', alignItems:'center' }}>
-            <Search size={14} color="var(--text3)" style={{ position:'absolute', left:10, pointerEvents:'none' }}/>
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter tools…" aria-label="Filter tools"
-              style={{ height:34, paddingLeft:30, width:180 }}/>
-          </label>
-          <div className="seg" role="group" aria-label="Layout">
-            <button aria-pressed={!list} aria-label="Grid view" onClick={() => setList(false)}><LayoutGrid size={14}/></button>
-            <button aria-pressed={list}  aria-label="List view" onClick={() => setList(true)}><List size={14}/></button>
+        }
+      />
+      <div className="home">
+        {/* ── Enterprise SaaS Hero ── */}
+        <div style={{ marginBottom: 28 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '999px', marginBottom: 14 }}>
+            <span className="live-dot" />
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', letterSpacing: '-0.01em' }}>
+              PDFForge 5.0 · Private Client-Side PDF Engine
+            </span>
+          </div>
+
+          <h1 style={{ fontSize: 32, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.15, color: 'var(--text)' }}>
+            The intelligent document workspace.
+          </h1>
+          <p style={{ fontSize: 15, color: 'var(--text3)', margin: '10px 0 0', maxWidth: 620, lineHeight: 1.6 }}>
+            Edit, convert, organize, and sign documents directly in your browser.
+            Zero cloud uploads required for local operations.
+          </p>
+        </div>
+
+        {/* ── Spotlight Smart Drop Zone ── */}
+        <SmartUpload onSelectTool={onSelectTool} />
+
+        {/* ── Privacy & Trust Banner ── */}
+        <div style={{
+          display: 'flex',
+          gap: 12,
+          alignItems: 'center',
+          padding: '12px 16px',
+          background: 'var(--bg2)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)',
+          margin: '20px 0 28px',
+          boxShadow: 'var(--shadow)'
+        }}>
+          <ShieldCheck size={18} color="var(--green)" style={{ flexShrink: 0 }} />
+          <div style={{ fontSize: 13, color: 'var(--text3)', lineHeight: 1.5 }}>
+            <strong style={{ color: 'var(--text)', fontWeight: 600 }}>{nBrowser} of {TOOLS.length} tools operate 100% client-side</strong> — your documents never touch any server. Heavy conversion tools process files securely in temporary sandbox sessions with immediate deletion.
           </div>
         </div>
 
-        {shown.length === 0
-          ? <p role="status" style={{ textAlign:'center', padding:'48px 0', color:'var(--text3)' }}>No tools match your filters.</p>
-          : <div className={`tools-grid${list ? ' list' : ''}`}>
-              {shown.map(t => <ToolCard key={t.id} tool={t} onClick={onSelectTool}/>)}
-            </div>}
+        {/* ── Search & Filter Controls ── */}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
+          <div className="seg" role="group" aria-label="Filter by category">
+            {CATEGORIES.map(c => (
+              <button key={c.id} aria-pressed={cat === c.id} onClick={() => setCat(c.id)}>
+                {c.label}
+              </button>
+            ))}
+          </div>
 
-        <p style={{ marginTop:48, paddingTop:20, borderTop:'1px solid var(--border)', fontSize:12, color:'var(--text3)' }}>© PDFForge</p>
+          <div style={{ flex: 1 }} />
+
+          <button
+            className="btn btn-ghost"
+            aria-pressed={browserOnly}
+            onClick={() => setBrowserOnly(b => !b)}
+            style={browserOnly ? { borderColor: 'var(--brand)', color: 'var(--text)', background: 'var(--bg3)' } : undefined}
+          >
+            <ShieldCheck size={14} color={browserOnly ? 'var(--brand)' : undefined} /> Browser only
+          </button>
+
+          <label style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Search size={14} color="var(--text3)" style={{ position: 'absolute', left: 10, pointerEvents: 'none' }} />
+            <input
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              placeholder="Filter tools…"
+              aria-label="Filter tools"
+              style={{ height: 34, paddingLeft: 30, width: 190 }}
+            />
+          </label>
+
+          <div className="seg" role="group" aria-label="Layout">
+            <button aria-pressed={!list} aria-label="Grid view" onClick={() => setList(false)}>
+              <LayoutGrid size={14} />
+            </button>
+            <button aria-pressed={list} aria-label="List view" onClick={() => setList(true)}>
+              <List size={14} />
+            </button>
+          </div>
+        </div>
+
+        {/* ── Tools Grid / List ── */}
+        {shown.length === 0 ? (
+          <div role="status" style={{ textAlign: 'center', padding: '56px 0', color: 'var(--text3)' }}>
+            <p style={{ fontSize: 14, fontWeight: 500, margin: 0 }}>No tools found matching "{q}"</p>
+            <p style={{ fontSize: 12, marginTop: 4 }}>Try searching for convert, merge, compress, or sign.</p>
+          </div>
+        ) : (
+          <div className={`tools-grid${list ? ' list' : ''}`}>
+            {shown.map(t => (
+              <ToolCard key={t.id} tool={t} onClick={onSelectTool} />
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: 48, paddingTop: 20, borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--text3)' }}>
+          <span>© PDFForge · Enterprise Document Infrastructure</span>
+          <span>WebAssembly & Client-Side PDF Engine</span>
+        </div>
       </div>
     </>
   )

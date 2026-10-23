@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { Edit3, Check, X } from 'lucide-react'
 
 const WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
 
@@ -157,8 +158,10 @@ export default function PDFEditor({ sessionId, pages: initialPages, onBlocksChan
 
             {/* Header */}
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px' }}>
-              <span style={{ fontSize:'16px', fontWeight:700, color:'var(--text)' }}>✎ Edit Text</span>
-              <button onClick={() => setPopup(null)} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'22px' }}>×</button>
+              <span style={{ fontSize:'15px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'8px' }}>
+                <Edit3 size={16} color="var(--brand)" /> Edit Text Block
+              </span>
+              <button onClick={() => setPopup(null)} className="icon-btn" style={{ width:'28px', height:'28px', border:'none', background:'none' }} aria-label="Close"><X size={15}/></button>
             </div>
 
             {/* Original */}
@@ -168,7 +171,7 @@ export default function PDFEditor({ sessionId, pages: initialPages, onBlocksChan
             </div>
 
             {/* Textarea — Enter = new line, Ctrl+Enter = save */}
-            <div style={{ fontSize:'12px', color:'var(--accent2)', marginBottom:'8px', fontWeight:600 }}>✏ Your edit:</div>
+            <div style={{ fontSize:'12px', color:'var(--brand)', marginBottom:'8px', fontWeight:600 }}>Your edit:</div>
             <textarea
               ref={textareaRef}
               value={inputVal}
@@ -208,10 +211,10 @@ export default function PDFEditor({ sessionId, pages: initialPages, onBlocksChan
 
             {/* Buttons */}
             <div style={{ display:'flex', gap:'10px' }}>
-              <button onClick={saveEdit} style={{ flex:1, padding:'12px', background:'var(--accent)', color:'#fff', border:'none', borderRadius:'10px', cursor:'pointer', fontWeight:700, fontSize:'15px', boxShadow:'0 4px 16px rgba(234,88,12,0.35)' }}>
-                ✓ Save  (Ctrl+Enter)
+              <button onClick={saveEdit} style={{ flex:1, padding:'12px', background:'var(--accent)', color:'#fff', border:'none', borderRadius:'10px', cursor:'pointer', fontWeight:600, fontSize:'14px', boxShadow:'0 4px 16px rgba(234,88,12,0.35)', display:'flex', alignItems:'center', justifyContent:'center', gap:'6px' }}>
+                <Check size={16}/> Save changes (Ctrl+Enter)
               </button>
-              <button onClick={() => setPopup(null)} style={{ padding:'12px 20px', background:'var(--bg3)', color:'var(--text3)', border:'1px solid var(--border2)', borderRadius:'10px', cursor:'pointer', fontSize:'14px' }}>
+              <button onClick={() => setPopup(null)} className="btn btn-ghost" style={{ padding:'0 20px', height:'42px', fontSize:'14px' }}>
                 Cancel
               </button>
             </div>

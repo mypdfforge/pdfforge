@@ -1,22 +1,47 @@
 /**
  * SmartUpload.jsx
- * Drop zone that analyzes the file and shows "Recommended for you" cards.
- * Zero server calls for analysis — pure client-side.
+ * Enterprise SaaS Drop Zone with dynamic cursor-tracking spotlight motion.
+ * Client-side analysis, instant tool recommendation, zero telemetry.
  */
 import React, { useState, useCallback, useRef } from 'react'
+import {
+  UploadCloud,
+  FileText,
+  Sparkles,
+  ShieldCheck,
+  Check,
+  Loader2,
+  Zap,
+  ArrowRight,
+  X,
+  FileCheck
+} from 'lucide-react'
 import { analyzeFile, analyzeMultipleFiles } from '../utils/fileAnalyzer'
-
-const pulse = `@keyframes sgPulse { 0%,100%{opacity:1} 50%{opacity:.5} }`
-const spin  = `@keyframes sgSpin  { to{transform:rotate(360deg)} }`
-const fadeUp= `@keyframes sgFadeUp{ from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }`
+import { toolById } from '../utils/tools'
 
 export default function SmartUpload({ onSelectTool, onFilesReady }) {
-  const [dragging,     setDragging]     = useState(false)
-  const [analyzing,    setAnalyzing]    = useState(false)
-  const [suggestions,  setSuggestions]  = useState([])
-  const [metadata,     setMetadata]     = useState(null)
-  const [files,        setFiles]        = useState([])
-  const inputRef = useRef()
+  const [dragging,    setDragging]    = useState(false)
+  const [analyzing,   setAnalyzing]   = useState(false)
+  const [suggestions, setSuggestions] = useState([])
+  const [metadata,    setMetadata]    = useState(null)
+  const [files,       setFiles]       = useState([])
+  const [mousePos,    setMousePos]    = useState({ x: -200, y: -200, active: false })
+  const inputRef = useRef(null)
+  const containerRef = useRef(null)
+
+  const handleMouseMove = useCallback((e) => {
+    if (!containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    setMousePos({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      active: true,
+    })
+  }, [])
+
+  const handleMouseLeave = useCallback(() => {
+    setMousePos(prev => ({ ...prev, active: false }))
+  }, [])
 
   const handleFiles = useCallback(async (fileList) => {
     const arr = Array.from(fileList).filter(f =>
@@ -50,7 +75,8 @@ export default function SmartUpload({ onSelectTool, onFilesReady }) {
   }, [onFilesReady])
 
   const onDrop = useCallback((e) => {
-    e.preventDefault(); setDragging(false)
+    e.preventDefault()
+    setDragging(false)
     handleFiles(e.dataTransfer.files)
   }, [handleFiles])
 
@@ -62,121 +88,232 @@ export default function SmartUpload({ onSelectTool, onFilesReady }) {
     }
   }
 
-  return (
-    <div style={{ width:'100%' }}>
-      <style>{pulse}{spin}{fadeUp}</style>
+  const clearFiles = (e) => {
+    e.stopPropagation()
+    setFiles([])
+    setMetadata(null)
+    setSuggestions([])
+    onFilesReady?.([])
+    if (inputRef.current) inputRef.current.value = ''
+  }
 
-      {/* ── Drop Zone ── */}
+  return (
+    <div style={{ width: '100%', position: 'relative' }}>
+      {/* ── Drop Zone Container with Cursor Spotlight ── */}
       <div
-        onDragEnter={e => { e.preventDefault(); setDragging(true)  }}
-        onDragOver={e  => { e.preventDefault(); setDragging(true)  }}
+        ref={containerRef}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        onDragEnter={e => { e.preventDefault(); setDragging(true) }}
+        onDragOver={e  => { e.preventDefault(); setDragging(true) }}
         onDragLeave={e => { e.preventDefault(); setDragging(false) }}
         onDrop={onDrop}
         onClick={() => inputRef.current?.click()}
+        className="saas-spotlight"
         style={{
-          border:       `2px dashed ${dragging ? 'var(--accent)' : 'rgba(234,88,12,0.35)'}`,
-          borderRadius: '20px',
-          padding:      '52px 32px',
-          textAlign:    'center',
-          cursor:       'pointer',
-          background:   dragging
-            ? 'rgba(234,88,12,0.12)'
-            : 'linear-gradient(135deg,rgba(234,88,12,0.06),rgba(232,121,249,0.04))',
-          transition:   'all 0.2s',
-          position:     'relative',
-          overflow:     'hidden',
+          border: dragging
+            ? '2px solid var(--brand)'
+            : '1px solid var(--border)',
+          borderRadius: '16px',
+          padding: files.length > 0 ? '36px 28px' : '44px 32px',
+          textAlign: 'center',
+          cursor: 'pointer',
+          background: dragging
+            ? 'var(--bg3)'
+            : 'var(--bg2)',
+          boxShadow: dragging
+            ? '0 0 0 4px rgba(234,88,12,0.18), var(--shadow-lg)'
+            : 'var(--shadow)',
+          transform: dragging ? 'scale(1.008)' : 'none',
+          transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+          position: 'relative',
+          overflow: 'hidden',
         }}
       >
-        {/* Glow orb */}
-        <div style={{
-          position:'absolute', top:'-40px', left:'50%', transform:'translateX(-50%)',
-          width:'200px', height:'200px', borderRadius:'50%',
-          background:'radial-gradient(circle,rgba(234,88,12,0.18) 0%,transparent 70%)',
-          pointerEvents:'none',
-        }}/>
+        {/* Dynamic Cursor-Tracking Ambient Spotlight */}
+        <div
+          className="saas-spotlight-layer"
+          style={{
+            opacity: mousePos.active || dragging ? 1 : 0,
+            background: `radial-gradient(420px circle at ${mousePos.x}px ${mousePos.y}px, var(--spotlight), transparent 75%)`,
+            transition: 'opacity 0.25s ease',
+          }}
+        />
 
         <input
           ref={inputRef}
           type="file"
           accept=".pdf,application/pdf"
           multiple
-          style={{ display:'none' }}
+          style={{ display: 'none' }}
           onChange={e => handleFiles(e.target.files)}
         />
 
         {analyzing ? (
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'14px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', position: 'relative', zIndex: 2 }}>
             <div style={{
-              width:'40px', height:'40px', borderRadius:'50%',
-              border:'3px solid rgba(234,88,12,0.2)',
-              borderTopColor:'var(--accent)',
-              animation:'sgSpin 0.8s linear infinite',
-            }}/>
-            <p style={{ fontSize:'15px', fontWeight:600, color:'var(--text)' }}>Analyzing your file…</p>
-            <p style={{ fontSize:'13px', color:'var(--text3)' }}>Detecting document type and best tools</p>
+              width: '44px',
+              height: '44px',
+              borderRadius: '12px',
+              background: 'var(--bg3)',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <Loader2 size={22} color="var(--brand)" className="spin" />
+            </div>
+            <p style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text)', margin: 0 }}>
+              Analyzing document structure…
+            </p>
+            <p style={{ fontSize: '13px', color: 'var(--text3)', margin: 0 }}>
+              Inspecting pages, text layers, and optimal tools client-side
+            </p>
           </div>
         ) : files.length > 0 ? (
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:'10px' }}>
-            <div style={{ fontSize:'32px' }}>📄</div>
-            <p style={{ fontSize:'15px', fontWeight:700, color:'var(--text)' }}>
-              {files.length === 1 ? files[0].name : `${files.length} files selected`}
-            </p>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', position: 'relative', zIndex: 2 }}>
+            <div style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '12px',
+              background: 'var(--bg3)',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--brand)',
+            }}>
+              <FileCheck size={26} />
+            </div>
+
+            <div style={{ maxWidth: '90%' }}>
+              <p style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {files.length === 1 ? files[0].name : `${files.length} documents selected`}
+              </p>
+              <p style={{ fontSize: '12px', color: 'var(--text3)', margin: '4px 0 0' }}>
+                {(files.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(2)} MB total
+              </p>
+            </div>
+
             {metadata && (
-              <div style={{ display:'flex', gap:'12px', flexWrap:'wrap', justifyContent:'center' }}>
-                {metadata.sizeLabel && <Chip label={metadata.sizeLabel} />}
-                {metadata.pageCount && <Chip label={`${metadata.pageCount} pages`} />}
-                {metadata.isResume  && <Chip label="📋 Resume" color="var(--accent)" />}
-                {metadata.isScanned && <Chip label="🖨 Scanned" color="var(--gold)" />}
-                {metadata.isInvoice && <Chip label="🧾 Invoice" color="var(--green)" />}
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '2px' }}>
+                {metadata.pageCount && (
+                  <span className="badge">
+                    <FileText size={11} /> {metadata.pageCount} {metadata.pageCount === 1 ? 'page' : 'pages'}
+                  </span>
+                )}
+                {metadata.isResume && (
+                  <span className="badge" style={{ color: 'var(--brand)', borderColor: 'var(--border2)' }}>
+                    <Sparkles size={11} /> Resume
+                  </span>
+                )}
+                {metadata.isScanned && (
+                  <span className="badge" style={{ color: 'var(--gold)', borderColor: 'var(--border2)' }}>
+                    <FileText size={11} /> Scanned
+                  </span>
+                )}
+                {metadata.isInvoice && (
+                  <span className="badge" style={{ color: 'var(--green)', borderColor: 'var(--border2)' }}>
+                    <FileCheck size={11} /> Invoice
+                  </span>
+                )}
               </div>
             )}
-            <p style={{ fontSize:'12px', color:'var(--accent2)', marginTop:'4px' }}>
-              Click to change file
-            </p>
+
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '6px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text3)' }}>
+                Click to choose another file, or
+              </span>
+              <button
+                type="button"
+                onClick={clearFiles}
+                className="btn btn-ghost"
+                style={{ height: '26px', padding: '0 8px', fontSize: '11px', gap: '4px' }}
+              >
+                <X size={12} /> Remove
+              </button>
+            </div>
           </div>
         ) : (
-          <>
+          <div style={{ position: 'relative', zIndex: 2 }}>
             <div style={{
-              width:'56px', height:'56px', borderRadius:'14px',
-              background:'linear-gradient(135deg,rgba(234,88,12,0.2),rgba(232,121,249,0.15))',
-              border:'1px solid rgba(234,88,12,0.3)',
-              display:'flex', alignItems:'center', justifyContent:'center',
-              fontSize:'26px', margin:'0 auto 18px',
-            }}>📄</div>
-            <p style={{ fontSize:'17px', fontWeight:700, color:'var(--text)', marginBottom:'8px' }}>
-              Drop your PDF here
+              width: '52px',
+              height: '52px',
+              borderRadius: '14px',
+              background: 'var(--bg3)',
+              border: '1px solid var(--border)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--brand)',
+              margin: '0 auto 14px',
+              transition: 'transform 0.2s ease, border-color 0.2s ease',
+            }}
+            className={dragging ? 'scale-in' : ''}
+            >
+              <UploadCloud size={26} />
+            </div>
+
+            <p style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text)', marginBottom: '6px' }}>
+              {dragging ? 'Drop your PDF right here' : 'Drop your PDF here, or click to browse'}
             </p>
-            <p style={{ fontSize:'13px', color:'var(--text3)', marginBottom:'16px' }}>
-              or click to browse — we'll detect the best tools automatically
+            <p style={{ fontSize: '13px', color: 'var(--text3)', marginBottom: '18px', maxWidth: '420px', margin: '0 auto 18px' }}>
+              We'll inspect page count, text layers, and recommend the best tools automatically.
             </p>
-            <div style={{ display:'flex', gap:'10px', justifyContent:'center', flexWrap:'wrap' }}>
-              {['No signup', 'Most tools run on your device', 'No watermark'].map(t => (
-                <span key={t} style={{
-                  fontSize:'11px', color:'var(--green)', background:'rgba(21,128,61,0.1)',
-                  border:'1px solid rgba(21,128,61,0.25)', borderRadius:'999px', padding:'3px 10px',
-                }}>✓ {t}</span>
+
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              {[
+                { label: 'No account required', icon: Check },
+                { label: 'Runs client-side in browser', icon: ShieldCheck },
+                { label: 'Zero watermarks', icon: Sparkles },
+              ].map(({ label, icon: Icon }) => (
+                <span
+                  key={label}
+                  className="badge"
+                  style={{
+                    background: 'var(--bg3)',
+                    color: 'var(--text2)',
+                    borderColor: 'var(--border)',
+                    fontSize: '11px',
+                    padding: '3px 10px',
+                    height: 'auto',
+                  }}
+                >
+                  <Icon size={12} color="var(--green)" /> {label}
+                </span>
               ))}
             </div>
-          </>
+          </div>
         )}
       </div>
 
-      {/* ── Suggestions ── */}
+      {/* ── Recommended Suggestions Bar ── */}
       {suggestions.length > 0 && !analyzing && (
-        <div style={{ marginTop:'24px', animation:'sgFadeUp 0.35s ease forwards' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'14px' }}>
+        <div style={{ marginTop: '22px' }} className="fade-up">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
             <span style={{
-              fontSize:'11px', fontWeight:700, letterSpacing:'.1em', textTransform:'uppercase',
-              color:'var(--accent2)', background:'rgba(234,88,12,0.1)',
-              border:'1px solid rgba(234,88,12,0.2)', borderRadius:'999px', padding:'3px 12px',
-            }}>✦ Recommended for you</span>
-            <div style={{ flex:1, height:'1px', background:'var(--border)' }}/>
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '11px',
+              fontWeight: 600,
+              letterSpacing: '.04em',
+              textTransform: 'uppercase',
+              color: 'var(--brand)',
+              background: 'var(--bg3)',
+              border: '1px solid var(--border2)',
+              borderRadius: '999px',
+              padding: '3px 12px',
+            }}>
+              <Sparkles size={12} /> Recommended actions
+            </span>
+            <div style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
           </div>
 
           <div style={{
-            display:'grid',
-            gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',
-            gap:'12px',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+            gap: '12px',
           }}>
             {suggestions.map((sug, i) => (
               <SuggestionCard
@@ -193,53 +330,80 @@ export default function SmartUpload({ onSelectTool, onFilesReady }) {
 }
 
 function SuggestionCard({ sug, onClick }) {
-  const [hov, setHov] = useState(false)
+  const [coords, setCoords] = useState({ x: 0, y: 0, hover: false })
+  const cardRef = useRef(null)
+  const tool = toolById(sug.id)
+  const IconComponent = tool?.icon || Sparkles
+
+  const onMouseMove = (e) => {
+    if (!cardRef.current) return
+    const rect = cardRef.current.getBoundingClientRect()
+    setCoords({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      hover: true,
+    })
+  }
+
   return (
     <div
+      ref={cardRef}
       onClick={onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
+      onMouseMove={onMouseMove}
+      onMouseEnter={() => setCoords(c => ({ ...c, hover: true }))}
+      onMouseLeave={() => setCoords(c => ({ ...c, hover: false }))}
+      className="saas-spotlight"
       style={{
-        background:    hov ? `rgba(${hexToRgb(sug.color)},0.15)` : `rgba(${hexToRgb(sug.color)},0.07)`,
-        border:        `1px solid ${hov ? sug.color+'88' : sug.color+'33'}`,
-        borderRadius:  '14px',
-        padding:       '16px',
-        cursor:        'pointer',
-        transition:    'all 0.18s',
-        transform:     hov ? 'translateY(-2px)' : 'none',
-        boxShadow:     hov ? `0 8px 24px rgba(${hexToRgb(sug.color)},0.2)` : 'none',
+        background: 'var(--bg2)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '16px',
+        cursor: 'pointer',
+        transition: 'border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease',
+        transform: coords.hover ? 'translateY(-2px)' : 'none',
+        boxShadow: coords.hover ? 'var(--shadow-lg)' : 'var(--shadow)',
+        borderColor: coords.hover ? 'var(--border2)' : 'var(--border)',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
+        position: 'relative',
+        overflow: 'hidden',
       }}
     >
-      <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' }}>
-        <span style={{ fontSize:'20px' }}>{sug.icon}</span>
-        <span style={{ fontSize:'13px', fontWeight:700, color:'var(--text)' }}>{sug.title}</span>
+      <div
+        className="saas-spotlight-layer"
+        style={{
+          opacity: coords.hover ? 1 : 0,
+          background: `radial-gradient(220px circle at ${coords.x}px ${coords.y}px, var(--spotlight), transparent 75%)`,
+        }}
+      />
+
+      <div style={{ position: 'relative', zIndex: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+          <span className="tool-icon" style={{ width: '30px', height: '30px', borderRadius: '7px' }}>
+            <IconComponent size={15} />
+          </span>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
+            {sug.title}
+          </span>
+        </div>
+        <p style={{ fontSize: '12px', color: 'var(--text3)', lineHeight: 1.5, margin: 0 }}>
+          {sug.reason}
+        </p>
       </div>
-      <p style={{ fontSize:'11px', color:'var(--text3)', lineHeight:1.6 }}>{sug.reason}</p>
-      {sug.isWorkflow && (
-        <span style={{
-          display:'inline-block', marginTop:'8px',
-          fontSize:'10px', fontWeight:700, color:sug.color,
-          background:`rgba(${hexToRgb(sug.color)},0.15)`,
-          border:`1px solid ${sug.color}44`,
-          borderRadius:'999px', padding:'2px 8px',
-        }}>⚡ One-click workflow</span>
-      )}
+
+      <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative', zIndex: 2 }}>
+        {sug.isWorkflow ? (
+          <span className="badge" style={{ color: 'var(--brand)', borderColor: 'var(--border2)', fontSize: '10px' }}>
+            <Zap size={10} /> Fast workflow
+          </span>
+        ) : (
+          <span />
+        )}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11px', fontWeight: 600, color: 'var(--brand)' }}>
+          Launch <ArrowRight size={11} />
+        </span>
+      </div>
     </div>
   )
-}
-
-function Chip({ label, color='var(--accent2)' }) {
-  return (
-    <span style={{
-      fontSize:'11px', color, background:`rgba(${hexToRgb(color)},0.12)`,
-      border:`1px solid ${color}33`, borderRadius:'999px', padding:'2px 10px',
-    }}>{label}</span>
-  )
-}
-
-function hexToRgb(hex) {
-  const r = parseInt(hex.slice(1,3),16)
-  const g = parseInt(hex.slice(3,5),16)
-  const b = parseInt(hex.slice(5,7),16)
-  return `${r},${g},${b}`
 }

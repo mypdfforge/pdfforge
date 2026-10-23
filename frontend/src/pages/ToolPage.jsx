@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Loader2, CheckCircle, AlertCircle, Info, X, Download,
-         RotateCw, Trash2, Copy, ZoomIn } from 'lucide-react'
+         RotateCw, Trash2, Copy, ZoomIn, FileText, ChevronUp, ChevronDown, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import * as api from '../utils/api'
 import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
@@ -51,23 +51,23 @@ function MultiFileSidebar({ files, onReorder, onRemove, dropZoneJSX, onRun, stat
       <div style={{ flex:1, overflowY:'auto', padding:'10px', display:'flex', flexDirection:'column', gap:'8px' }}>
         {dropZoneJSX}
         {files.length === 0 ? (
-          <div style={{ textAlign:'center', padding:'12px', color:'var(--text3)', fontSize:'12px' }}>
-            <div style={{ fontSize:'22px', marginBottom:'5px', opacity:0.2 }}>📄</div>
+          <div style={{ textAlign:'center', padding:'16px 12px', color:'var(--text3)', fontSize:'12px' }}>
+            <FileText size={22} color="var(--text3)" style={{ margin:'0 auto 6px', display:'block', opacity:0.35 }} />
             Drop 2+ PDFs above to merge
           </div>
         ) : (
           files.map((f, i) => (
-            <div key={i} style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'7px', padding:'7px 8px', display:'flex', alignItems:'center', gap:'6px' }}>
-              <span style={{ fontSize:'13px' }}>📄</span>
+            <div key={i} style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'7px', padding:'7px 8px', display:'flex', alignItems:'center', gap:'8px' }}>
+              <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
               <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:'10px', color:'var(--text)', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</div>
+                <div style={{ fontSize:'11px', color:'var(--text)', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.name}</div>
                 <div style={{ fontSize:'9px', color:'var(--text3)' }}>{(f.size/1024).toFixed(0)} KB</div>
               </div>
-              <div style={{ display:'flex', flexDirection:'column' }}>
-                <button onClick={()=>{ if(i>0){const n=[...files];[n[i-1],n[i]]=[n[i],n[i-1]];onReorder(n)} }} disabled={i===0} style={{ background:'none', border:'none', color:i===0?'var(--border)':'var(--text3)', cursor:i===0?'default':'pointer', fontSize:'11px', lineHeight:1.2 }}>▲</button>
-                <button onClick={()=>{ if(i<files.length-1){const n=[...files];[n[i],n[i+1]]=[n[i+1],n[i]];onReorder(n)} }} disabled={i===files.length-1} style={{ background:'none', border:'none', color:i===files.length-1?'var(--border)':'var(--text3)', cursor:i===files.length-1?'default':'pointer', fontSize:'11px', lineHeight:1.2 }}>▼</button>
+              <div style={{ display:'flex', flexDirection:'column', gap:'1px' }}>
+                <button onClick={()=>{ if(i>0){const n=[...files];[n[i-1],n[i]]=[n[i],n[i-1]];onReorder(n)} }} disabled={i===0} style={{ background:'none', border:'none', color:i===0?'var(--border)':'var(--text2)', cursor:i===0?'default':'pointer', padding:'1px', display:'flex', alignItems:'center' }} aria-label="Move up"><ChevronUp size={12}/></button>
+                <button onClick={()=>{ if(i<files.length-1){const n=[...files];[n[i],n[i+1]]=[n[i+1],n[i]];onReorder(n)} }} disabled={i===files.length-1} style={{ background:'none', border:'none', color:i===files.length-1?'var(--border)':'var(--text2)', cursor:i===files.length-1?'default':'pointer', padding:'1px', display:'flex', alignItems:'center' }} aria-label="Move down"><ChevronDown size={12}/></button>
               </div>
-              <button onClick={()=>onRemove(i)} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'14px', lineHeight:1 }}>×</button>
+              <button onClick={()=>onRemove(i)} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', padding:'2px', display:'flex', alignItems:'center' }} aria-label="Remove file"><X size={13}/></button>
             </div>
           ))
         )}
@@ -78,8 +78,14 @@ function MultiFileSidebar({ files, onReorder, onRemove, dropZoneJSX, onRun, stat
               display:'flex', alignItems:'center', justifyContent:'center', gap:'7px',
               background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)',
               color:status==='loading'?'var(--text2)':'#fff',
-              boxShadow:status!=='loading'?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
-            {status==='loading'?'Merging…':status==='done'?'✓ Downloaded!':'Merge '+files.length+' PDFs'}
+              boxShadow:status!=='loading'?'0 2px 14px rgba(234,88,12,0.3)':'none' }}>
+            {status==='loading' ? (
+              <><Loader2 size={14} className="spin"/> Merging…</>
+            ) : status==='done' ? (
+              <><Check size={14}/> Downloaded!</>
+            ) : (
+              'Merge '+files.length+' PDFs'
+            )}
           </button>
         )}
         {files.length === 1 && (
@@ -159,8 +165,8 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
   if (!file) return (
     <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text3)' }}>
       <div style={{ textAlign:'center' }}>
-        <div style={{ fontSize:'40px', opacity:0.15, marginBottom:'12px' }}>📄</div>
-        <p style={{ fontSize:'13px' }}>Upload a PDF to see pages</p>
+        <FileText size={40} color="var(--text3)" style={{ opacity:0.25, margin:'0 auto 12px', display:'block' }} />
+        <p style={{ fontSize:'13px', fontWeight:500 }}>Upload a PDF to view and select pages</p>
       </div>
     </div>
   )
@@ -260,10 +266,10 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
                   background: isSelected ? 'var(--accent)' : 'transparent',
                   border: isSelected ? '2px solid #fff' : '2.5px solid #000',
                   display:'flex', alignItems:'center', justifyContent:'center',
-                  fontSize:'11px', color:'#fff', fontWeight:700,
+                  color:'#fff',
                   boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
                   transition:'all 0.12s',
-                }}>{isSelected ? '✓' : ''}</div>
+                }}>{isSelected ? <Check size={11} strokeWidth={3}/> : null}</div>
               </div>
 
               {/* Hover action icons — shown via CSS, zero JS overhead */}
@@ -577,10 +583,13 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
         <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'8px 12px' }}>
           {files.map((f,i) => (
             <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'5px 0', borderBottom:i<files.length-1?'1px solid var(--border)':'none' }}>
-              <span style={{ fontSize:'12px', color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>📄 {f.name}</span>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'12px', color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>
+                <FileText size={13} color="var(--brand)" style={{ flexShrink:0 }} />
+                <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{f.name}</span>
+              </span>
               <div style={{ display:'flex', gap:'8px', alignItems:'center', marginLeft:'8px', flexShrink:0 }}>
                 <span style={{ fontSize:'11px', color:'var(--text3)' }}>{(f.size/1024).toFixed(0)}KB</span>
-                <button onClick={()=>setFiles(p=>p.filter((_,j)=>j!==i))} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'15px', lineHeight:1 }}>×</button>
+                <button onClick={()=>setFiles(p=>p.filter((_,j)=>j!==i))} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', padding:'2px', display:'flex', alignItems:'center' }} aria-label="Remove file"><X size={13}/></button>
               </div>
             </div>
           ))}
@@ -719,10 +728,13 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'8px 14px' }}>
               {files.map((f,i) => (
                 <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'6px 0', borderBottom:i<files.length-1?'1px solid var(--border)':'none' }}>
-                  <span style={{ fontSize:'13px', color:'var(--text)' }}>📄 {f.name}</span>
-                  <div style={{ display:'flex', gap:'10px', alignItems:'center' }}>
+                  <span style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'13px', color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>
+                    <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
+                    <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{f.name}</span>
+                  </span>
+                  <div style={{ display:'flex', gap:'10px', alignItems:'center', marginLeft:'8px', flexShrink:0 }}>
                     <span style={{ fontSize:'12px', color:'var(--text3)' }}>{(f.size/1024).toFixed(0)} KB</span>
-                    <button onClick={()=>setFiles(p=>p.filter((_,j)=>j!==i))} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'16px' }}>×</button>
+                    <button onClick={()=>setFiles(p=>p.filter((_,j)=>j!==i))} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', padding:'2px', display:'flex', alignItems:'center' }} aria-label="Remove file"><X size={13}/></button>
                   </div>
                 </div>
               ))}
@@ -791,7 +803,12 @@ function ClassicPageSidebar({ file, selectedPages, onSelectionChange }) {
   const selectNone = () => onSelectionChange(new Set())
   const selectOdd  = () => onSelectionChange(new Set(thumbs.filter(t=>t.page%2===1).map(t=>t.page)))
   const selectEven = () => onSelectionChange(new Set(thumbs.filter(t=>t.page%2===0).map(t=>t.page)))
-  if (!file) return <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:'var(--text3)', padding:'20px', textAlign:'center' }}><div style={{ fontSize:'28px', opacity:0.2, marginBottom:'8px' }}>📄</div><p style={{ fontSize:'12px' }}>Upload PDF to see pages</p></div>
+  if (!file) return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:'var(--text3)', padding:'20px', textAlign:'center' }}>
+      <FileText size={28} color="var(--text3)" style={{ opacity:0.3, marginBottom:'8px' }} />
+      <p style={{ fontSize:'12px' }}>Upload PDF to see pages</p>
+    </div>
+  )
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column' }}>
       <div style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)', display:'flex', gap:'4px', flexWrap:'wrap' }}>
@@ -807,7 +824,7 @@ function ClassicPageSidebar({ file, selectedPages, onSelectionChange }) {
           return (
             <div key={t.page} onClick={()=>toggle(t.page)} style={{ cursor:'pointer', position:'relative', borderRadius:'7px', overflow:'hidden', border:`2px solid ${sel?'var(--accent)':'var(--border)'}`, boxShadow:sel?'0 0 0 2px rgba(234,88,12,0.3)':'none', transition:'all 0.12s' }}>
               <img src={t.img} alt={`p${t.page}`} style={{ width:'100%', display:'block'}}/>
-              <div style={{ position:'absolute', top:'3px', right:'3px', width:'16px', height:'16px', borderRadius:'50%', background:sel?'var(--accent)':'rgba(0,0,0,0.55)', border:'2px solid #fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'9px', color:'#fff', fontWeight:700 }}>{sel?'✓':''}</div>
+              <div style={{ position:'absolute', top:'3px', right:'3px', width:'16px', height:'16px', borderRadius:'50%', background:sel?'var(--accent)':'rgba(0,0,0,0.55)', border:'2px solid #fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff' }}>{sel?<Check size={9} strokeWidth={3}/>:null}</div>
               <div style={{ textAlign:'center', fontSize:'9px', color:'var(--text3)', padding:'2px 0', background:'var(--bg2)' }}>p.{t.page}</div>
             </div>
           )
@@ -832,14 +849,19 @@ function ClassicPreviewPanel({ file, selectedPages }) {
     }, 5).catch(() => setLoading(false))
   }, [file])
   const thumb = thumbs.find(t => t.page === currentPage)
-  if (!file) return <div style={{ height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color:'var(--text3)', background:'var(--bg3)' }}><div style={{ fontSize:'48px', opacity:0.1, marginBottom:'14px' }}>📄</div><p style={{ fontSize:'14px', fontWeight:600, color:'var(--text2)' }}>Upload a PDF to preview</p></div>
+  if (!file) return (
+    <div style={{ height:'100%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color:'var(--text3)', background:'var(--bg3)' }}>
+      <FileText size={44} color="var(--text3)" style={{ opacity:0.25, marginBottom:'14px' }} />
+      <p style={{ fontSize:'14px', fontWeight:600, color:'var(--text2)' }}>Upload a PDF to preview</p>
+    </div>
+  )
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column' }}>
       {totalPages>1 && (
         <div style={{ padding:'8px 16px', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'center', gap:'12px', background:'var(--bg2)' }}>
-          <button onClick={()=>setCurrentPage(p=>Math.max(1,p-1))} disabled={currentPage<=1} style={{ background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 8px', cursor:'pointer', color:'var(--text2)', opacity:currentPage<=1?0.4:1 }}>‹</button>
+          <button onClick={()=>setCurrentPage(p=>Math.max(1,p-1))} disabled={currentPage<=1} style={{ background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 6px', cursor:'pointer', color:'var(--text2)', opacity:currentPage<=1?0.4:1, display:'flex', alignItems:'center' }} aria-label="Previous page"><ChevronLeft size={13}/></button>
           <span style={{ fontSize:'12px', color:'var(--text2)' }}>Page {currentPage} of {totalPages}</span>
-          <button onClick={()=>setCurrentPage(p=>Math.min(totalPages,p+1))} disabled={currentPage>=totalPages} style={{ background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 8px', cursor:'pointer', color:'var(--text2)', opacity:currentPage>=totalPages?0.4:1 }}>›</button>
+          <button onClick={()=>setCurrentPage(p=>Math.min(totalPages,p+1))} disabled={currentPage>=totalPages} style={{ background:'none', border:'1px solid var(--border)', borderRadius:'6px', padding:'4px 6px', cursor:'pointer', color:'var(--text2)', opacity:currentPage>=totalPages?0.4:1, display:'flex', alignItems:'center' }} aria-label="Next page"><ChevronRight size={13}/></button>
         </div>
       )}
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'24px', overflowY:'auto', background:'var(--bg3)' }}>

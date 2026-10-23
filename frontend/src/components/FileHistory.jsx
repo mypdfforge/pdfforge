@@ -1,12 +1,11 @@
 /**
  * FileHistory.jsx
  * Shows recent processed files (last 24h) from localStorage.
- * No login required.
+ * Enterprise SaaS audit history feel.
  */
 import React, { useState, useEffect } from 'react'
+import { X, FileText, FolderArchive, Lock, Clock, Trash2, ArrowRight } from 'lucide-react'
 import { getHistory, clearHistory, formatBytes } from '../utils/credits'
-
-const fadeUp = `@keyframes fhFadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}`
 
 export default function FileHistory({ onClose }) {
   const [items, setItems] = useState([])
@@ -34,84 +33,172 @@ export default function FileHistory({ onClose }) {
   }
 
   return (
-    <div style={{
-      position:'fixed', inset:0, zIndex:9998,
-      background:'rgba(0,0,0,0.6)', backdropFilter:'blur(4px)',
-      display:'flex', alignItems:'flex-end', justifyContent:'flex-end',
-      padding:'16px',
-    }} onClick={e => { if (e.target === e.currentTarget) onClose?.() }}>
-      <style>{fadeUp}</style>
-
-      <div style={{
-        background:'var(--bg2)', border:'1px solid var(--border)',
-        borderRadius:'20px', width:'360px', maxHeight:'70vh',
-        display:'flex', flexDirection:'column',
-        animation:'fhFadeUp 0.25s ease',
-        overflow:'hidden',
-      }}>
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9998,
+        background: 'rgba(0,0,0,0.65)',
+        backdropFilter: 'blur(6px)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'flex-end',
+        padding: '16px',
+      }}
+      onClick={e => { if (e.target === e.currentTarget) onClose?.() }}
+    >
+      <div
+        className="fade-up"
+        style={{
+          background: 'var(--bg2)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)',
+          width: '380px',
+          maxHeight: '75vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: 'var(--shadow-lg)',
+          overflow: 'hidden',
+        }}
+      >
         {/* Header */}
-        <div style={{
-          display:'flex', alignItems:'center', justifyContent:'space-between',
-          padding:'16px 18px', borderBottom:'1px solid var(--border)', flexShrink:0,
-        }}>
-          <div>
-            <p style={{ fontSize:'14px', fontWeight:700, color:'var(--text)' }}>Recent Files</p>
-            <p style={{ fontSize:'11px', color:'var(--text3)' }}>Last 24 hours — auto-deleted after</p>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '14px 18px',
+            borderBottom: '1px solid var(--border)',
+            flexShrink: 0,
+            background: 'var(--bg)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Clock size={16} color="var(--brand)" />
+            <div>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)', margin: 0 }}>
+                Recent Documents
+              </p>
+              <p style={{ fontSize: '11px', color: 'var(--text3)', margin: 0 }}>
+                Local session history · Auto-purged after 24h
+              </p>
+            </div>
           </div>
-          <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             {items.length > 0 && (
-              <button onClick={() => { clearHistory(); setItems([]) }}
-                style={{ fontSize:'11px', color:'var(--red)', background:'none', border:'none', cursor:'pointer' }}>
-                Clear all
+              <button
+                onClick={() => { clearHistory(); setItems([]) }}
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--red)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <Trash2 size={12} /> Clear
               </button>
             )}
-            <button onClick={onClose}
-              style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer', fontSize:'18px' }}>
-              ×
+            <button
+              onClick={onClose}
+              className="icon-btn"
+              style={{ width: '28px', height: '28px', border: 'none', background: 'none' }}
+              aria-label="Close"
+            >
+              <X size={15} />
             </button>
           </div>
         </div>
 
         {/* List */}
-        <div style={{ overflowY:'auto', flex:1, padding:'12px' }}>
+        <div style={{ overflowY: 'auto', flex: 1, padding: '12px' }}>
           {items.length === 0 ? (
-            <div style={{ textAlign:'center', padding:'40px 20px' }}>
-              <div style={{ fontSize:'32px', marginBottom:'10px' }}>🗂️</div>
-              <p style={{ fontSize:'14px', fontWeight:600, color:'var(--text)' }}>No recent files</p>
-              <p style={{ fontSize:'12px', color:'var(--text3)', marginTop:'4px' }}>
-                Processed files will appear here for 24 hours
+            <div style={{ textAlign: 'center', padding: '48px 20px' }}>
+              <div
+                style={{
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '12px',
+                  background: 'var(--bg3)',
+                  border: '1px solid var(--border)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 12px',
+                  color: 'var(--text3)',
+                }}
+              >
+                <FolderArchive size={22} />
+              </div>
+              <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)', margin: 0 }}>
+                No recent documents
+              </p>
+              <p style={{ fontSize: '12px', color: 'var(--text3)', marginTop: '4px' }}>
+                Files you process will appear here temporarily
               </p>
             </div>
           ) : (
-            <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {items.map((item, i) => (
-                <div key={item.id || i} style={{
-                  background:'var(--bg3)', border:'1px solid var(--border)',
-                  borderRadius:'12px', padding:'12px 14px',
-                  display:'flex', alignItems:'center', gap:'12px',
-                }}>
-                  <div style={{
-                    width:'36px', height:'36px', borderRadius:'8px', flexShrink:0,
-                    background:'rgba(234,88,12,0.12)', border:'1px solid rgba(234,88,12,0.2)',
-                    display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px',
-                  }}>📄</div>
+                <div
+                  key={item.id || i}
+                  style={{
+                    background: 'var(--bg3)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)',
+                    padding: '10px 12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '34px',
+                      height: '34px',
+                      borderRadius: '8px',
+                      flexShrink: 0,
+                      background: 'var(--bg2)',
+                      border: '1px solid var(--border)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--brand)',
+                    }}
+                  >
+                    <FileText size={16} />
+                  </div>
 
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <p style={{
-                      fontSize:'13px', fontWeight:600, color:'var(--text)',
-                      overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
-                    }}>{item.name}</p>
-                    <div style={{ display:'flex', gap:'8px', marginTop:'3px', flexWrap:'wrap' }}>
-                      <span style={{ fontSize:'11px', color:'var(--accent2)' }}>{item.toolLabel}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        color: 'var(--text)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        margin: 0,
+                      }}
+                    >
+                      {item.name}
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '3px', flexWrap: 'wrap' }}>
+                      <span className="badge" style={{ fontSize: '10px', height: '18px', padding: '0 6px' }}>
+                        {item.toolLabel}
+                      </span>
                       {item.outputSize && item.originalSize && item.outputSize < item.originalSize && (
-                        <span style={{ fontSize:'11px', color:'var(--green)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--green)' }}>
                           {formatBytes(item.originalSize)} → {formatBytes(item.outputSize)}
                         </span>
                       )}
                     </div>
-                    <div style={{ display:'flex', gap:'10px', marginTop:'2px' }}>
-                      <span style={{ fontSize:'10px', color:'var(--text3)' }}>{timeAgo(item.ts)}</span>
-                      <span style={{ fontSize:'10px', color:'var(--text3)' }}>{expiresIn(item.ts)}</span>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '3px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--text3)' }}>{timeAgo(item.ts)}</span>
+                      <span style={{ fontSize: '10px', color: 'var(--text3)' }}>· {expiresIn(item.ts)}</span>
                     </div>
                   </div>
                 </div>
@@ -121,13 +208,20 @@ export default function FileHistory({ onClose }) {
         </div>
 
         {/* Footer */}
-        <div style={{
-          padding:'12px 18px', borderTop:'1px solid var(--border)',
-          flexShrink:0, display:'flex', alignItems:'center', gap:'6px',
-        }}>
-          <span style={{ fontSize:'11px', color:'var(--text3)' }}>🔒</span>
-          <span style={{ fontSize:'11px', color:'var(--text3)' }}>
-            Files are stored locally only — never on our servers after processing
+        <div
+          style={{
+            padding: '10px 16px',
+            borderTop: '1px solid var(--border)',
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            background: 'var(--bg)',
+          }}
+        >
+          <Lock size={12} color="var(--green)" style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: '11px', color: 'var(--text3)', lineHeight: 1.4 }}>
+            Local sandbox only. No files are persisted on external infrastructure.
           </span>
         </div>
       </div>

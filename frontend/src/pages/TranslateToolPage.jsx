@@ -1,12 +1,12 @@
 import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
-import { Upload, Loader2, CheckCircle, AlertCircle, ArrowRight, Languages } from 'lucide-react'
+import { Upload, Loader2, CheckCircle, AlertCircle, ArrowRight, Languages, FileText, X } from 'lucide-react'
 import axios from 'axios'
 import { downloadBlob } from '../utils/api'
 
 const LANGUAGES = [
-  { code: 'auto',  label: '🔍 Auto Detect' },
+  { code: 'auto',  label: 'Auto Detect' },
   { code: 'en',    label: '🇬🇧 English' },
   { code: 'fr',    label: '🇫🇷 French' },
   { code: 'de',    label: '🇩🇪 German' },
@@ -150,8 +150,11 @@ export default function TranslateToolPage({ onBack, dark, onToggleTheme, onGoHom
             </div>
           ) : (
             <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '10px', padding: '9px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '13px', color: 'var(--text)' }}>📄 {file.name}</span>
-              <button onClick={() => { setFile(null); setResultInfo(null) }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '18px' }}>×</button>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: '13px', color: 'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>
+                <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
+                <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{file.name}</span>
+              </span>
+              <button onClick={() => { setFile(null); setResultInfo(null) }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding:'2px', display:'flex', alignItems:'center' }} aria-label="Remove file"><X size={14} /></button>
             </div>
           )}
 

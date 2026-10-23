@@ -1,12 +1,21 @@
 /**
  * SmartDownload.jsx
- * Post-processing download page with before/after stats and next action suggestions.
+ * Enterprise SaaS post-processing download panel with performance metrics & next actions.
  */
 import React, { useState, useEffect, useRef } from 'react'
+import {
+  Check,
+  Download,
+  ArrowRight,
+  ShieldCheck,
+  Lock,
+  Clock,
+  Sparkles,
+  RotateCcw,
+  FileCheck
+} from 'lucide-react'
 import { formatBytes, pctReduction, addToHistory } from '../utils/credits'
-
-const fadeUp = `@keyframes sdFadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}`
-const pop    = `@keyframes sdPop{0%{transform:scale(0.85)}60%{transform:scale(1.06)}100%{transform:scale(1)}}`
+import { toolById } from '../utils/tools'
 
 const NEXT_ACTIONS = {
   compress:      ['pdf-to-word', 'merge', 'watermark'],
@@ -20,163 +29,175 @@ const NEXT_ACTIONS = {
   default:       ['compress', 'merge', 'sign'],
 }
 
-const ACTION_META = {
-  compress:      { icon:'⬡', label:'Compress PDF',      color:'var(--gold)' },
-  merge:         { icon:'⊕', label:'Merge PDF',         color:'var(--green)' },
-  split:         { icon:'⊘', label:'Split PDF',         color:'var(--green)' },
-  watermark:     { icon:'◈', label:'Watermark',         color:'var(--accent2)' },
-  sign:          { icon:'✍', label:'Sign PDF',          color:'var(--accent2)' },
-  protect:       { icon:'🔐', label:'Protect PDF',      color:'var(--accent2)' },
-  'pdf-to-word': { icon:'📝', label:'Convert to Word',  color:'var(--accent2)' },
-  'word-to-pdf': { icon:'📋', label:'Word → PDF',       color:'var(--gold)' },
-  translate:     { icon:'⇄', label:'Translate',         color:'var(--accent2)' },
-  organize:      { icon:'⊞', label:'Organize Pages',    color:'var(--green)' },
-  ocr:           { icon:'⌕', label:'OCR',               color:'var(--gold)' },
-}
-
 export default function SmartDownload({
   toolId,
   originalFile,
   outputBlob,
-  outputFilename = 'output.pdf',
-  onSelectTool,
+  outputFilename,
   onReset,
+  onNextAction,
+  processingTimeMs,
 }) {
   const [downloaded, setDownloaded] = useState(false)
-  const [timeMs,     setTimeMs]     = useState(null)
-  const startRef = useRef(Date.now())
+  const autoTriggered = useRef(false)
+
+  const origSize = originalFile?.size || null
+  const outSize  = outputBlob?.size   || null
+  const savedPct = origSize && outSize && outSize < origSize ? pctReduction(origSize, outSize) : null
+  const timeMs   = processingTimeMs || null
 
   useEffect(() => {
-    setTimeMs(Date.now() - startRef.current)
-  }, [])
-
-  const origSize = originalFile?.size ?? null
-  const outSize  = outputBlob?.size  ?? null
-  const pct      = pctReduction(origSize, outSize)
-
-  // Auto-download
-  useEffect(() => {
-    if (outputBlob && !downloaded) {
+    if (!autoTriggered.current && outputBlob) {
+      autoTriggered.current = true
       triggerDownload()
+      if (originalFile && outputBlob) {
+        addToHistory({
+          name:         outputFilename || originalFile.name,
+          toolId,
+          toolLabel:    toolById(toolId)?.label || toolId,
+          originalSize: origSize,
+          outputSize:   outSize,
+        })
+      }
     }
   }, [outputBlob])
 
-  function triggerDownload() {
+  const triggerDownload = () => {
     if (!outputBlob) return
     const url = URL.createObjectURL(outputBlob)
     const a   = document.createElement('a')
     a.href     = url
-    a.download = outputFilename
+    a.download = outputFilename || 'output.pdf'
+    document.body.appendChild(a)
     a.click()
+    document.body.removeChild(a)
     URL.revokeObjectURL(url)
     setDownloaded(true)
-
-    // Save to history
-    addToHistory({
-      id:           `${toolId}-${Date.now()}`,
-      name:         outputFilename,
-      toolLabel:    ACTION_META[toolId]?.label || toolId,
-      originalSize: origSize,
-      outputSize:   outSize,
-      ts:           Date.now(),
-    })
   }
 
   const nextIds = NEXT_ACTIONS[toolId] || NEXT_ACTIONS.default
 
   return (
-    <div style={{ maxWidth:'560px', margin:'0 auto', padding:'24px 16px', textAlign:'center' }}>
-      <style>{fadeUp}{pop}</style>
+    <div style={{ maxWidth: '560px', margin: '0 auto', padding: '36px 16px', textAlign: 'center' }} className="fade-up">
+      {/* Success Badge */}
+      <div
+        style={{
+          width: '64px',
+          height: '64px',
+          borderRadius: '20px',
+          margin: '0 auto 18px',
+          background: 'rgba(21,128,61,0.12)',
+          border: '1px solid rgba(21,128,61,0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--green)',
+          boxShadow: '0 8px 24px rgba(21,128,61,0.15)',
+        }}
+        className="scale-in"
+      >
+        <Check size={32} strokeWidth={2.5} />
+      </div>
 
-      {/* Success icon */}
-      <div style={{
-        width:'72px', height:'72px', borderRadius:'50%', margin:'0 auto 20px',
-        background:'rgba(21,128,61,0.15)', border:'2px solid rgba(21,128,61,0.4)',
-        display:'flex', alignItems:'center', justifyContent:'center', fontSize:'32px',
-        animation:'sdPop 0.5s ease forwards',
-      }}>✓</div>
-
-      <h2 style={{ fontSize:'22px', fontWeight:800, color:'var(--text)', marginBottom:'6px' }}>
-        Done! Your file is ready
+      <h2 style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text)', marginBottom: '6px', letterSpacing: '-0.02em' }}>
+        Document processing complete
       </h2>
-      <p style={{ fontSize:'14px', color:'var(--text3)', marginBottom:'28px' }}>
-        {downloaded ? 'Download started automatically' : 'Click below to download'}
+      <p style={{ fontSize: '14px', color: 'var(--text3)', marginBottom: '24px' }}>
+        {downloaded ? 'Your file was downloaded automatically.' : 'Click below to save your processed document.'}
       </p>
 
-      {/* Stats row */}
+      {/* Metrics Row */}
       {(origSize || outSize || timeMs) && (
-        <div style={{
-          display:'flex', gap:'1px', borderRadius:'14px', overflow:'hidden',
-          border:'1px solid var(--border)', marginBottom:'24px',
-          animation:'sdFadeUp 0.4s ease 0.1s both',
-        }}>
+        <div
+          style={{
+            display: 'flex',
+            borderRadius: 'var(--radius-lg)',
+            overflow: 'hidden',
+            border: '1px solid var(--border)',
+            background: 'var(--bg2)',
+            marginBottom: '24px',
+            boxShadow: 'var(--shadow)',
+          }}
+        >
           {origSize && (
             <StatBox label="Original size" value={formatBytes(origSize)} />
           )}
           {outSize && (
-            <StatBox label="Output size"   value={formatBytes(outSize)}  highlight={pct > 0} />
+            <StatBox
+              label="Processed size"
+              value={formatBytes(outSize)}
+              highlight={!savedPct}
+              green={!!savedPct}
+            />
           )}
-          {pct > 0 && (
-            <StatBox label="Saved"         value={`${pct}%`}             highlight green />
+          {savedPct && (
+            <StatBox label="Space saved" value={`-${savedPct}%`} green />
           )}
           {timeMs && (
-            <StatBox label="Time"          value={timeMs < 1000 ? `${timeMs}ms` : `${(timeMs/1000).toFixed(1)}s`} />
+            <StatBox label="Latency" value={`${(timeMs / 1000).toFixed(1)}s`} />
           )}
         </div>
       )}
 
-      {/* Download button */}
-      <button
-        onClick={triggerDownload}
-        style={{
-          width:'100%', padding:'14px', borderRadius:'12px', border:'none',
-          background:'linear-gradient(135deg,var(--accent),#8b83ff)', color:'var(--text)',
-          fontSize:'15px', fontWeight:700, cursor:'pointer',
-          display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
-          marginBottom:'14px', transition:'opacity 0.15s',
-          animation:'sdFadeUp 0.4s ease 0.15s both',
-        }}
-      >
-        ⬇ Download {outputFilename}
-      </button>
+      {/* Primary Action Buttons */}
+      <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap', marginBottom: '32px' }}>
+        <button
+          onClick={triggerDownload}
+          className="btn btn-primary"
+          style={{ height: '42px', padding: '0 24px', fontSize: '14px', gap: '8px' }}
+        >
+          <Download size={16} /> Download {outputFilename || 'file'}
+        </button>
 
-      <button
-        onClick={onReset}
-        style={{
-          width:'100%', padding:'11px', borderRadius:'12px',
-          border:'1px solid var(--border)', background:'transparent',
-          color:'var(--text3)', fontSize:'13px', fontWeight:500, cursor:'pointer',
-          marginBottom:'32px',
-        }}
-      >Process another file</button>
+        {onReset && (
+          <button
+            onClick={onReset}
+            className="btn btn-ghost"
+            style={{ height: '42px', padding: '0 18px', fontSize: '14px', gap: '8px' }}
+          >
+            <RotateCcw size={15} /> Process another file
+          </button>
+        )}
+      </div>
 
-      {/* Next actions */}
-      {onSelectTool && (
-        <div style={{ animation:'sdFadeUp 0.4s ease 0.25s both' }}>
-          <p style={{
-            fontSize:'11px', fontWeight:700, letterSpacing:'.1em',
-            textTransform:'uppercase', color:'var(--text3)', marginBottom:'12px',
-          }}>What's next?</p>
-          <div style={{ display:'flex', gap:'10px', justifyContent:'center', flexWrap:'wrap' }}>
-            {nextIds.map(id => {
-              const meta = ACTION_META[id]
+      {/* Next Actions */}
+      {nextIds.length > 0 && onNextAction && (
+        <div style={{ textAlign: 'left', marginTop: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text3)' }}>
+              Next Recommended Step
+            </span>
+            <div style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+            {nextIds.map(actId => {
+              const meta = toolById(actId)
               if (!meta) return null
+              const IconComp = meta.icon || Sparkles
               return (
                 <button
-                  key={id}
-                  onClick={() => onSelectTool(id)}
+                  key={actId}
+                  onClick={() => onNextAction(actId)}
+                  className="tool-card"
                   style={{
-                    display:'flex', alignItems:'center', gap:'6px',
-                    padding:'8px 14px', borderRadius:'999px',
-                    border:`1px solid ${meta.color}33`,
-                    background:`rgba(${hexToRgb(meta.color)},0.08)`,
-                    color:'var(--text2)', fontSize:'12px', fontWeight:500,
-                    cursor:'pointer', transition:'all 0.15s',
+                    padding: '12px',
+                    display: 'flex',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: '10px',
+                    cursor: 'pointer',
                   }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = meta.color+'88'}
-                  onMouseLeave={e => e.currentTarget.style.borderColor = meta.color+'33'}
                 >
-                  <span>{meta.icon}</span> {meta.label}
+                  <span className="tool-icon" style={{ width: '32px', height: '32px' }}>
+                    <IconComp size={15} />
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {meta.label}
+                    </div>
+                  </div>
+                  <ArrowRight size={12} color="var(--text3)" />
                 </button>
               )
             })}
@@ -184,14 +205,27 @@ export default function SmartDownload({
         </div>
       )}
 
-      {/* Trust badges */}
-      <div style={{
-        display:'flex', gap:'16px', justifyContent:'center', flexWrap:'wrap',
-        marginTop:'32px', paddingTop:'24px', borderTop:'1px solid var(--border)',
-      }}>
-        {['🔒 No watermark','🚫 No signup needed','🗑 Auto-deleted in 24h'].map(b => (
-          <span key={b} style={{ fontSize:'11px', color:'var(--text3)' }}>{b}</span>
-        ))}
+      {/* Trust Badges */}
+      <div
+        style={{
+          display: 'flex',
+          gap: '16px',
+          justifyContent: 'center',
+          flexWrap: 'wrap',
+          marginTop: '36px',
+          paddingTop: '20px',
+          borderTop: '1px solid var(--border)',
+        }}
+      >
+        <span className="badge" style={{ gap: '6px' }}>
+          <ShieldCheck size={12} color="var(--green)" /> No watermarks
+        </span>
+        <span className="badge" style={{ gap: '6px' }}>
+          <Lock size={12} color="var(--green)" /> Private browser execution
+        </span>
+        <span className="badge" style={{ gap: '6px' }}>
+          <Clock size={12} color="var(--green)" /> Ephemeral memory only
+        </span>
       </div>
     </div>
   )
@@ -199,24 +233,26 @@ export default function SmartDownload({
 
 function StatBox({ label, value, highlight, green }) {
   return (
-    <div style={{
-      flex:1, padding:'14px 10px', background:'var(--bg3)',
-      borderRight:'1px solid var(--border)',
-    }}>
-      <div style={{
-        fontSize:'18px', fontWeight:800, lineHeight:1, marginBottom:'4px',
-        color: green ? 'var(--green)' : highlight ? 'var(--accent)' : '#ffffff',
-      }}>{value}</div>
-      <div style={{ fontSize:'11px', color:'var(--text3)' }}>{label}</div>
+    <div
+      style={{
+        flex: 1,
+        padding: '12px 8px',
+        borderRight: '1px solid var(--border)',
+        textAlign: 'center',
+      }}
+    >
+      <div
+        style={{
+          fontSize: '16px',
+          fontWeight: 700,
+          lineHeight: 1.2,
+          marginBottom: '3px',
+          color: green ? 'var(--green)' : highlight ? 'var(--brand)' : 'var(--text)',
+        }}
+      >
+        {value}
+      </div>
+      <div style={{ fontSize: '11px', color: 'var(--text3)' }}>{label}</div>
     </div>
   )
 }
-
-function hexToRgb(hex) {
-  const r = parseInt(hex.slice(1,3),16)
-  const g = parseInt(hex.slice(3,5),16)
-  const b = parseInt(hex.slice(5,7),16)
-  return `${r},${g},${b}`
-}
-
-
