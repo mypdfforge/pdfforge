@@ -20,6 +20,7 @@ Thumbs.db
 
 # Temp files
 *.pdf
+!frontend/fixtures/*.pdf
 *.zip
 *.docx
 *.xlsx

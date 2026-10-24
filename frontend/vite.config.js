@@ -14,5 +14,21 @@ export default defineConfig({
       process.env.VITE_OCR_SPACE_API_KEY || ''
     )
   },
-  server: { proxy: { '/api': 'http://localhost:8000' } }
+  server: { proxy: { '/api': 'http://localhost:8000' } },
+  build: {
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          // Split heavy conversion libs into separate lazy chunks
+          if (id.includes('jspdf-autotable')) return 'jspdf-autotable'
+          if (id.includes('jspdf'))           return 'jspdf'
+          if (id.includes('html2canvas'))     return 'html2canvas'
+          if (id.includes('mammoth'))         return 'mammoth'
+          if (id.includes('node_modules/react')) return 'react-vendor'
+          if (id.includes('@cantoo/pdf-lib')) return 'pdf-lib'
+        }
+      }
+    }
+  }
 })
