@@ -14,7 +14,7 @@ export const CATEGORIES = [
 ]
 
 // runs: 'browser' = file never leaves the device (verified: no network calls in its code path)
-//       'server'  = file is uploaded to the PDFForge backend (OCR also sends page images to OCR.space)
+//       'server'  = file is uploaded to the PDFForge backend (OCR still uploads until on-device OCR ships)
 export const TOOLS = [
   { id:'editor',       icon:Pencil,        label:'Resume Editor',    desc:'Edit text directly on the page, keeping the original layout.', category:'enhance',  runs:'server', featured:true },
   { id:'merge',        icon:Layers,        label:'Merge PDF',        desc:'Combine several PDFs into one.',                  category:'organize', runs:'browser' },
@@ -42,11 +42,11 @@ export const TOOLS = [
   { id:'pagenums',     icon:Hash,          label:'Page numbers',     desc:'Add page numbers with live preview.',             category:'enhance',  runs:'browser' },
   { id:'stamp',        icon:Stamp,         label:'Stamp',            desc:'Add APPROVED, DRAFT or CONFIDENTIAL stamps.',     category:'enhance',  runs:'browser' },
   { id:'sign',         icon:PenLine,       label:'Sign PDF',         desc:'Draw, type or upload a signature and place it.',  category:'enhance',  runs:'browser' },
-  { id:'findreplace',  icon:Replace,       label:'Find & replace',   desc:'Search and replace text across the PDF.',         category:'enhance',  runs:'server' },
+  { id:'findreplace',  icon:Replace,       label:'Find & replace',   desc:'Search and replace text across the PDF.',         category:'enhance',  runs:'browser' },
   { id:'ocr',          icon:ScanText,      label:'OCR',              desc:'Make scanned PDFs searchable or extract text.',   category:'enhance',  runs:'server' },
   { id:'translate',    icon:Languages,     label:'Translate PDF',    desc:'Translate a PDF into another language.',          category:'enhance',  runs:'server' },
-  { id:'protect',      icon:Lock,          label:'Protect PDF',      desc:'Add a password to a PDF.',                        category:'security', runs:'server' },
-  { id:'unlock',       icon:Unlock,        label:'Unlock PDF',       desc:'Remove password protection.',                     category:'security', runs:'server' },
+  { id:'protect',      icon:Lock,          label:'Protect PDF',      desc:'Add a password to a PDF.',                        category:'security', runs:'browser' },
+  { id:'unlock',       icon:Unlock,        label:'Unlock PDF',       desc:'Remove password protection.',                     category:'security', runs:'browser' },
   { id:'redact',       icon:EyeOff,        label:'Redact text',      desc:'Permanently black out sensitive text.',           category:'security', runs:'browser' },
 ]
 

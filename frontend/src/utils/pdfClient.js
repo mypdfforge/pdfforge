@@ -252,113 +252,152 @@ export async function clientCompress(file, onProgress) {
   return { data: blob }
 }
 
-/**
- * Redact — draws solid fill rectangles over every occurrence of each term.
- *
- * Uses sub-word precision: when a text item contains a sentence like
- * "John Smith works here", only "John Smith" is covered, not the whole line.
- * Achieved by calculating the x-offset of the match within the item using
- * per-character width (item.width / item.str.length).
- *
- * @param {File}   file       - source PDF
- * @param {Array}  terms      - [{ text, caseSensitive, wholeWord }, ...]
- * @param {string} fillColor  - 'black' | 'white' | 'grey'
- */
-export async function clientRedact(file, terms, fillColor = 'black') {
-  const { PDFDocument, rgb } = getPdfLib()
+/* ---- text search + page flattening, shared by Redact and Find & Replace ---- */
 
+const FLATTEN_SCALE = 2.5 // shortcut: ~180 dpi; raise for sharper flattened pages (more memory), lower for smaller files
+const tick = () => new Promise(r => setTimeout(r, 0))
+
+function initPdfjs() {
   const pdfjs = window.pdfjsLib
   if (!pdfjs) throw new Error('pdf.js not loaded')
   if (!pdfjs.GlobalWorkerOptions.workerSrc) {
     pdfjs.GlobalWorkerOptions.workerSrc =
       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
   }
+  return pdfjs
+}
 
-  const FILL_RGB = {
-    black: rgb(0,   0,   0  ),
-    white: rgb(1,   1,   1  ),
-    grey:  rgb(0.5, 0.5, 0.5),
-  }
-  const fillRgb = FILL_RGB[fillColor] || FILL_RGB.black
-
-  const activeTerms = terms.filter(t => t.text && t.text.trim())
-  if (!activeTerms.length) throw new Error('No terms provided')
-
-  const bytes = await readFile(file)
-
-  // ── Phase 1: find sub-word bounding boxes via pdf.js text layer ──────
-  const pjsDoc   = await pdfjs.getDocument({ data: bytes.slice(0) }).promise
-  const numPages = pjsDoc.numPages
-
-  // matchRects[pageIndex] = [ {x, y, w, h} ... ] in PDF point coords (bottom-left origin)
-  const matchRects = Array.from({ length: numPages }, () => [])
-
-  for (let pNum = 1; pNum <= numPages; pNum++) {
-    const page      = await pjsDoc.getPage(pNum)
+/**
+ * Sub-word match boxes per page, in PDF points (bottom-left origin).
+ * shortcut: a match must sit inside one text item, and width is averaged per
+ * character, so proportional fonts are approximate; rotated text is not handled.
+ */
+async function findRects(pjsDoc, terms) {
+  const rects = Array.from({ length: pjsDoc.numPages }, () => [])
+  for (let pNum = 1; pNum <= pjsDoc.numPages; pNum++) {
+    const page = await pjsDoc.getPage(pNum)
     const { items } = await page.getTextContent()
-
-    for (const term of activeTerms) {
-      const raw = term.text.trim()
-      let pattern
-      try {
-        const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        const wrapped = term.wholeWord ? `\\b${escaped}\\b` : escaped
-        pattern = new RegExp(wrapped, term.caseSensitive ? 'g' : 'gi')
-      } catch { continue }
-
+    for (const term of terms) {
+      const escaped = term.text.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const pattern = new RegExp(term.wholeWord ? `\\b${escaped}\\b` : escaped, term.caseSensitive ? 'g' : 'gi')
       for (const item of items) {
         if (!item.str || !item.str.trim()) continue
-
         pattern.lastIndex = 0
-        let match
-        while ((match = pattern.exec(item.str)) !== null) {
-          // item.transform = [scaleX, skewX, skewY, scaleY, tx, ty]
+        let m
+        while ((m = pattern.exec(item.str)) !== null) {
           const [, , , scaleY, tx, ty] = item.transform
-          const itemH = Math.abs(scaleY) || 10
-
-          // Average char width within this text item
-          const charW      = item.str.length > 0 ? Math.abs(item.width) / item.str.length : 0
-          const xOffset    = match.index * charW
-          const matchWidth = match[0].length * charW
-          const pad        = 1.5
-
-          matchRects[pNum - 1].push({
-            x: tx + xOffset - pad,
-            y: ty - pad,
-            w: matchWidth + pad * 2,
-            h: itemH + pad * 2,
+          const size = Math.abs(scaleY) || 10
+          const charW = Math.abs(item.width) / item.str.length
+          const pad = 1.5
+          rects[pNum - 1].push({
+            x: tx + m.index * charW - pad,
+            y: ty - size * 0.25 - pad, // also covers descenders
+            w: m[0].length * charW + pad * 2,
+            h: size * 1.25 + pad * 2,
+            bx: tx + m.index * charW, by: ty, size,
           })
+          if (m[0].length === 0) pattern.lastIndex++
         }
-        pattern.lastIndex = 0
       }
     }
     page.cleanup()
   }
-  pjsDoc.destroy()
+  return rects
+}
 
-  // ── Phase 2: draw boxes with pdf-lib ─────────────────────────────────
-  const pdfDoc = await PDFDocument.load(bytes)
+/** Fill the viewport box of a PDF-space rect (handles rotated pages). */
+function fillRect(ctx, vp, r, color) {
+  const [x1, y1, x2, y2] = vp.convertToViewportRectangle([r.x, r.y, r.x + r.w, r.y + r.h])
+  ctx.fillStyle = color
+  ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1))
+}
 
-  for (let pIdx = 0; pIdx < numPages; pIdx++) {
-    const rects = matchRects[pIdx]
-    if (!rects.length) continue
-    const page = pdfDoc.getPage(pIdx)
-    for (const r of rects) {
-      page.drawRectangle({
-        x:           r.x,
-        y:           r.y,
-        width:       r.w,
-        height:      r.h,
-        color:       fillRgb,
-        opacity:     1,
-        borderWidth: 0,
-      })
-    }
+/**
+ * Rebuild the PDF with the pages in `draw` flattened to images (draw[i](ctx, viewport)
+ * paints on the rendered page). The output is a NEW document, so the original text of
+ * flattened pages is really gone. Other pages are copied unchanged.
+ * shortcut: bookmarks, forms and attachments are not carried over.
+ */
+async function flattenPages(bytes, pjsDoc, draw, onProgress) {
+  const { PDFDocument } = getPdfLib()
+  const src = await PDFDocument.load(bytes)
+  const out = await PDFDocument.create()
+  const n = src.getPageCount()
+  const keep = []
+  for (let i = 0; i < n; i++) if (!draw[i]) keep.push(i)
+  const copied = keep.length ? await out.copyPages(src, keep) : []
+  let ci = 0
+  for (let i = 0; i < n; i++) {
+    if (!draw[i]) { out.addPage(copied[ci++]); continue }
+    const page = await pjsDoc.getPage(i + 1)
+    const vp = page.getViewport({ scale: FLATTEN_SCALE })
+    const cv = document.createElement('canvas')
+    cv.width = Math.floor(vp.width); cv.height = Math.floor(vp.height)
+    const ctx = cv.getContext('2d')
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height) // JPEG has no transparency
+    await page.render({ canvasContext: ctx, viewport: vp }).promise
+    draw[i](ctx, vp)
+    const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.92))
+    const img = await out.embedJpg(new Uint8Array(await blob.arrayBuffer()))
+    const v1 = page.getViewport({ scale: 1 })
+    out.addPage([v1.width, v1.height]).drawImage(img, { x: 0, y: 0, width: v1.width, height: v1.height })
+    cv.width = 0; page.cleanup()
+    onProgress?.({ done: i + 1, total: n })
+    await tick() // let the UI breathe between pages
   }
+  return new Blob([await out.save({ useObjectStreams: true })], { type: 'application/pdf' })
+}
 
-  const resultBytes = await pdfDoc.save({ useObjectStreams: true })
-  const blob        = new Blob([resultBytes], { type: 'application/pdf' })
-  return { data: blob }
+async function matchAndFlatten(file, terms, paint, onProgress, noMatchMsg) {
+  const bytes = await readFile(file)
+  const pjsDoc = await initPdfjs().getDocument({ data: bytes.slice(0) }).promise
+  try {
+    const rects = await findRects(pjsDoc, terms)
+    const draw = {}
+    rects.forEach((rs, i) => { if (rs.length) draw[i] = (ctx, vp) => rs.forEach(r => paint(ctx, vp, r)) })
+    if (!Object.keys(draw).length) throw new Error(noMatchMsg)
+    return { data: await flattenPages(bytes, pjsDoc, draw, onProgress) }
+  } finally {
+    pjsDoc.destroy()
+  }
+}
+
+/**
+ * Redact -- covers every match and flattens those pages to images, so the
+ * covered text is removed from the file (not just hidden under a box).
+ * Pages without a match stay untouched.
+ * @param {Array}  terms     - [{ text, caseSensitive, wholeWord }, ...]
+ * @param {string} fillColor - 'black' | 'white' | 'grey'
+ */
+export async function clientRedact(file, terms, fillColor = 'black', onProgress) {
+  const active = terms.filter(t => t.text && t.text.trim())
+  if (!active.length) throw new Error('No terms provided')
+  const fill = { black: '#000000', white: '#ffffff', grey: '#808080' }[fillColor] || '#000000'
+  return matchAndFlatten(file, active, (ctx, vp, r) => fillRect(ctx, vp, r, fill), onProgress,
+    'No matches found, so nothing was redacted. (Scanned pages have no text to match.)')
+}
+
+/**
+ * Find & Replace -- white-out each match and draw the new text over it, on a
+ * flattened page (so the old text is really removed).
+ * shortcut: new text is black Helvetica at the old size; a coloured background shows a white patch.
+ */
+export async function clientFindReplace(file, find, replace, matchCase = false, wholeWord = false, onProgress) {
+  if (!find || !find.trim()) throw new Error('Enter the text to find.')
+  const paint = (ctx, vp, r) => {
+    fillRect(ctx, vp, r, '#ffffff')
+    if (!replace) return
+    const [px, py] = vp.convertToViewportPoint(r.bx, r.by)
+    ctx.save()
+    ctx.translate(px, py)
+    ctx.rotate((vp.rotation * Math.PI) / 180)
+    ctx.fillStyle = '#000000'
+    ctx.font = `${r.size * FLATTEN_SCALE}px Helvetica, Arial, "Noto Sans", sans-serif`
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillText(replace, 0, 0)
+    ctx.restore()
+  }
+  return matchAndFlatten(file, [{ text: find, caseSensitive: matchCase, wholeWord }], paint, onProgress, 'No matches found.')
 }
 
 /**
