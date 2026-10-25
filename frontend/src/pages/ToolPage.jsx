@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Loader2, CheckCircle, AlertCircle, Info, X, Download,
-         RotateCw, Trash2, Copy, ZoomIn, FileText, ChevronUp, ChevronDown, Check, ChevronLeft, ChevronRight } from 'lucide-react'
+         RotateCw, Trash2, Copy, ZoomIn, Undo2, FileText, ChevronUp, ChevronDown, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import * as api from '../utils/api'
 import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
@@ -163,10 +163,12 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
     s.has(page) ? s.delete(page) : s.add(page)
     onSelectionChange(s)
   }
-  const selectAll  = () => onSelectionChange(new Set(thumbs.map(t => t.page)))
+  // instance key of an original page is String(page); copies are `${page}-dupe-${n}`
+  const live       = thumbs.filter(t => !deletedPages.has(String(t.page)))
+  const selectAll  = () => onSelectionChange(new Set(live.map(t => t.page)))
   const selectNone = () => onSelectionChange(new Set())
-  const selectOdd  = () => onSelectionChange(new Set(thumbs.filter(t => t.page % 2 === 1).map(t => t.page)))
-  const selectEven = () => onSelectionChange(new Set(thumbs.filter(t => t.page % 2 === 0).map(t => t.page)))
+  const selectOdd  = () => onSelectionChange(new Set(live.filter(t => t.page % 2 === 1).map(t => t.page)))
+  const selectEven = () => onSelectionChange(new Set(live.filter(t => t.page % 2 === 0).map(t => t.page)))
 
   if (!file) return (
     <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text3)' }}>
@@ -233,37 +235,56 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
       {/* Scrollable grid */}
       <div style={{ flex:1, overflowY:'auto', padding:'20px',
         display:'flex', flexWrap:'wrap', gap:'14px', alignContent:'flex-start' }}>
-        {/* Build visible list: filter deleted, insert duplicates after original */}
+        {/* Visible list: every page + copies after original. Each card has a unique _key;
+            rotation and soft-delete state live under that key, not the page number. */}
         {thumbs
-          .filter(t => !deletedPages.has(t.page))
           .flatMap(t => {
             const copies = duplicatedAfter[t.page] || 0
             const dupes  = Array.from({ length: copies }, (_, ci) => ({
               ...t,
               _isDupe: true,
-              _dupeKey: `${t.page}-dupe-${ci}`,
+              _key: `${t.page}-dupe-${ci}`,
               _dupeLabel: `${t.page} (copy ${ci + 1})`,
             }))
-            return [t, ...dupes]
+            return [{ ...t, _key: String(t.page) }, ...dupes]
           })
           .map((t, i) => {
-          const isSelected = !t._isDupe && selectedPages.has(t.page)
+          const isDeleted  = deletedPages.has(t._key)
+          const rot        = pageRotations[t._key] || 0
+          const isSelected = !t._isDupe && !isDeleted && selectedPages.has(t.page)
           return (
-            <div key={t._dupeKey || t.page}
+            <div key={t._key}
               className="pdf-card"
               style={{ position:'relative', width:'130px', flexShrink:0, cursor:'pointer' }}>
 
               {/* Thumbnail */}
               <div
-                onClick={() => toggle(t.page)}
+                onClick={() => { if (!isDeleted) toggle(t.page) }}
                 className={isSelected ? 'pdf-thumb pdf-thumb-selected' : 'pdf-thumb'}
                 style={{ width:'130px', height:'170px' }}>
                 <img src={t.img} alt={`Page ${t.page}`} loading="lazy"
                   style={{
                     width:'100%', height:'100%', objectFit:'contain', display:'block',
-                    transform: pageRotations[t.page] ? `rotate(${pageRotations[t.page]}deg)` : 'none',
+                    transform: rot ? `rotate(${rot}deg)` : 'none',
                     transition: 'transform 0.3s ease',
+                    ...(isDeleted && { opacity: 0.4, filter: 'grayscale(100%) brightness(0.6)' }),
                   }}/>
+
+                {/* Soft-deleted: dark overlay + Undo */}
+                {isDeleted && (
+                  <div style={{ position:'absolute', inset:0, background:'#00000088',
+                    display:'flex', alignItems:'center', justifyContent:'center', zIndex:5 }}>
+                    <button
+                      onClick={e => { e.stopPropagation(); onPageAction('undelete', t._key) }}
+                      title="Undo delete"
+                      style={{ display:'flex', alignItems:'center', gap:'5px', padding:'6px 10px',
+                        borderRadius:'8px', border:'1px solid rgba(255,255,255,0.5)',
+                        background:'rgba(20,20,30,0.9)', color:'#fff', cursor:'pointer',
+                        fontSize:'12px', fontWeight:700 }}>
+                      <Undo2 size={14}/> Undo
+                    </button>
+                  </div>
+                )}
 
                 {/* Checkbox — always visible, filled when selected */}
                 <div style={{
@@ -275,11 +296,12 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
                   color:'#fff',
                   boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
                   transition:'all 0.12s',
+                  visibility: isDeleted ? 'hidden' : 'visible',
                 }}>{isSelected ? <Check size={11} strokeWidth={3}/> : null}</div>
               </div>
 
               {/* Hover action icons — shown via CSS, zero JS overhead */}
-              <div className="pdf-actions" style={{ position:'absolute', top:'6px', right:'6px',
+              {!isDeleted && <div className="pdf-actions" style={{ position:'absolute', top:'6px', right:'6px',
                 display:'flex', flexDirection:'column', gap:'4px', zIndex:10 }}>
                   <ActionIcon
                     title="Zoom — full resolution view"
@@ -292,7 +314,7 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
                     title="Rotate 90°"
                     color="rgba(234,88,12,0.85)"
                     icon={<RotateCw size={12}/>}
-                    onClick={() => onPageAction('rotate', t.page)}
+                    onClick={() => onPageAction('rotate', t._key)}
                   />
                   {!t._isDupe && (
                     <ActionIcon
@@ -303,24 +325,21 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
                     />
                   )}
                   <ActionIcon
-                    title="Delete — removes page from document"
+                    title="Delete — can be undone before saving"
                     color="rgba(229,83,75,0.85)"
                     icon={<Trash2 size={12}/>}
-                    onClick={() => t._isDupe
-                      ? onPageAction('deleteDupe', t._dupeKey)
-                      : onPageAction('delete', t.page)
-                    }
+                    onClick={() => onPageAction('delete', t._key)}
                   />
-                </div>
+                </div>}
 
               {/* Page label */}
               <div style={{ textAlign:'center', marginTop:'5px' }}>
                 <span style={{ fontSize:'11px', color: isSelected ? 'var(--accent2)' : t._isDupe ? 'var(--green)' : 'var(--text3)', fontWeight: isSelected ? 700 : 400 }}>
                   {t._isDupe ? t._dupeLabel : `Page ${t.page}`}
                 </span>
-                {pageRotations[t.page] > 0 && !t._isDupe && (
+                {rot > 0 && (
                   <span style={{ fontSize:'10px', color:'var(--accent2)', marginLeft:'4px' }}>
-                    {pageRotations[t.page]}°
+                    {rot}°
                   </span>
                 )}
               </div>
@@ -365,8 +384,8 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
   const [progress,      setProgress]      = useState(null)
   const [zoomPage,      setZoomPage]      = useState(null)   // page num for zoom modal
   // Per-page local rotations (applied client-side before processing)
-  const [pageRotations,  setPageRotations]  = useState({})  // { pageNum: degrees }
-  const [deletedPages,   setDeletedPages]   = useState(new Set())  // pages removed from grid
+  const [pageRotations,  setPageRotations]  = useState({})  // { instanceKey: degrees } — key = '3' (original) or '3-dupe-0' (copy)
+  const [deletedPages,   setDeletedPages]   = useState(new Set())  // instanceKeys soft-deleted (still shown, excluded on export)
   const [duplicatedAfter,setDuplicatedAfter]= useState({})  // { pageNum: count } — pages duplicated
   const [downloadResult, setDownloadResult] = useState(null) // { blob, name, originalSize }
 
@@ -393,36 +412,23 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
       setZoomPage(pageNum)
       return
     }
+    // pageNum is the card's instance key: '3' (original) or '3-dupe-0' (copy), except zoom/duplicate = page number
     if (action === 'rotate') {
-      // Just update visual rotation — applied to PDF on final download
-      setPageRotations(prev => ({
-        ...prev,
-        [pageNum]: ((prev[pageNum] || 0) + 90) % 360
-      }))
+      setPageRotations(prev => ({ ...prev, [pageNum]: ((prev[pageNum] || 0) + 90) % 360 }))
       return
     }
     if (action === 'delete') {
-      // Remove page from local grid — user downloads the modified result via main button
-      setDeletedPages(prev => new Set([...prev, pageNum]))
-      // Also deselect it
-      setSelectedPages(prev => {
-        const s = new Set(prev); s.delete(pageNum); return s
-      })
+      // soft delete: card stays, dimmed with Undo; dropped from the exported PDF
+      setDeletedPages(prev => new Set(prev).add(pageNum))
+      setSelectedPages(prev => { const s = new Set(prev); s.delete(Number(pageNum)); return s })
+      return
+    }
+    if (action === 'undelete') {
+      setDeletedPages(prev => { const s = new Set(prev); s.delete(pageNum); return s })
       return
     }
     if (action === 'duplicate') {
       setDuplicatedAfter(prev => ({ ...prev, [pageNum]: (prev[pageNum] || 0) + 1 }))
-      return
-    }
-    if (action === 'deleteDupe') {
-      // pageNum here is actually the _dupeKey e.g. "3-dupe-0"
-      // Decrement the duplicate count for that page
-      const base = parseInt(String(pageNum).split('-')[0])
-      setDuplicatedAfter(prev => {
-        const count = (prev[base] || 1) - 1
-        if (count <= 0) { const n = {...prev}; delete n[base]; return n }
-        return { ...prev, [base]: count }
-      })
       return
     }
   }, [])

@@ -21,7 +21,7 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback } from 'react'
-import { RotateCw, Trash2, Plus, Copy, ZoomIn } from 'lucide-react'
+import { RotateCw, Trash2, Plus, Copy, ZoomIn, Undo2 } from 'lucide-react'
 
 const ITEM_W      = 140
 const ITEM_H      = 210   // thumb 180 + label 30
@@ -37,6 +37,7 @@ export default function VirtualPageGrid({
   onDragEnd,
   onRotate,
   onDelete,
+  onUndelete,
   onDuplicate,
   onZoom,
   onAddBlank,
@@ -118,6 +119,7 @@ export default function VirtualPageGrid({
                 onDragEnd={onDragEnd}
                 onRotate={onRotate}
                 onDelete={onDelete}
+                onUndelete={onUndelete}
                 onDuplicate={onDuplicate}
                 onZoom={onZoom}
               />
@@ -133,7 +135,8 @@ export default function VirtualPageGrid({
 }
 
 // ── Individual page card ───────────────────────────────────────────────
-function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onDragEnd, onRotate, onDelete, onDuplicate, onZoom }) {
+function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onDragEnd, onRotate, onDelete, onUndelete, onDuplicate, onZoom }) {
+  const isDeleted = !!pg.isDeleted
   return (
     <div
       draggable
@@ -179,6 +182,7 @@ function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onD
               objectFit:  'contain',
               transform:  `rotate(${pg.rotation}deg)`,
               transition: 'transform 0.25s',
+              ...(isDeleted && { opacity: 0.4, filter: 'grayscale(100%) brightness(0.6)' }),
             }}
           />
         ) : (
@@ -186,8 +190,27 @@ function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onD
         )}
       </div>
 
+      {/* Soft-deleted: dark overlay + Undo */}
+      {isDeleted && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, width: ITEM_W, height: 180, borderRadius: 10,
+          background: '#00000088', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10,
+        }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); onUndelete(pg.id) }}
+            title="Undo delete"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.5)', background: 'rgba(20,20,30,0.9)',
+              color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 700,
+            }}>
+            <Undo2 size={14} /> Undo
+          </button>
+        </div>
+      )}
+
       {/* Hover action buttons — unified overlay (top-right pill) */}
-      {isHovered && (
+      {isHovered && !isDeleted && (
         <div style={{
           position:      'absolute',
           top:           8,

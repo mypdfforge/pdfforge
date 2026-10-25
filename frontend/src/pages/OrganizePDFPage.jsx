@@ -103,7 +103,9 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
 
   /* ── Page actions ── */
   const rotatePage    = (id) => setPages(p => p.map(pg => pg.id === id ? { ...pg, rotation: (pg.rotation + 90) % 360 } : pg))
-  const deletePage    = (id) => setPages(p => p.filter(pg => pg.id !== id))
+  // soft delete: card stays (dimmed, with Undo); skipped on save
+  const deletePage    = (id) => setPages(p => p.map(pg => pg.id === id ? { ...pg, isDeleted: true } : pg))
+  const undeletePage  = (id) => setPages(p => p.map(pg => pg.id === id ? { ...pg, isDeleted: false } : pg))
   const addBlank      = () => setPages(p => [...p, {
     id: `blank-${Date.now()}`, thumb: null, rotation: 0, blank: true, origIdx: -1,
   }])
@@ -132,15 +134,16 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
   }
 
   /* ── Apply ── */
+  const livePages = pages.filter(pg => !pg.isDeleted)
   const apply = async () => {
-    if (!file || pages.length === 0) return
+    if (!file || livePages.length === 0) return
     if (!doneRef.current) {
       setErrMsg('Still loading pages. Please wait a moment, then save.')
       return
     }
     setState('loading'); setErrMsg(''); setPct(0)
     try {
-      const steps = pages.map(pg => ({ origIdx: pg.origIdx, rotation: pg.rotation, blank: pg.blank }))
+      const steps = livePages.map(pg => ({ origIdx: pg.origIdx, rotation: pg.rotation, blank: pg.blank }))
       const response = await clientOrganize(file, steps, p => setPct(Math.round(p.done / p.total * 100)))
       downloadBlob(response.data, 'organized.pdf')
       setState('done'); setTimeout(() => setState('idle'), 3000)
@@ -174,7 +177,7 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
             <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: '13px', color: 'var(--text2)', marginRight: 'auto' }}>
               <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
               <strong style={{ color: 'var(--text)' }}>{file.name}</strong>
-              <span style={{ color: 'var(--text3)', marginLeft: '8px' }}>{pages.length} pages</span>
+              <span style={{ color: 'var(--text3)', marginLeft: '8px' }}>{livePages.length} pages</span>
             </span>
             <button onClick={addBlank}
               style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
@@ -189,7 +192,7 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
                 <AlertCircle size={13} /> {errMsg}
               </div>
             )}
-            <button onClick={apply} disabled={pages.length === 0 || state === 'loading'}
+            <button onClick={apply} disabled={livePages.length === 0 || state === 'loading'}
               style={{
                 display: 'flex', alignItems: 'center', gap: '7px', padding: '8px 20px',
                 borderRadius: '9px', border: 'none', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
@@ -236,6 +239,7 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
                 onDragEnd={handleDragEnd}
                 onRotate={rotatePage}
                 onDelete={deletePage}
+                onUndelete={undeletePage}
                 onDuplicate={duplicatePage}
                 onZoom={zoomPageAction}
                 onAddBlank={addBlank}
