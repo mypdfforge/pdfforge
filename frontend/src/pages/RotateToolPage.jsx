@@ -1,14 +1,16 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, Loader2, CheckCircle, AlertCircle, Download, RotateCw, RotateCcw } from 'lucide-react'
+import { Upload, Loader2, CheckCircle, AlertCircle, Download, RotateCw, RotateCcw, Trash2, Copy } from 'lucide-react'
 import TopBar from '../components/TopBar'
-import { clientRotateVisual } from '../utils/editClient'
+import { clientRotateVisual, clientOrganize } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
 import { getThumbnailsProgressive } from '../utils/thumbCache'
 
 export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const [file,      setFile]      = useState(null)
-  const [pages,     setPages]     = useState([])   // [{id, img, width, height, rotation}]
+  const [pages,     setPages]     = useState([])   // [{id, origIdx(0-based), img, width, height, rotation}] -- order = output order
+  const [ready,     setReady]     = useState(false) // all thumbnails loaded
+  const [edited,    setEdited]    = useState(false) // a card was deleted or duplicated
   const [selected,  setSelected]  = useState(new Set())
   const [loading,   setLoading]   = useState(false)
   const [status,    setStatus]    = useState('idle')
@@ -17,7 +19,7 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
 
   const onDrop = useCallback(a => {
     if (!a.length) return
-    setFile(a[0]); setPages([]); setSelected(new Set()); setErrMsg('')
+    setFile(a[0]); setPages([]); setSelected(new Set()); setErrMsg(''); setReady(false); setEdited(false)
   }, [])
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept:{'application/pdf':['.pdf']}, maxFiles:1 })
 
@@ -26,16 +28,18 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
     if (!file) return
     setLoading(true)
     setPages([])
+    setReady(false)
     let first = true
     getThumbnailsProgressive(file, (thumb) => {
       if (first) { setLoading(false); first = false }  // hide spinner after page 1
       if (thumb.img) {  // skip placeholders for unrendered pages
         setPages(prev => [...prev, {
-          id: thumb.page, img: thumb.img,
+          id: `p-${thumb.page}`, origIdx: thumb.page - 1, img: thumb.img,
           width: thumb.width, height: thumb.height, rotation: 0
         }])
       }
     }, 8)
+    .then(() => setReady(true))
     .catch(() => setLoading(false))
   }, [file])
 
@@ -49,8 +53,8 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
   }
   const selectAll  = () => setSelected(new Set(pages.map(p => p.id)))
   const selectNone = () => setSelected(new Set())
-  const selectOdd  = () => setSelected(new Set(pages.filter(p => p.id % 2 === 1).map(p => p.id)))
-  const selectEven = () => setSelected(new Set(pages.filter(p => p.id % 2 === 0).map(p => p.id)))
+  const selectOdd  = () => setSelected(new Set(pages.filter((_, i) => i % 2 === 0).map(p => p.id)))
+  const selectEven = () => setSelected(new Set(pages.filter((_, i) => i % 2 === 1).map(p => p.id)))
 
   // ── Rotate helpers ──
   // Rotate a single page or all selected pages
@@ -72,17 +76,39 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
 
   const resetAll = () => setPages(prev => prev.map(p => ({ ...p, rotation: 0 })))
 
-  // Count modified pages
-  const modifiedCount = pages.filter(p => p.rotation !== 0).length
+  // ── Card actions: delete / duplicate ──
+  const deletePage = (id) => {
+    setEdited(true)
+    setPages(prev => prev.filter(p => p.id !== id))
+    setSelected(prev => { const n = new Set(prev); n.delete(id); return n })
+  }
+  const duplicatePage = (id) => { setEdited(true); setPages(prev => {
+    const i = prev.findIndex(p => p.id === id)
+    if (i === -1) return prev
+    const clone = { ...prev[i], id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
+    return [...prev.slice(0, i + 1), clone, ...prev.slice(i + 1)]
+  }) }
+
+  const structural = edited
+  const rotatedCount = pages.filter(p => p.rotation !== 0).length
+  const modifiedCount = rotatedCount + (structural ? 1 : 0)   // >0 = something to export
 
   // ── Download ──
   const download = async () => {
-    if (!file || !modifiedCount) return
+    if (!file || !modifiedCount || !ready) return
     setStatus('loading'); setErrMsg(''); setPct(0)
     try {
-      const rotations = {}
-      pages.forEach(p => { if (p.rotation !== 0) rotations[p.id] = p.rotation })
-      const res = await clientRotateVisual(file, rotations, p => setPct(Math.round(p.done / p.total * 100)))
+      const onP = p => setPct(Math.round(p.done / p.total * 100))
+      let res
+      if (structural) {
+        // deleted / duplicated pages: rebuild from the card list (same engine as Organize)
+        res = await clientOrganize(file, pages.map(p => ({ origIdx: p.origIdx, rotation: p.rotation, blank: false })), onP)
+      } else {
+        // rotation only: original rotate path, untouched
+        const rotations = {}
+        pages.forEach(p => { if (p.rotation !== 0) rotations[p.origIdx + 1] = p.rotation })
+        res = await clientRotateVisual(file, rotations, onP)
+      }
       downloadBlob(res.data, 'rotated.pdf')
       setStatus('done'); setTimeout(() => setStatus('idle'), 3000)
     } catch(e) {
@@ -149,7 +175,7 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
 
             <div style={{ flex:1 }}/>
 
-            {modifiedCount > 0 && (
+            {rotatedCount > 0 && (
               <button onClick={resetAll}
                 style={{ fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'none', color:'var(--text3)', cursor:'pointer' }}>
                 Reset All
@@ -162,14 +188,15 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
               </span>
             )}
 
-            {modifiedCount > 0 && (
+            {rotatedCount > 0 && (
               <span style={{ fontSize:'12px', color:'var(--text3)' }}>
-                {modifiedCount} page{modifiedCount !== 1 ? 's' : ''} rotated
+                {rotatedCount} page{rotatedCount !== 1 ? 's' : ''} rotated
               </span>
             )}
+            {structural && <span style={{ fontSize:'12px', color:'var(--text3)' }}>{pages.length} pages in output</span>}
 
-            <button onClick={download} disabled={!modifiedCount || status === 'loading'}
-              style={{ display:'flex', alignItems:'center', gap:'7px', padding:'8px 20px', borderRadius:'8px', border:'none', fontWeight:700, fontSize:'13px', cursor: modifiedCount ? 'pointer' : 'not-allowed', opacity: modifiedCount ? 1 : 0.45, transition:'all 0.15s',
+            <button onClick={download} disabled={!modifiedCount || !ready || status === 'loading'}
+              style={{ display:'flex', alignItems:'center', gap:'7px', padding:'8px 20px', borderRadius:'8px', border:'none', fontWeight:700, fontSize:'13px', cursor: modifiedCount && ready ? 'pointer' : 'not-allowed', opacity: modifiedCount && ready ? 1 : 0.45, transition:'all 0.15s',
                 background: status==='done' ? 'var(--green)' : status==='loading' ? 'var(--bg3)' : 'var(--accent)',
                 color: status==='loading' ? 'var(--text3)' : '#fff',
                 boxShadow: modifiedCount ? '0 2px 12px rgba(234,88,12,0.35)' : 'none' }}>
@@ -181,11 +208,15 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
 
           {/* ── Page grid ── */}
           <div style={{ flex:1, overflowY:'auto', padding:'24px', display:'flex', flexWrap:'wrap', gap:'16px', alignContent:'flex-start' }}>
-            {pages.map(p => {
+            <style>{`
+              .rot-actions { opacity:0; pointer-events:none; transition:opacity 0.1s }
+              .rot-card:hover .rot-actions { opacity:1; pointer-events:all }
+            `}</style>
+            {pages.map((p, idx) => {
               const isSel = selected.has(p.id)
               const isRotated = p.rotation !== 0
               return (
-                <div key={p.id}
+                <div key={p.id} className="rot-card"
                   style={{ position:'relative', width:'140px', flexShrink:0, cursor:'pointer',
                     borderRadius:'12px', border:`2px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`,
                     background: isSel ? 'rgba(234,88,12,0.08)' : 'var(--bg2)',
@@ -210,7 +241,7 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
 
                   {/* Page label + rotation badge */}
                   <div style={{ padding:'4px 8px 6px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <span style={{ fontSize:'11px', color: isSel ? '#ffffff' : 'var(--text3)', fontWeight:600 }}>p.{p.id}</span>
+                    <span style={{ fontSize:'11px', color: isSel ? '#ffffff' : 'var(--text3)', fontWeight:600 }}>p.{idx + 1}</span>
                     {isRotated && (
                       <span style={{ fontSize:'10px', background:'var(--green)', color:'#000', borderRadius:'4px', padding:'1px 5px', fontWeight:700 }}>
                         {p.rotation}°
@@ -234,6 +265,21 @@ export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, 
                       onMouseLeave={e => { e.currentTarget.style.background='var(--bg3)'; e.currentTarget.style.color='var(--text2)' }}>
                       <RotateCw size={14}/>
                     </button>
+                  </div>
+
+                  {/* Hover action overlay (top-left): rotate CCW / CW, duplicate, delete */}
+                  <div className="rot-actions" style={{ position:'absolute', top:'6px', left:'6px', display:'flex', flexDirection:'column', gap:'4px', zIndex:10 }}>
+                    {[
+                      ['Rotate 90° counter-clockwise', 'rgba(234,88,12,0.9)',  <RotateCcw size={13}/>, () => rotate(p.id, 'ccw')],
+                      ['Rotate 90° clockwise',         'rgba(234,88,12,0.9)',  <RotateCw size={13}/>,  () => rotate(p.id, 'cw')],
+                      ['Duplicate — adds a copy after this page', 'rgba(16,155,117,0.9)', <Copy size={13}/>, () => duplicatePage(p.id)],
+                      ['Delete page',                  'rgba(229,83,75,0.9)',  <Trash2 size={13}/>,    () => deletePage(p.id)],
+                    ].map(([title, bg, icon, fn]) => (
+                      <button key={title} title={title} onClick={e => { e.stopPropagation(); fn() }}
+                        style={{ width:'26px', height:'26px', borderRadius:'6px', border:'none', background:bg, color:'#fff', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                        {icon}
+                      </button>
+                    ))}
                   </div>
 
                   {/* Checkbox top-right */}

@@ -10,7 +10,7 @@ import { clientProtect, clientUnlock } from '../utils/protectClient'
 import { clientPdfToImages, clientPdfToJpg } from '../utils/pdfToImageClient'
 import { pdfToWord, pdfToExcel, pdfToPptx, wordToPdf, pptxToPdf, xlsxToPdf, htmlToPdf, pdfToPdfa } from '../utils/convertClient'
 import axios from 'axios'
-import { clientImagesToPdf } from '../utils/editClient'
+import { clientImagesToPdf, applyPageModifications, clientOrganize, pageSelected } from '../utils/editClient'
 
 const CONFIGS = {
   merge:        { title:'Merge PDFs',        desc:'Combine multiple PDFs into one.',       multi:true,  guide:'Upload 2+ PDFs. Drag arrows to reorder.', fields:[], action:(f)=>api.mergePDFs(f), out:'merged.pdf', clientSide:true },
@@ -139,7 +139,7 @@ function ZoomModal({ file, pageNum, onClose }) {
 }
 
 // ── UnifiedPageGrid — the new combined grid with hover actions ─────────
-function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPageAction, pageRotations = {}, deletedPages = new Set(), duplicatedAfter = {} }) {
+function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPageAction, pageRotations = {}, deletedPages = new Set(), duplicatedAfter = {}, onTotalPages }) {
   const [thumbs,  setThumbs]  = useState([])
   const [loading, setLoading] = useState(false)
 
@@ -149,7 +149,12 @@ function UnifiedPageGrid({ file, toolId, selectedPages, onSelectionChange, onPag
     let first = true
     getThumbnailsProgressive(file, (thumb) => {
       if (first) { setLoading(false); first = false }
-      if (thumb.img) setThumbs(prev => [...prev, thumb])
+      if (thumb.img) setThumbs(prev => {
+        const next = [...prev, thumb]
+        // Report total page count to parent as thumbs stream in
+        onTotalPages?.(next.length)
+        return next
+      })
     }, 5).catch(() => setLoading(false))
   }, [file])
 
@@ -439,6 +444,60 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
             setProgress({ current: p, total: 100 })
           }
         }
+
+        // ── Pre-processing: compile preview modifications into the source file ──
+        // If the user has deleted, rotated, or duplicated pages via the card
+        // hover overlay, we must bake those changes into a new PDF first so that
+        // downstream tools (split, extract, etc.) operate on the edited document.
+        const hasModifications = isGridTool && (
+          deletedPages.size > 0 ||
+          Object.keys(pageRotations).length > 0 ||
+          Object.keys(duplicatedAfter).length > 0
+        )
+
+        // Tools whose SOLE purpose is the page modification itself (delete / duplicate):
+        // the compiled PDF is the final output — no secondary action needed.
+        const modificationIsAction = toolId === 'delete' || toolId === 'duplicate'
+
+        if (hasModifications) {
+          setProgress({ current: 0, total: 1, label: 'Applying page changes…' })
+          // totalPages omitted on purpose: thumbnails may still be loading, so read the real count from the PDF
+          const modified = await applyPageModifications(files[0], {
+            pageRotations, deletedPages, duplicatedAfter,
+            onProgress: (p) => setProgress({ current: p.done, total: p.total, label: 'Applying page changes…' }),
+          })
+
+          // Typed / selected page numbers use ORIGINAL numbering. The compiled PDF is renumbered
+          // (deleted pages gone, copies added), so remap them before running the tool's own action.
+          const raw = cfg.useSelector ? String(vals.pages ?? '').trim() : ''
+          const mapped = []
+          if (raw) {
+            for (let n = 1; n <= modified.srcTotal; n++) {
+              if (pageSelected(n, modified.srcTotal, raw) && modified.map[n]) mapped.push(modified.map[n])
+            }
+          }
+
+          // duplicate: card edits are the result (its form page defaults to 1, so it is ignored here).
+          // delete: card edits are the result unless the form still names pages that survive.
+          if (toolId === 'duplicate' || (toolId === 'delete' && !mapped.length)) {
+            api.downloadBlob(modified.data, cfg.out)
+            setDownloadResult({ blob: modified.data, name: cfg.out, originalSize })
+            setProgress(null); setStatus('done')
+            return
+          }
+          if (raw && !mapped.length) throw new Error('The selected pages were deleted in the preview.')
+
+          const modifiedFile = new File([modified.data], files[0].name, { type: 'application/pdf' })
+          const res = await cfg.action([modifiedFile, ...files.slice(1)], raw ? { ...vals, pages: mapped.join(',') } : vals, onP)
+          const blob = res?.data
+          if (blob && blob instanceof Blob) {
+            api.downloadBlob(blob, cfg.out)
+            setDownloadResult({ blob, name: cfg.out, originalSize })
+          }
+          setProgress(null); setStatus('done')
+          return
+        }
+
         const res = await cfg.action(files, vals, onP)
         // res = { data: blob } from pdfClient functions
         const blob = res?.data
@@ -693,6 +752,7 @@ export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome
               pageRotations={pageRotations}
               deletedPages={deletedPages}
               duplicatedAfter={duplicatedAfter}
+              onTotalPages={setTotalPages}
             />
           ) : (
             /* Classic 2-panel for split/rotate/merge etc */

@@ -13,13 +13,15 @@
  *   onDragEnd    — () => void
  *   onRotate     — (id) => void
  *   onDelete     — (id) => void
+ *   onDuplicate  — (id) => void   [new]
+ *   onZoom       — (id) => void   [new]
  *   onAddBlank   — () => void
  *   itemWidth    — thumbnail width (default 140)
  *   itemHeight   — thumbnail height (default 210)  includes label
  */
 
 import React, { useRef, useState, useEffect, useCallback } from 'react'
-import { RotateCw, Trash2, Plus } from 'lucide-react'
+import { RotateCw, Trash2, Plus, Copy, ZoomIn } from 'lucide-react'
 
 const ITEM_W      = 140
 const ITEM_H      = 210   // thumb 180 + label 30
@@ -35,6 +37,8 @@ export default function VirtualPageGrid({
   onDragEnd,
   onRotate,
   onDelete,
+  onDuplicate,
+  onZoom,
   onAddBlank,
 }) {
   const containerRef = useRef(null)
@@ -114,6 +118,8 @@ export default function VirtualPageGrid({
                 onDragEnd={onDragEnd}
                 onRotate={onRotate}
                 onDelete={onDelete}
+                onDuplicate={onDuplicate}
+                onZoom={onZoom}
               />
             )
           })}
@@ -127,7 +133,7 @@ export default function VirtualPageGrid({
 }
 
 // ── Individual page card ───────────────────────────────────────────────
-function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onDragEnd, onRotate, onDelete }) {
+function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onDragEnd, onRotate, onDelete, onDuplicate, onZoom }) {
   return (
     <div
       draggable
@@ -180,7 +186,7 @@ function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onD
         )}
       </div>
 
-      {/* Hover action buttons */}
+      {/* Hover action buttons — unified overlay (top-right pill) */}
       {isHovered && (
         <div style={{
           position:      'absolute',
@@ -191,16 +197,37 @@ function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onD
           gap:           5,
           zIndex:        10,
         }}>
+          {/* Zoom — full-resolution modal */}
+          {!pg.blank && onZoom && (
+            <ActionBtn
+              onClick={(e) => { e.stopPropagation(); onZoom(pg.id) }}
+              title="Zoom — full resolution view"
+              color="rgba(30,30,50,0.9)"
+              border="rgba(234,88,12,0.6)"
+              icon={<ZoomIn size={13} />}
+            />
+          )}
+          {/* Rotate CW 90° */}
           {!pg.blank && (
             <ActionBtn
-              onClick={() => onRotate(pg.id)}
+              onClick={(e) => { e.stopPropagation(); onRotate(pg.id) }}
               title="Rotate 90°"
               color="rgba(234,88,12,0.9)"
               icon={<RotateCw size={13} />}
             />
           )}
+          {/* Duplicate / Copy */}
+          {!pg.blank && onDuplicate && (
+            <ActionBtn
+              onClick={(e) => { e.stopPropagation(); onDuplicate(pg.id) }}
+              title="Duplicate — adds a copy after this page"
+              color="rgba(16,155,117,0.9)"
+              icon={<Copy size={13} />}
+            />
+          )}
+          {/* Delete */}
           <ActionBtn
-            onClick={() => onDelete(pg.id)}
+            onClick={(e) => { e.stopPropagation(); onDelete(pg.id) }}
             title="Delete page"
             color="rgba(229,83,75,0.9)"
             icon={<Trash2 size={13} />}
@@ -223,7 +250,7 @@ function PageCard({ pg, index, isHovered, onHover, onDragStart, onDragEnter, onD
   )
 }
 
-function ActionBtn({ onClick, title, color, icon }) {
+function ActionBtn({ onClick, title, color, border, icon }) {
   return (
     <button
       onClick={onClick}
@@ -232,7 +259,7 @@ function ActionBtn({ onClick, title, color, icon }) {
         width:           28,
         height:          28,
         borderRadius:    7,
-        border:          'none',
+        border:          border ? `1px solid ${border}` : 'none',
         background:      color,
         color:           '#fff',
         cursor:          'pointer',
@@ -240,7 +267,10 @@ function ActionBtn({ onClick, title, color, icon }) {
         alignItems:      'center',
         justifyContent:  'center',
         backdropFilter:  'blur(4px)',
+        transition:      'transform 0.1s',
       }}
+      onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.1)'}
+      onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
     >
       {icon}
     </button>

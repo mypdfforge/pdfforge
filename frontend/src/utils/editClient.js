@@ -319,6 +319,13 @@ export async function clientCropVisual(file, crops, onProgress) {
 
 /* ======================================================================
  * 3. ORGANIZE -- steps: [{ origIdx(0-based), rotation, blank }]
+ *
+ * NOTE: pdf-lib's copyPages deduplicates shared objects when the same
+ * origIdx appears once, but when the same page index appears multiple times
+ * (duplicated pages), we must copy each non-blank step individually to get
+ * truly independent page objects. We do a single copyPages call with the
+ * full (possibly repeated) indices array — pdf-lib returns one PDFPage
+ * object per entry, so duplicates work correctly.
  * ==================================================================== */
 export async function clientOrganize(file, steps, onProgress) {
   const { PDFDocument, degrees } = lib()
@@ -327,8 +334,10 @@ export async function clientOrganize(file, steps, onProgress) {
   const out = await PDFDocument.create()
   const base = total ? src.getPage(0).getSize() : { width: A4[0], height: A4[1] }
   const valid = steps.filter((s) => s.blank || (s.origIdx >= 0 && s.origIdx < total))
-  // one copyPages call keeps shared fonts/images de-duplicated in the output
-  const copied = await out.copyPages(src, valid.filter((s) => !s.blank).map((s) => s.origIdx))
+  // Build the indices array for all non-blank steps (may contain repeated indices for duplicates)
+  const nonBlankIndices = valid.filter((s) => !s.blank).map((s) => s.origIdx)
+  // copyPages with repeated indices returns one independent PDFPage per entry
+  const copied = nonBlankIndices.length > 0 ? await out.copyPages(src, nonBlankIndices) : []
   let ci = 0
   await eachChunk(valid.length, (i) => {
     const s = valid[i]
@@ -338,6 +347,44 @@ export async function clientOrganize(file, steps, onProgress) {
     out.addPage(p)
   }, onProgress)
   return finish(out)
+}
+
+/* ======================================================================
+ * 3b. APPLY PAGE MODIFICATIONS -- pre-processing helper for ToolPage.
+ *
+ * Compiles deletedPages, pageRotations, and duplicatedAfter into a new
+ * in-memory PDF File using clientOrganize. Returns { data: Blob }.
+ *
+ * @param {File}   file             - Original PDF File object
+ * @param {Object} opts
+ * @param {Object} opts.pageRotations   - { pageNum(1-based): degreesAdded }
+ * @param {Set}    opts.deletedPages    - Set of 1-based page numbers to skip
+ * @param {Object} opts.duplicatedAfter - { pageNum(1-based): copyCount }
+ * @param {number} opts.totalPages      - Total pages in source PDF
+ * @param {Function} [opts.onProgress]  - optional progress callback
+ * ==================================================================== */
+export async function applyPageModifications(file, { pageRotations = {}, deletedPages = new Set(), duplicatedAfter = {}, totalPages = 0, onProgress } = {}) {
+  if (!totalPages) {
+    // Fall back to reading page count from the source document
+    const src = await loadDoc(file)
+    totalPages = src.getPageCount()
+  }
+  const steps = []
+  const map = {}                         // original page no. -> its page no. in the output
+  for (let pg = 1; pg <= totalPages; pg++) {
+    if (deletedPages.has(pg)) continue   // skip deleted pages
+    const origIdx = pg - 1              // 0-based index for pdf-lib
+    const rotation = pageRotations[pg] || 0
+    steps.push({ origIdx, rotation, blank: false })
+    map[pg] = steps.length
+    // Insert duplicate copies immediately after the original
+    const copies = duplicatedAfter[pg] || 0
+    for (let c = 0; c < copies; c++) {
+      steps.push({ origIdx, rotation, blank: false })
+    }
+  }
+  const out = await clientOrganize(file, steps, onProgress)
+  return { ...out, map, srcTotal: totalPages }
 }
 
 /* ======================================================================

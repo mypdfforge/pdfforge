@@ -1,34 +1,75 @@
-import React, { useState, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
-import { Upload, Loader2, CheckCircle, AlertCircle, Plus, FileText } from 'lucide-react'
+import { Upload, Loader2, CheckCircle, AlertCircle, Plus, FileText, X, ZoomIn } from 'lucide-react'
 import { clientOrganize } from '../utils/editClient'
 import { downloadBlob } from '../utils/api'
-import { getThumbnailsProgressive } from '../utils/thumbCache'
+import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
 import VirtualPageGrid from '../components/VirtualPageGrid'
+
+// ── ZoomModal — full-screen high-res page view ─────────────────────────
+// Re-implemented locally so OrganizePDFPage has no cross-page import dep.
+function ZoomModal({ file, pageNum, onClose }) {
+  const [imgSrc,  setImgSrc]  = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!file || !pageNum) return
+    setLoading(true)
+    getFullResPage(file, pageNum, 1.8)
+      .then(t => { setImgSrc(t.img); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [file, pageNum])
+
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+      style={{ position:'fixed', inset:0, zIndex:9999, background:'rgba(0,0,0,0.85)',
+        display:'flex', alignItems:'center', justifyContent:'center',
+        backdropFilter:'blur(4px)', padding:'24px' }}>
+      <div style={{ position:'relative', maxWidth:'90vw', maxHeight:'92vh', display:'flex', flexDirection:'column', gap:'10px' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontSize:'13px', color:'var(--text3)', fontWeight:600 }}>Page {pageNum} — Full Resolution</span>
+          <button onClick={onClose}
+            style={{ background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'8px',
+              padding:'5px 12px', color:'var(--text3)', cursor:'pointer', fontSize:'12px', display:'flex', alignItems:'center', gap:'5px' }}>
+            <X size={12}/> Close
+          </button>
+        </div>
+        {loading
+          ? <div style={{ width:'500px', height:'600px', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text3)' }}>
+              <Loader2 size={28} color="var(--accent)" className="spin"/>
+            </div>
+          : <img src={imgSrc} alt={`Page ${pageNum}`}
+              style={{ maxWidth:'85vw', maxHeight:'85vh', objectFit:'contain',
+                boxShadow:'0 8px 60px rgba(0,0,0,0.8)', borderRadius:'4px', background:'#fff' }}/>
+        }
+      </div>
+    </div>
+  )
+}
 
 export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const [file,      setFile]      = useState(null)
-  const [pages,     setPages]     = useState([])   // [{id, thumb, rotation, blank}]
+  const [pages,     setPages]     = useState([])   // [{id, thumb, rotation, blank, origIdx}]
   const [loading,   setLoading]   = useState(false)
   const [state,     setState]     = useState('idle')
   const [errMsg,    setErrMsg]    = useState('')
   const [pct, setPct] = useState(0)
   const [hoverId,   setHoverId]   = useState(null)
-  const loadedRef   = useRef(0)
-  const totalRef    = useRef(0)
+  const [zoomPage,  setZoomPage]  = useState(null)  // { file, pageNum } for ZoomModal
+  const doneRef     = useRef(false)   // true once every thumbnail has loaded
   const dragItem    = useRef(null)
   const dragOverItem = useRef(null)
 
   const onDrop = useCallback(async accepted => {
     const f = accepted[0]
     setFile(f); setErrMsg(''); setLoading(true); setPages([])
-    loadedRef.current = 0; totalRef.current = 0
+    doneRef.current = false
     try {
       let first = true
-      const all = await getThumbnailsProgressive(f, (thumb, idx) => {
+      await getThumbnailsProgressive(f, (thumb, idx) => {
         if (first) { setLoading(false); first = false }
-        loadedRef.current += 1
         setPages(prev => [...prev, {
           id: `p-${idx}-${Date.now()}`,
           thumb: thumb.img,
@@ -37,7 +78,7 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
           origIdx: idx,
         }])
       }, 5)
-      totalRef.current = all.length
+      doneRef.current = true
     } catch (e) {
       setErrMsg('Failed to load PDF: ' + e.message)
       setLoading(false)
@@ -61,17 +102,40 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
   }
 
   /* ── Page actions ── */
-  const rotatePage = (id) => setPages(p => p.map(pg => pg.id === id ? { ...pg, rotation: (pg.rotation + 90) % 360 } : pg))
-  const deletePage = (id) => setPages(p => p.filter(pg => pg.id !== id))
-  const addBlank   = () => setPages(p => [...p, {
+  const rotatePage    = (id) => setPages(p => p.map(pg => pg.id === id ? { ...pg, rotation: (pg.rotation + 90) % 360 } : pg))
+  const deletePage    = (id) => setPages(p => p.filter(pg => pg.id !== id))
+  const addBlank      = () => setPages(p => [...p, {
     id: `blank-${Date.now()}`, thumb: null, rotation: 0, blank: true, origIdx: -1,
   }])
+
+  /** Duplicate: insert a clone of the target page immediately after it. */
+  const duplicatePage = (id) => {
+    setPages(prev => {
+      const idx = prev.findIndex(pg => pg.id === id)
+      if (idx === -1) return prev
+      const original = prev[idx]
+      const clone = {
+        ...original,
+        id: `clone-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      }
+      const next = [...prev]
+      next.splice(idx + 1, 0, clone)
+      return next
+    })
+  }
+
+  /** Zoom: open ZoomModal for the target page using its origIdx as 1-based page number. */
+  const zoomPageAction = (id) => {
+    const pg = pages.find(p => p.id === id)
+    if (!pg || pg.blank || pg.origIdx < 0) return
+    setZoomPage({ file, pageNum: pg.origIdx + 1 })
+  }
 
   /* ── Apply ── */
   const apply = async () => {
     if (!file || pages.length === 0) return
-    if (loadedRef.current < totalRef.current) {
-      setErrMsg(`Still loading pages (${loadedRef.current}/${totalRef.current}). Please wait a moment, then save.`)
+    if (!doneRef.current) {
+      setErrMsg('Still loading pages. Please wait a moment, then save.')
       return
     }
     setState('loading'); setErrMsg(''); setPct(0)
@@ -85,14 +149,19 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
     }
   }
 
-  const reset = () => { setFile(null); setPages([]); setErrMsg(''); setState('idle') }
+  const reset = () => { setFile(null); setPages([]); setErrMsg(''); setState('idle'); doneRef.current = false }
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
-      <TopBar onBack={onBack} title="⊞ Organize PDF" subtitle="Drag to reorder, rotate, or delete pages"
+      <TopBar onBack={onBack} title="⊞ Organize PDF" subtitle="Drag to reorder, rotate, duplicate, or delete pages"
         dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome}
         showCategories={showCategories} activeCategory={activeCategory}
         onCategoryChange={onCategoryChange} search={search} onSearch={onSearch} />
+
+      {/* ZoomModal overlay */}
+      {zoomPage && (
+        <ZoomModal file={zoomPage.file} pageNum={zoomPage.pageNum} onClose={() => setZoomPage(null)} />
+      )}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
@@ -167,6 +236,8 @@ export default function OrganizePDFPage({ onBack, dark, onToggleTheme, onGoHome,
                 onDragEnd={handleDragEnd}
                 onRotate={rotatePage}
                 onDelete={deletePage}
+                onDuplicate={duplicatePage}
+                onZoom={zoomPageAction}
                 onAddBlank={addBlank}
               />
           )}
