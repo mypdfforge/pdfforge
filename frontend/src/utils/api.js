@@ -67,8 +67,8 @@ export const uploadPDF = (file)       => { const f=new FormData(); f.append('fil
 export const exportPDF = (sid,blocks) => render.post(`/export/${sid}`,{blocks},{responseType:'blob'})
 
 export const downloadBlob = (data, filename, type='application/pdf') => {
-  const url = URL.createObjectURL(new Blob([data],{type}))
+  const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data],{type}))
   const a   = document.createElement('a')
   a.href=url; a.download=filename; a.click()
-  URL.revokeObjectURL(url)
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
 }

@@ -19,6 +19,7 @@
 // ── In-memory cache ────────────────────────────────────────────────────
 const memCache   = new Map()
 const inProgress = new Map()
+const listeners  = new Map()   // key -> Set<onPageReady> for renders still running
 
 function fileKey(file) {
   return `${file.name}::${file.size}::${file.lastModified}`
@@ -113,6 +114,7 @@ export async function getThumbnailsProgressive(file, onPageReady, priority = 5) 
   // 1. In-memory hit — instant
   if (memCache.has(key)) {
     memCache.get(key).forEach((t, i) => { if (t?.img) onPageReady(t, i) })
+    listeners.get(key)?.add(onPageReady)   // render still running: also get the pages that land later
     return memCache.get(key)
   }
 
@@ -136,13 +138,16 @@ export async function getThumbnailsProgressive(file, onPageReady, priority = 5) 
   const total  = pdfDoc.numPages
   const thumbs = new Array(total).fill(null)
   memCache.set(key, thumbs)
+  const subs = new Set([onPageReady])
+  listeners.set(key, subs)
+  const emit = (t, i) => subs.forEach(cb => cb(t, i))
 
   // Render priority pages immediately (page 1 first — UI unblocks fast)
   const priorityCount = Math.min(priority, total)
   for (let i = 1; i <= priorityCount; i++) {
     const thumb  = await renderPage(pdfDoc, i, 0.3)
     thumbs[i-1]  = thumb
-    onPageReady(thumb, i - 1)
+    emit(thumb, i - 1)
     await yieldToBrowser()   // let browser paint between pages
   }
 
@@ -153,12 +158,14 @@ export async function getThumbnailsProgressive(file, onPageReady, priority = 5) 
         await idleYield()
         const thumb = await renderPage(pdfDoc, i, 0.3)
         thumbs[i-1] = thumb
-        onPageReady(thumb, i - 1)
+        emit(thumb, i - 1)
       }
+      listeners.delete(key)
       await pdfDoc.destroy()
       await dbSet(key, thumbs)   // save to IndexedDB when all done
     })().catch(console.error)
   } else {
+    listeners.delete(key)
     await pdfDoc.destroy()
     await dbSet(key, thumbs)
   }

@@ -3,6 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import { Upload, Loader2, CheckCircle, AlertCircle, Info, X, Download,
          RotateCw, Trash2, Copy, ZoomIn, Undo2, FileText, ChevronUp, ChevronDown, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import TopBar from '../components/TopBar'
+import MergeToolPage from './MergeToolPage'
 import * as api from '../utils/api'
 import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
 import { clientExtract, clientDuplicatePage, clientDeletePages, clientRepair, clientRedact, clientFindReplace } from '../utils/pdfClient'
@@ -371,7 +372,7 @@ function ActionIcon({ title, color, border, icon, onClick }) {
 }
 
 // ── Main ToolPage ──────────────────────────────────────────────────────
-export default function ToolPage({ toolId, onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
+function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const cfg = CONFIGS[toolId]
 
   const [files,         setFiles]         = useState([])
@@ -938,4 +939,9 @@ function ClassicPreviewPanel({ file, selectedPages }) {
       </div>
     </div>
   )
+}
+
+// merge gets its own multi-file visual grid page; every other tool keeps the old flow
+export default function ToolPage(props) {
+  return props.toolId === 'merge' ? <MergeToolPage onBack={props.onBack} /> : <ToolPageInner {...props} />
 }
