@@ -1,6 +1,6 @@
 /**
  * mergeClient.js — page-level merge engine (pdf-lib, 100% in browser) + pure ordering helpers.
- * Page shape: { id, fileId, origIdx, rotation, thumb, deleted }
+ * Page shape: { id, fileId, origIdx, rotation, thumb, deleted, blank? } (blank: origIdx -1, fileId of its neighbour)
  * File shape: { id, file, name, size, count }
  */
 function lib() {
@@ -113,7 +113,7 @@ export async function mergePages(files, pages, onProgress, { keepForms = true } 
   const copied = new Map()
   let done = 0
   for (const [fi, f] of files.entries()) {
-    const mine = live.filter(p => p.fileId === f.id)
+    const mine = live.filter(p => p.fileId === f.id && !p.blank)
     if (mine.length) {
       const cached = await loadDoc(f.id, f.file)
       const src = keepForms ? cached : await flattenedCopy(f.file)
@@ -129,11 +129,13 @@ export async function mergePages(files, pages, onProgress, { keepForms = true } 
     await new Promise(r => setTimeout(r, 0)) // let the spinner paint
   }
   const used = new Set(), seen = new Set()
+  let size = [595.28, 841.89] // shortcut: blank page copies the previous page's size (A4 if first), upgrade with a size picker
   for (const p of live) {
-    const { page, keep, fileNo } = copied.get(p.id)
+    const c = copied.get(p.id)
+    const page = c ? (out.addPage(c.page), c.page) : out.addPage(size)
+    size = [page.getWidth(), page.getHeight()]
     if (p.rotation) page.setRotation(degrees((((page.getRotation().angle + p.rotation) % 360) + 360) % 360))
-    out.addPage(page)
-    if (keep) try { adoptFields(out, page, used, seen, fileNo) } catch { /* field stays inert */ }
+    if (c?.keep) try { adoptFields(out, page, used, seen, c.fileNo) } catch { /* field stays inert */ }
   }
   const bytes = await out.save()
   onProgress?.({ done: files.length + 1, total: files.length + 1 })

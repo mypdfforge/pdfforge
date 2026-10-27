@@ -3,7 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
 import {
   Upload, Loader2, CheckCircle, AlertCircle, FileText, X, ZoomIn, RotateCw, RotateCcw, Copy,
-  Trash2, Undo2, GripVertical, ChevronUp, ChevronDown, ShieldCheck,
+  Trash2, Undo2, GripVertical, ChevronUp, ChevronDown, ShieldCheck, FilePlus,
 } from 'lucide-react'
 import { downloadBlob } from '../utils/api'
 import { formatBytes } from '../utils/credits'
@@ -14,6 +14,7 @@ const W = 140, H = 180
 // each file gets its color once, when added, so it never changes when files are reordered (cycles after 6 files)
 const DOC_COLORS = ['#3b82f6','#10b981','#f59e0b','#ec4899','#8b5cf6','#06b6d4']
 let seq = 0, dupSeq = 0
+const newBlank = fileId => ({ id:`${fileId}+${++dupSeq}`, fileId, origIdx:-1, rotation:0, thumb:null, deleted:false, blank:true })
 
 // Layout: root is exactly viewport high, so the sidebar and the canvas each own their scrollbar
 // and the Merge button (sidebar footer) can never be pushed out of view.
@@ -78,7 +79,9 @@ const PageCard = React.memo(function PageCard({ pg, num, side, ghost, src, docN,
       {side && <div style={{ position:'absolute', top:0, height:H, [side === 'before' ? 'left' : 'right']:2, width:4, borderRadius:2, background:'var(--brand)', boxShadow:'0 0 10px var(--brand)', animation:'mpPulse 1s ease infinite', zIndex:20 }}/>}
       <div style={{ position:'relative', width:W }}>
         <div className="mp-thumb" style={{ width:W, height:H, borderRadius:10, overflow:'hidden', border:`3px solid ${color}`, background:'var(--bg3)', display:'flex', alignItems:'center', justifyContent:'center', transition:'border-color .15s' }}>
-          {pg.thumb
+          {pg.blank
+            ? <div style={{ width:'100%', height:'100%', background:'#fff', color:'#999', fontSize:12, display:'flex', alignItems:'center', justifyContent:'center', ...(pg.deleted && { opacity:.35 }) }}>Blank</div>
+            : pg.thumb
             ? <img src={pg.thumb} alt="" draggable={false}
                 style={{ width:'100%', height:'100%', objectFit:'contain', background:'#fff', transform:`rotate(${pg.rotation}deg)${sideways ? ' scale(.77)' : ''}`, transition:'transform .2s', ...(pg.deleted && { opacity:.35, filter:'grayscale(1)' }) }}/>
             : <div style={{ width:'85%', height:'90%', borderRadius:4, background:'linear-gradient(90deg,var(--bg2) 25%,var(--bg3) 50%,var(--bg2) 75%)', backgroundSize:'200% 100%', animation:'shimmer 1.4s infinite' }}/>}
@@ -89,15 +92,16 @@ const PageCard = React.memo(function PageCard({ pg, num, side, ghost, src, docN,
           </div>
         ) : (
           <div className="mp-actions" style={{ position:'absolute', top:8, right:8, display:'flex', flexDirection:'column', gap:5, zIndex:10 }}>
-            <Act label="Zoom"          bg="rgba(30,30,50,.9)"   onClick={() => h.zoom(pg.id)}><ZoomIn size={13}/></Act>
+            {!pg.blank && <Act label="Zoom" bg="rgba(30,30,50,.9)" onClick={() => h.zoom(pg.id)}><ZoomIn size={13}/></Act>}
             <Act label="Rotate 90°"    bg="rgba(234,88,12,.9)"  onClick={() => h.rotate([pg.id])}><RotateCw size={13}/></Act>
             <Act label="Duplicate page" bg="rgba(16,155,117,.9)" onClick={() => h.duplicate(pg.id)}><Copy size={13}/></Act>
+            <Act label="Insert blank page after" bg="rgba(99,102,241,.9)" onClick={() => h.blankAfter(pg.id)}><FilePlus size={13}/></Act>
             <Act label="Delete"        bg="rgba(229,83,75,.9)"  onClick={() => h.patch(pg.id, { deleted:true })}><Trash2 size={13}/></Act>
           </div>
         )}
         <div style={{ textAlign:'center', marginTop:7, fontSize:11, fontWeight:600, color:'var(--text3)' }}>
           <div style={{ width:W, boxSizing:'border-box', margin:'0 auto 4px', padding:'3px 6px', borderRadius:6, background:color, color:'#fff', fontSize:11, fontWeight:700, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', opacity: pg.deleted ? .5 : 1 }}>
-            Doc {docN} · p. {pg.origIdx + 1}
+            Doc {docN} · {pg.blank ? 'blank' : `p. ${pg.origIdx + 1}`}
           </div>
           {pg.deleted ? 'Removed' : `Page ${num}`}
           {pg.dup && !pg.deleted && <span style={{ color:'var(--green)', marginLeft:5 }}>copy</span>}
@@ -116,7 +120,7 @@ const Act = ({ label, bg, onClick, children }) => (
 )
 
 // ── Page ──────────────────────────────────────────────────────────────
-export default function MergeToolPage({ onBack }) {
+export default function MergeToolPage({ onBack, organize = false, exportSeparate }) {
   const [files, setFiles]   = useState([])   // {id,file,name,size,count}
   const [pages, setPages]   = useState([])   // flat final order
   const [manual, setManual] = useState(false) // true once pages were dragged by hand
@@ -229,8 +233,15 @@ export default function MergeToolPage({ onBack }) {
         next.splice(i + 1, 0, { ...p[i], id:`${p[i].id}~${++dupSeq}`, dup:true, deleted:false })
         return next
       }),
+      blankAfter: id => setPages(p => {
+        const i = p.findIndex(x => x.id === id); if (i < 0) return p
+        const next = [...p]
+        next.splice(i + 1, 0, newBlank(p[i].fileId))
+        return next
+      }),
+      blankStart: () => setPages(p => p.length ? [newBlank(p[0].fileId), ...p] : p),
       zoom:   id => {
-        const pg = pagesRef.current.find(x => x.id === id), f = pg && filesRef.current.find(x => x.id === pg.fileId)
+        const pg = pagesRef.current.find(x => x.id === id), f = pg && !pg.blank && filesRef.current.find(x => x.id === pg.fileId)
         if (f) setZoom({ file:f.file, pageNum:pg.origIdx + 1, rotation:pg.rotation })
       },
     }
@@ -242,11 +253,12 @@ export default function MergeToolPage({ onBack }) {
   const liveCnt  = Object.keys(nums).length
   const estSize  = useMemo(() => files.reduce((s, f) => s + f.size * pages.filter(p => p.fileId === f.id && !p.deleted).length / f.count, 0), [files, pages])
 
-  const run = async () => {
+  const run = async (separate = false) => {
     setState('loading'); setPct(0)
     try {
-      const blob = await mergePages(files, pages, p => setPct(Math.round(p.done / p.total * 100)), { keepForms })
-      downloadBlob(blob, 'merged.pdf')
+      const prog = p => setPct(Math.round(p.done / p.total * 100))
+      if (separate) downloadBlob(await exportSeparate(files, pages, prog, { keepForms }), 'organized.zip')
+      else downloadBlob(await mergePages(files, pages, prog, { keepForms }), organize ? 'organized.pdf' : 'merged.pdf')
       setState('done'); setTimeout(() => setState('idle'), 3000)
     } catch (e) { setErrs([`Merge failed: ${e.message}`]); setState('idle') }
   }
@@ -254,7 +266,8 @@ export default function MergeToolPage({ onBack }) {
   return (
     <div className="mp-root">
       <style>{CSS}</style>
-      <TopBar onBack={onBack} title="Merge PDFs" subtitle="Reorder files and pages, rotate, duplicate, delete — then merge"/>
+      <TopBar onBack={onBack} title={organize ? 'Organize PDF' : 'Merge PDFs'}
+        subtitle={organize ? 'Reorder, rotate, duplicate, delete, add blank pages — then save' : 'Reorder files and pages, rotate, duplicate, delete — then merge'}/>
       {zoom && <ZoomModal {...zoom} onClose={closeZoom}/>}
 
       <div className="mp-wrap">
@@ -300,6 +313,7 @@ export default function MergeToolPage({ onBack }) {
                 <button className="icon-btn" aria-label="Remove file" onClick={() => removeFile(f.id)} style={{ width:24, height:24 }}><X size={13}/></button>
               </div>
             ))}
+            {files.length > 0 && <button className="btn btn-ghost" onClick={h.blankStart} style={{ flexShrink:0 }}><FilePlus size={13}/> Blank page at start</button>}
             {manual && <button className="btn btn-ghost" onClick={resetOrder} style={{ flexShrink:0 }}><RotateCcw size={13}/> Reset to file order</button>}
           </div>
 
@@ -307,12 +321,18 @@ export default function MergeToolPage({ onBack }) {
             <div style={{ fontSize:12, color:'var(--text2)' }}>
               {files.length} file{files.length !== 1 && 's'} • {liveCnt} pages • ~{formatBytes(estSize)}
             </div>
-            <button className="btn btn-primary" disabled={!liveCnt || state === 'loading'} onClick={run}
+            <button className="btn btn-primary" disabled={!liveCnt || state === 'loading'} onClick={() => run()}
               style={{ height:40, background: state === 'done' ? 'var(--green)' : undefined }}>
-              {state === 'loading' ? <><Loader2 size={14} className="spin"/> Merging {pct}%</>
+              {state === 'loading' ? <><Loader2 size={14} className="spin"/> {organize ? 'Saving' : 'Merging'} {pct}%</>
                 : state === 'done' ? <><CheckCircle size={14}/> Downloaded!</>
+                : organize ? (files.length > 1 ? 'Merge & download' : 'Save PDF')
                 : <>Merge {files.length || ''} PDF{files.length !== 1 && 's'}</>}
             </button>
+            {exportSeparate && files.length > 1 && (
+              <button className="btn btn-ghost" disabled={!liveCnt || state === 'loading'} onClick={() => run(true)} style={{ height:36 }}>
+                Download separately (.zip)
+              </button>
+            )}
             <label style={{ fontSize:11, color:'var(--text3)', display:'flex', gap:6, alignItems:'center', cursor:'pointer' }}>
               <input type="checkbox" checked={keepForms} onChange={e => setKeepForms(e.target.checked)}/>
               Keep forms fillable (same field names get renamed)
