@@ -27,3 +27,9 @@ Thumbs.db
 *.pptx
 /tmp/
 .aider*
+
+# editor test artefacts
+e2e/dist/
+e2e/out/
+e2e/lucide-stub.js
+e2e/dbg.mjs

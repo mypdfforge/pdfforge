@@ -4,7 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "test": "node --test src/editor/__tests__/*.test.ts",
+    "typecheck": "tsc -p src/editor/tsconfig.json",
+    "test:e2e": "node e2e/build.mjs && node e2e/e2e.mjs",
+    "fixtures": "python3 src/editor/__tests__/fixtures/make_fixtures.py"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",

@@ -16,7 +16,7 @@ export const CATEGORIES = [
 // runs: 'browser' = file never leaves the device (verified: no network calls in its code path)
 //       'server'  = file is uploaded to the PDFForge backend (OCR still uploads until on-device OCR ships)
 export const TOOLS = [
-  { id:'editor',       icon:Pencil,        label:'Resume Editor',    desc:'Edit text directly on the page, keeping the original layout.', category:'enhance',  runs:'server', featured:true },
+  { id:'editor',       icon:Pencil,        label:'Resume Editor',    desc:'Edit text directly on the page in your browser, keeping fonts, colours and layout.', category:'enhance',  runs:'browser', featured:true },
   { id:'merge',        icon:Layers,        label:'Merge PDF',        desc:'Combine several PDFs into one.',                  category:'organize', runs:'browser' },
   { id:'split',        icon:Scissors,      label:'Split PDF',        desc:'Split by page range, selecting pages visually.',  category:'organize', runs:'browser' },
   { id:'extract',      icon:FileOutput,    label:'Extract pages',    desc:'Pull specific pages into a new PDF.',             category:'organize', runs:'browser' },
