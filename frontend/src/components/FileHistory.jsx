@@ -53,7 +53,7 @@ export default function FileHistory({ onClose }) {
           background: 'var(--bg2)',
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
-          width: '380px',
+          width: 'min(380px, calc(100vw - 32px))',
           maxHeight: '75vh',
           display: 'flex',
           flexDirection: 'column',

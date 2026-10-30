@@ -129,8 +129,8 @@ export default function Dashboard({ onSelectTool, onHistory, onGoHome }) {
         </div>
 
         {/* ── Search & Filter Controls ── */}
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
-          <div className="seg" role="group" aria-label="Filter by category">
+        <div className="filter-bar">
+          <div className="seg seg-categories" role="group" aria-label="Filter by category">
             {CATEGORIES.map(c => (
               <button key={c.id} aria-pressed={cat === c.id} onClick={() => setCat(c.id)}>
                 {c.label}
@@ -138,35 +138,37 @@ export default function Dashboard({ onSelectTool, onHistory, onGoHome }) {
             ))}
           </div>
 
-          <div style={{ flex: 1 }} />
+          <div className="filter-bar-spacer" />
 
-          <button
-            className="btn btn-ghost"
-            aria-pressed={browserOnly}
-            onClick={() => setBrowserOnly(b => !b)}
-            style={browserOnly ? { borderColor: 'var(--brand)', color: 'var(--text)', background: 'var(--bg3)' } : undefined}
-          >
-            <ShieldCheck size={14} color={browserOnly ? 'var(--brand)' : undefined} /> Browser only
-          </button>
-
-          <label style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-            <Search size={14} color="var(--text3)" style={{ position: 'absolute', left: 10, pointerEvents: 'none' }} />
-            <input
-              value={q}
-              onChange={e => setQ(e.target.value)}
-              placeholder="Filter tools…"
-              aria-label="Filter tools"
-              style={{ height: 34, paddingLeft: 30, width: 190 }}
-            />
-          </label>
-
-          <div className="seg" role="group" aria-label="Layout">
-            <button aria-pressed={!list} aria-label="Grid view" onClick={() => setList(false)}>
-              <LayoutGrid size={14} />
+          <div className="filter-bar-actions">
+            <button
+              className="btn btn-ghost"
+              aria-pressed={browserOnly}
+              onClick={() => setBrowserOnly(b => !b)}
+              style={browserOnly ? { borderColor: 'var(--brand)', color: 'var(--text)', background: 'var(--bg3)' } : undefined}
+            >
+              <ShieldCheck size={14} color={browserOnly ? 'var(--brand)' : undefined} /> Browser only
             </button>
-            <button aria-pressed={list} aria-label="List view" onClick={() => setList(true)}>
-              <List size={14} />
-            </button>
+
+            <label className="filter-search-label" style={{ flex: 1, minWidth: 120 }}>
+              <Search size={14} color="var(--text3)" style={{ position: 'absolute', left: 10, pointerEvents: 'none' }} />
+              <input
+                value={q}
+                onChange={e => setQ(e.target.value)}
+                placeholder="Filter tools…"
+                aria-label="Filter tools"
+                style={{ height: 34, paddingLeft: 30, width: '100%' }}
+              />
+            </label>
+
+            <div className="seg" role="group" aria-label="Layout">
+              <button aria-pressed={!list} aria-label="Grid view" onClick={() => setList(false)}>
+                <LayoutGrid size={14} />
+              </button>
+              <button aria-pressed={list} aria-label="List view" onClick={() => setList(true)}>
+                <List size={14} />
+              </button>
+            </div>
           </div>
         </div>
 

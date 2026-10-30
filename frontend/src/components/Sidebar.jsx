@@ -1,8 +1,8 @@
 import React from 'react'
-import { Home, Clock, PanelLeftClose, PanelLeft, Search, Sun, Moon } from 'lucide-react'
+import { Home, Clock, PanelLeftClose, PanelLeft, Search, Sun, Moon, X } from 'lucide-react'
 import { CATEGORIES, TOOLS } from '../utils/tools'
 
-export default function Sidebar({ current, collapsed, onToggle, onNavigate, onSearch, onHistory, dark, onToggleTheme }) {
+export default function Sidebar({ current, collapsed, onToggle, onNavigate, onSearch, onHistory, onClose, dark, onToggleTheme }) {
   const Item = ({ icon: Icon, label, onClick, active, tool }) => (
     <button className={`sb-item${tool ? ' sb-tool' : ''}`} title={collapsed ? label : undefined} aria-label={label}
       aria-current={active ? 'page' : undefined} onClick={onClick}>
@@ -16,6 +16,9 @@ export default function Sidebar({ current, collapsed, onToggle, onNavigate, onSe
         <span className="sb-label" style={{ fontWeight:700, fontSize:15, flex:1 }}>PDFForge</span>
         <button className="icon-btn hide-sm" onClick={onToggle} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
           {collapsed ? <PanelLeft size={15}/> : <PanelLeftClose size={15}/>}
+        </button>
+        <button className="icon-btn show-sm" onClick={onClose || onToggle} aria-label="Close sidebar">
+          <X size={15}/>
         </button>
       </div>
       <nav className="sb-nav">

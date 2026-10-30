@@ -29,15 +29,34 @@ const CSS = `
 .mp-actions{opacity:0;transition:opacity .12s}
 .mp-card:hover .mp-actions,.mp-card:focus-within .mp-actions{opacity:1}
 .mp-card:hover .mp-thumb{border-color:var(--brand)}
-@media (hover:none){.mp-actions{opacity:1}}
+.mp-mob-btn{width:28px;height:28px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text2);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;transition:all .12s}
+.mp-mob-btn:disabled{opacity:.25;cursor:default}
+.mp-mob-btn:not(:disabled):active{background:var(--bg3);color:var(--text)}
+.mp-mob-btn-danger{color:var(--red)}
+@media (hover:none){
+  .mp-actions{display:none}
+  .mp-card-mobile-bar{display:flex !important}
+}
+@media (hover:hover){
+  .mp-card-mobile-bar{display:none}
+}
 @keyframes mpPulse{0%,100%{opacity:1}50%{opacity:.5}}
+@media (min-width:769px){
+  .mp-files-bar{display:none}
+  .mp-foot-mobile{display:none}
+  .mp-side-content{display:flex;flex-direction:column;flex:1;min-height:0}
+}
 @media (max-width:768px){
-  .mp-root{height:auto;overflow:visible}
-  .mp-wrap{flex-direction:column;overflow:visible}
-  .mp-side{width:100%;border-right:none;border-bottom:1px solid var(--border)}
-  .mp-list{flex:none;max-height:220px}
-  .mp-foot{position:sticky;bottom:0;z-index:20}
-  .mp-canvas{height:75vh;flex:none}
+  .mp-root{height:100vh;height:100dvh;overflow:hidden}
+  .mp-wrap{flex-direction:column;overflow:hidden;flex:1}
+  .mp-side{width:100%;border-right:none;border-bottom:1px solid var(--border);flex-shrink:0}
+  .mp-files-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--border);cursor:pointer}
+  .mp-side-content{display:none}
+  .mp-side.open .mp-side-content{display:flex;flex-direction:column;max-height:48vh;overflow-y:auto}
+  .mp-side:not(.open){border-bottom:none}
+  .mp-side .mp-foot{display:none}
+  .mp-canvas{flex:1;min-height:0;height:auto;overflow-y:auto;padding:12px 14px 110px}
+  .mp-foot-mobile{position:fixed;bottom:0;left:0;right:0;z-index:90;background:var(--bg2);border-top:1px solid var(--border);padding:10px 16px max(10px,env(safe-area-inset-bottom));box-shadow:0 -6px 20px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:8px}
 }
 `
 
@@ -68,7 +87,8 @@ const PageCard = React.memo(function PageCard({ pg, num, src, docN, color, h }) 
   return (
     <div className="mp-card" style={{ position:'relative', width:W + 20, padding:'0 10px 16px' }} title={src}>
       <div style={{ position:'relative', width:W }}>
-        <div className="mp-thumb" style={{ width:W, height:H, borderRadius:10, overflow:'hidden', border:`3px solid ${color}`, background:'var(--bg3)', display:'flex', alignItems:'center', justifyContent:'center', transition:'border-color .15s' }}>
+        <div className="mp-thumb" onClick={() => h.zoom(pg.id)}
+          style={{ width:W, height:H, borderRadius:10, overflow:'hidden', border:`3px solid ${color}`, background:'var(--bg3)', display:'flex', alignItems:'center', justifyContent:'center', transition:'border-color .15s', cursor:'pointer' }}>
           {pg.thumb
             ? <img src={pg.thumb} alt="" draggable={false}
                 style={{ width:'100%', height:'100%', objectFit:'contain', background:'#fff', transform:`rotate(${pg.rotation}deg)${sideways ? ' scale(.77)' : ''}`, transition:'transform .2s' }}/>
@@ -92,6 +112,24 @@ const PageCard = React.memo(function PageCard({ pg, num, src, docN, color, h }) 
           </div>
           Page {num}
           {pg.rotation !== 0 && <span style={{ color:'var(--brand)', marginLeft:5, fontWeight:700 }}>{pg.rotation}°</span>}
+        </div>
+
+        {/* Mobile action bar */}
+        <div className="mp-card-mobile-bar" style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:4, marginTop:5 }}>
+          <button className="mp-mob-btn" onClick={e => { e.stopPropagation(); h.rotate([pg.id], -90) }} aria-label="Rotate CCW" title="Rotate 90° CCW">
+            <RotateCcw size={13}/>
+          </button>
+          <button className="mp-mob-btn" onClick={e => { e.stopPropagation(); h.rotate([pg.id], 90) }} aria-label="Rotate CW" title="Rotate 90° CW">
+            <RotateCw size={13}/>
+          </button>
+          {pg.rotation !== 0 && (
+            <button className="mp-mob-btn mp-mob-btn-danger" onClick={e => { e.stopPropagation(); h.resetRotation([pg.id]) }} aria-label="Reset" title="Reset rotation">
+              <Undo2 size={13}/>
+            </button>
+          )}
+          <button className="mp-mob-btn" onClick={e => { e.stopPropagation(); h.zoom(pg.id) }} aria-label="Zoom" title="Preview page">
+            <ZoomIn size={13}/>
+          </button>
         </div>
       </div>
     </div>
@@ -131,6 +169,7 @@ export default function RotateToolPage({ onBack }) {
   const [keepForms, setKeepForms] = useState(true)
   const [zoom, setZoom]     = useState(null)
   const [fileOver, setFileOver] = useState(null)
+  const [filesOpen, setFilesOpen] = useState(false)
 
   const filesRef  = useRef([])
   const pagesRef  = useRef([])
@@ -139,6 +178,8 @@ export default function RotateToolPage({ onBack }) {
 
   filesRef.current = files
   pagesRef.current = pages
+
+  const isFilesOpen = filesOpen || files.length === 0
 
   useEffect(() => () => stopRef.current?.(), [])
 
@@ -255,100 +296,117 @@ export default function RotateToolPage({ onBack }) {
 
       <div className="mp-wrap">
         {/* ── Left Sidebar (Exact Merge Tool look and feel) ── */}
-        <aside className="mp-side">
-          <div className="mp-top">
-            <div className="badge badge-browser" style={{ height:'auto', padding:'6px 10px', whiteSpace:'normal' }}>
-              <ShieldCheck size={13}/> Runs 100% in your browser • Zero data uploaded
-            </div>
-
-            {/* Exact drop box from MergeToolPage */}
-            <div {...dz.getRootProps()} style={{ border:`1px dashed ${dz.isDragActive ? 'var(--brand)' : 'var(--border2)'}`, background:'var(--bg2)', borderRadius:10, padding:'16px 12px', textAlign:'center', cursor:'pointer' }}>
-              <input {...dz.getInputProps()}/>
-              <Upload size={16} color="var(--brand)" style={{ display:'block', margin:'0 auto 6px' }}/>
-              <p style={{ fontSize:13, fontWeight:500, color:'var(--text)' }}>Drop PDFs or <span style={{ color:'var(--brand)' }}>browse</span></p>
-            </div>
-
-            {/* Quick batch rotate shortcuts */}
-            {files.length > 0 && (
-              <div style={{ display:'flex', gap:6 }}>
-                <button className="btn btn-ghost" onClick={() => h.rotateAll(90)} style={{ flex:1, height:30, fontSize:12, padding:'0 8px' }}>
-                  <RotateCw size={12}/> All +90°
-                </button>
-                <button className="btn btn-ghost" onClick={() => h.rotateAll(-90)} style={{ flex:1, height:30, fontSize:12, padding:'0 8px' }}>
-                  <RotateCcw size={12}/> All -90°
-                </button>
-                {rotatedCount > 0 && (
-                  <button className="btn btn-ghost" onClick={h.resetAll} style={{ height:30, fontSize:11, padding:'0 8px', color:'var(--text3)' }}>
-                    Reset
-                  </button>
-                )}
+        <aside className={`mp-side${isFilesOpen ? ' open' : ''}`}>
+          {/* Mobile expandable strip */}
+          {files.length > 0 && (
+            <div className="mp-files-bar" onClick={() => setFilesOpen(o => !o)}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, flex:1, minWidth:0 }}>
+                <FileText size={15} color="var(--brand)" style={{ flexShrink:0 }}/>
+                <span style={{ fontSize:13, fontWeight:600, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  {files.length} document{files.length !== 1 ? 's' : ''} ({pages.length} pages)
+                </span>
               </div>
-            )}
-
-            {errs.length > 0 && (
-              <div style={{ fontSize:12, color:'var(--red)', display:'flex', gap:6, alignItems:'flex-start' }}>
-                <AlertCircle size={13} style={{ flexShrink:0, marginTop:2 }}/>
-                <div style={{ flex:1 }}>{errs.map((m, i) => <div key={i}>{m}</div>)}</div>
-                <button aria-label="Dismiss" onClick={() => setErrs([])} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer' }}><X size={12}/></button>
-              </div>
-            )}
-          </div>
-
-          <div className="mp-list">
-            {files.map((f, i) => (
-              <div key={f.id}
-                onDragOver={e => { if (fileDrag.current != null) { e.preventDefault(); setFileOver(i) } }}
-                onDrop={() => { const from = fileDrag.current; fileDrag.current = null; setFileOver(null); if (from != null) reorderFile(from, i) }}
-                style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 8px', background:'var(--bg2)', border:`1px solid ${fileOver === i ? 'var(--brand)' : 'var(--border)'}`, borderRadius:8, flexShrink:0 }}>
-                <span draggable aria-label="Drag to reorder"
-                  onDragStart={e => { fileDrag.current = i; e.dataTransfer.setData('text/plain', 'file'); e.dataTransfer.setDragImage(e.currentTarget.parentElement, 10, 10) }}
-                  onDragEnd={() => { fileDrag.current = null; setFileOver(null) }}
-                  style={{ display:'flex', cursor:'grab', flexShrink:0 }}><GripVertical size={14} color="var(--text3)"/></span>
-                <FileText size={14} color={f.color} style={{ flexShrink:0 }}/>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div title={f.name} style={{ fontSize:12, fontWeight:600, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>Doc {i + 1}: {f.name}</div>
-                  <div style={{ fontSize:11, color:'var(--text3)' }}>{f.count} pg • {formatBytes(f.size)}</div>
-                </div>
-                <button className="icon-btn" aria-label="Move up" disabled={i === 0} onClick={() => reorderFile(i, i - 1)} style={{ width:24, height:24 }}><ChevronUp size={13}/></button>
-                <button className="icon-btn" aria-label="Move down" disabled={i === files.length - 1} onClick={() => reorderFile(i, i + 1)} style={{ width:24, height:24 }}><ChevronDown size={13}/></button>
-                <button className="icon-btn" aria-label="Rotate all pages in this file" title="Rotate all pages in this file +90°" onClick={() => h.rotate(pages.filter(p => p.fileId === f.id).map(p => p.id), 90)} style={{ width:24, height:24 }}><RotateCw size={13}/></button>
-                <button className="icon-btn" aria-label="Remove file" onClick={() => removeFile(f.id)} style={{ width:24, height:24 }}><X size={13}/></button>
-              </div>
-            ))}
-          </div>
-
-          <div className="mp-foot">
-            <div style={{ fontSize:12, color:'var(--text2)' }}>
-              {files.length} file{files.length !== 1 && 's'} • {pages.length} pages {rotatedCount > 0 ? `• ${rotatedCount} rotated` : ''} • ~{formatBytes(estSize)}
-            </div>
-
-            {/* If 1 file: direct download rotated PDF */}
-            {files.length <= 1 ? (
-              <button className="btn btn-primary" disabled={!pages.length || state === 'loading'} onClick={() => run(false)}
-                style={{ height:40, background: state === 'done' ? 'var(--green)' : undefined }}>
-                {state === 'loading' ? <><Loader2 size={14} className="spin"/> Saving {pct}%</>
-                  : state === 'done' ? <><CheckCircle size={14}/> Downloaded!</>
-                  : 'Download Rotated PDF'}
+              <button className="btn btn-ghost" style={{ height:28, fontSize:11, padding:'0 8px', flexShrink:0 }}>
+                {filesOpen ? 'Done ▲' : '+ Files ▼'}
               </button>
-            ) : (
-              <>
-                {/* If multiple files: Download separately (.zip) is primary */}
-                <button className="btn btn-primary" disabled={!pages.length || state === 'loading'} onClick={() => run(true)}
-                  style={{ height:40, background: state === 'done' ? 'var(--green)' : undefined }}>
-                  {state === 'loading' ? <><Loader2 size={14} className="spin"/> Packaging {pct}%</>
-                    : state === 'done' ? <><CheckCircle size={14}/> Downloaded!</>
-                    : `Download ${files.length} Files (.zip)`}
-                </button>
-                <button className="btn btn-ghost" disabled={!pages.length || state === 'loading'} onClick={() => run(false)} style={{ height:36 }}>
-                  Merge & download (.pdf)
-                </button>
-              </>
-            )}
+            </div>
+          )}
 
-            <label style={{ fontSize:11, color:'var(--text3)', display:'flex', gap:6, alignItems:'center', cursor:'pointer' }}>
-              <input type="checkbox" checked={keepForms} onChange={e => setKeepForms(e.target.checked)}/>
-              Keep forms fillable
-            </label>
+          <div className="mp-side-content">
+            <div className="mp-top">
+              <div className="badge badge-browser" style={{ height:'auto', padding:'6px 10px', whiteSpace:'normal' }}>
+                <ShieldCheck size={13}/> Runs 100% in your browser • Zero data uploaded
+              </div>
+
+              {/* Exact drop box from MergeToolPage */}
+              <div {...dz.getRootProps()} style={{ border:`1px dashed ${dz.isDragActive ? 'var(--brand)' : 'var(--border2)'}`, background:'var(--bg2)', borderRadius:10, padding:'16px 12px', textAlign:'center', cursor:'pointer' }}>
+                <input {...dz.getInputProps()}/>
+                <Upload size={16} color="var(--brand)" style={{ display:'block', margin:'0 auto 6px' }}/>
+                <p style={{ fontSize:13, fontWeight:500, color:'var(--text)' }}>Drop PDFs or <span style={{ color:'var(--brand)' }}>browse</span></p>
+              </div>
+
+              {/* Quick batch rotate shortcuts */}
+              {files.length > 0 && (
+                <div style={{ display:'flex', gap:6 }}>
+                  <button className="btn btn-ghost" onClick={() => h.rotateAll(90)} style={{ flex:1, height:30, fontSize:12, padding:'0 8px' }}>
+                    <RotateCw size={12}/> All +90°
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => h.rotateAll(-90)} style={{ flex:1, height:30, fontSize:12, padding:'0 8px' }}>
+                    <RotateCcw size={12}/> All -90°
+                  </button>
+                  {rotatedCount > 0 && (
+                    <button className="btn btn-ghost" onClick={h.resetAll} style={{ height:30, fontSize:11, padding:'0 8px', color:'var(--text3)' }}>
+                      Reset
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {errs.length > 0 && (
+                <div style={{ fontSize:12, color:'var(--red)', display:'flex', gap:6, alignItems:'flex-start' }}>
+                  <AlertCircle size={13} style={{ flexShrink:0, marginTop:2 }}/>
+                  <div style={{ flex:1 }}>{errs.map((m, i) => <div key={i}>{m}</div>)}</div>
+                  <button aria-label="Dismiss" onClick={() => setErrs([])} style={{ background:'none', border:'none', color:'var(--text3)', cursor:'pointer' }}><X size={12}/></button>
+                </div>
+              )}
+            </div>
+
+            <div className="mp-list">
+              {files.map((f, i) => (
+                <div key={f.id}
+                  onDragOver={e => { if (fileDrag.current != null) { e.preventDefault(); setFileOver(i) } }}
+                  onDrop={() => { const from = fileDrag.current; fileDrag.current = null; setFileOver(null); if (from != null) reorderFile(from, i) }}
+                  style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 8px', background:'var(--bg2)', border:`1px solid ${fileOver === i ? 'var(--brand)' : 'var(--border)'}`, borderRadius:8, flexShrink:0 }}>
+                  <span draggable aria-label="Drag to reorder"
+                    onDragStart={e => { fileDrag.current = i; e.dataTransfer.setData('text/plain', 'file'); e.dataTransfer.setDragImage(e.currentTarget.parentElement, 10, 10) }}
+                    onDragEnd={() => { fileDrag.current = null; setFileOver(null) }}
+                    style={{ display:'flex', cursor:'grab', flexShrink:0 }}><GripVertical size={14} color="var(--text3)"/></span>
+                  <FileText size={14} color={f.color} style={{ flexShrink:0 }}/>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div title={f.name} style={{ fontSize:12, fontWeight:600, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>Doc {i + 1}: {f.name}</div>
+                    <div style={{ fontSize:11, color:'var(--text3)' }}>{f.count} pg • {formatBytes(f.size)}</div>
+                  </div>
+                  <button className="icon-btn" aria-label="Move up" disabled={i === 0} onClick={() => reorderFile(i, i - 1)} style={{ width:24, height:24 }}><ChevronUp size={13}/></button>
+                  <button className="icon-btn" aria-label="Move down" disabled={i === files.length - 1} onClick={() => reorderFile(i, i + 1)} style={{ width:24, height:24 }}><ChevronDown size={13}/></button>
+                  <button className="icon-btn" aria-label="Rotate all pages in this file" title="Rotate all pages in this file +90°" onClick={() => h.rotate(pages.filter(p => p.fileId === f.id).map(p => p.id), 90)} style={{ width:24, height:24 }}><RotateCw size={13}/></button>
+                  <button className="icon-btn" aria-label="Remove file" onClick={() => removeFile(f.id)} style={{ width:24, height:24 }}><X size={13}/></button>
+                </div>
+              ))}
+            </div>
+
+            <div className="mp-foot">
+              <div style={{ fontSize:12, color:'var(--text2)' }}>
+                {files.length} file{files.length !== 1 && 's'} • {pages.length} pages {rotatedCount > 0 ? `• ${rotatedCount} rotated` : ''} • ~{formatBytes(estSize)}
+              </div>
+
+              {/* If 1 file: direct download rotated PDF */}
+              {files.length <= 1 ? (
+                <button className="btn btn-primary" disabled={!pages.length || state === 'loading'} onClick={() => run(false)}
+                  style={{ height:40, background: state === 'done' ? 'var(--green)' : undefined }}>
+                  {state === 'loading' ? <><Loader2 size={14} className="spin"/> Saving {pct}%</>
+                    : state === 'done' ? <><CheckCircle size={14}/> Downloaded!</>
+                    : 'Download Rotated PDF'}
+                </button>
+              ) : (
+                <>
+                  {/* If multiple files: Download separately (.zip) is primary */}
+                  <button className="btn btn-primary" disabled={!pages.length || state === 'loading'} onClick={() => run(true)}
+                    style={{ height:40, background: state === 'done' ? 'var(--green)' : undefined }}>
+                    {state === 'loading' ? <><Loader2 size={14} className="spin"/> Packaging {pct}%</>
+                      : state === 'done' ? <><CheckCircle size={14}/> Downloaded!</>
+                      : `Download ${files.length} Files (.zip)`}
+                  </button>
+                  <button className="btn btn-ghost" disabled={!pages.length || state === 'loading'} onClick={() => run(false)} style={{ height:36 }}>
+                    Merge & download (.pdf)
+                  </button>
+                </>
+              )}
+
+              <label style={{ fontSize:11, color:'var(--text3)', display:'flex', gap:6, alignItems:'center', cursor:'pointer' }}>
+                <input type="checkbox" checked={keepForms} onChange={e => setKeepForms(e.target.checked)}/>
+                Keep forms fillable
+              </label>
+            </div>
           </div>
         </aside>
 
@@ -380,6 +438,42 @@ export default function RotateToolPage({ onBack }) {
           </div>
         </div>
       </div>
+
+      {/* ── Fixed bottom action footer for mobile devices ── */}
+      {files.length > 0 && (
+        <div className="mp-foot-mobile">
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:11, color:'var(--text2)' }}>
+            <span>{files.length} file{files.length !== 1 && 's'} • {pages.length} pages {rotatedCount > 0 ? `• ${rotatedCount} rot.` : ''}</span>
+            <label style={{ fontSize:11, color:'var(--text3)', display:'flex', gap:4, alignItems:'center', cursor:'pointer' }}>
+              <input type="checkbox" checked={keepForms} onChange={e => setKeepForms(e.target.checked)}/>
+              Keep forms
+            </label>
+          </div>
+          <div style={{ display:'flex', gap:8, width:'100%' }}>
+            {files.length <= 1 ? (
+              <button className="btn btn-primary" disabled={!pages.length || state === 'loading'} onClick={() => run(false)}
+                style={{ flex:1, minWidth:0, height:42, background: state === 'done' ? 'var(--green)' : undefined, fontSize:12, padding:'4px 8px', display:'flex', alignItems:'center', justifyContent:'center', textAlign:'center', whiteSpace:'normal', lineHeight:1.2 }}>
+                {state === 'loading' ? <><Loader2 size={14} className="spin"/> Saving {pct}%</>
+                  : state === 'done' ? <><CheckCircle size={14}/> Downloaded!</>
+                  : 'Save Rotated PDF'}
+              </button>
+            ) : (
+              <>
+                <button className="btn btn-primary" disabled={!pages.length || state === 'loading'} onClick={() => run(true)}
+                  style={{ flex:1, minWidth:0, height:42, background: state === 'done' ? 'var(--green)' : undefined, fontSize:12, padding:'4px 8px', display:'flex', alignItems:'center', justifyContent:'center', textAlign:'center', whiteSpace:'normal', lineHeight:1.2 }}>
+                  {state === 'loading' ? <><Loader2 size={14} className="spin"/> {pct}%</>
+                    : state === 'done' ? <><CheckCircle size={14}/> Downloaded!</>
+                    : `Save ${files.length} (.zip)`}
+                </button>
+                <button className="btn btn-ghost" disabled={!pages.length || state === 'loading'} onClick={() => run(false)}
+                  style={{ flex:1, minWidth:0, height:42, padding:'4px 8px', fontSize:12, display:'flex', alignItems:'center', justifyContent:'center', textAlign:'center', whiteSpace:'normal', lineHeight:1.2 }}>
+                  Merge & Download
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

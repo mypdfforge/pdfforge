@@ -740,10 +740,10 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
       {zoomPage && <ZoomModal file={files[0]} pageNum={zoomPage} onClose={() => setZoomPage(null)}/>}
 
       {showSplit ? (
-        <div style={{ display:'flex', flex:1, height:'calc(100vh - 52px)', overflow:'hidden' }}>
+        <div className="tp-split-wrap" style={{ display:'flex', flex:1, height:'calc(100vh - 52px)', overflow:'hidden' }}>
 
           {/* ── Left controls panel ── */}
-          <div style={{ width:'280px', flexShrink:0, borderRight:'1px solid var(--border)', overflow:'hidden' }}>
+          <div className="tp-controls-panel" style={{ width:'280px', flexShrink:0, borderRight:'1px solid var(--border)', overflow:'hidden' }}>
             {isMerge
               ? <MultiFileSidebar files={files} onReorder={setFiles} onRemove={i=>setFiles(p=>p.filter((_,j)=>j!==i))} dropZoneJSX={dropZoneJSX} onRun={run} status={status}/>
               : controlsJSX}
@@ -764,10 +764,10 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
             />
           ) : (
             /* Classic 2-panel for split/rotate/merge etc */
-            <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
+            <div className="tp-preview-wrap" style={{ flex:1, display:'flex', overflow:'hidden' }}>
               {/* Mini page sidebar */}
               {!isMerge && (
-                <div style={{ width:'150px', flexShrink:0, borderRight:'1px solid var(--border)', background:'var(--bg2)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+                <div className="tp-mini-sidebar" style={{ width:'150px', flexShrink:0, borderRight:'1px solid var(--border)', background:'var(--bg2)', display:'flex', flexDirection:'column', overflow:'hidden' }}>
                   <div style={{ padding:'8px 10px', borderBottom:'1px solid var(--border)', fontSize:'10px', fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--text3)' }}>Pages</div>
                   <div style={{ flex:1, overflow:'hidden' }}>
                     <ClassicPageSidebar file={files[0]} selectedPages={selectedPages} onSelectionChange={setSelectedPages}/>

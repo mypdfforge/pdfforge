@@ -310,10 +310,10 @@ export function BatchBar({ summary, note, buttons, run }) {
             <button className="btn btn-ghost" onClick={cancel} style={{ height: 34 }}>Cancel</button>
           </div>
         ) : (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div className="bw-bar-btns">
             {status === 'done' && <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--green)', fontSize: 13, fontWeight: 600 }}><CheckCircle size={14} /> Downloaded!</span>}
             {buttons.map(b => (
-              <button key={b.label} className={`btn ${b.primary ? 'btn-primary' : 'btn-ghost'}`} disabled={b.disabled} onClick={b.onClick} style={{ height: 40 }}>{b.label}</button>
+              <button key={b.label} className={`btn ${b.primary ? 'btn-primary' : 'btn-ghost'}`} disabled={b.disabled} onClick={b.onClick}>{b.label}</button>
             ))}
           </div>
         )}
@@ -370,6 +370,8 @@ const CSS = `
 @keyframes bwShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .bw-bar{flex-shrink:0;border-top:1px solid var(--border);background:var(--bg2);padding:10px 16px;box-shadow:0 -6px 20px rgba(0,0,0,.18);z-index:20}
 .bw-bar-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between}
+.bw-bar-btns{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.bw-bar-btns .btn{height:40px}
 .bw-results{margin-bottom:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg)}
 .bw-chipbtn{height:26px;padding:0 9px;border-radius:999px;border:1px solid var(--border);background:var(--bg);color:var(--text2);font-size:11px;font-weight:600;cursor:pointer}
 .bw-chipbtn:hover{border-color:var(--brand);color:var(--text)}
@@ -378,7 +380,24 @@ const CSS = `
   .bw-wrap{flex-direction:column}
   .bw-side{width:auto;max-height:48vh;border-right:none;border-bottom:1px solid var(--border)}
   .bw-canvaswrap{height:62vh;flex:none}
-  .bw-bar{position:sticky;bottom:0}
+  .bw-bar{position:sticky;bottom:0;padding:8px 12px max(8px,env(safe-area-inset-bottom))}
+  .bw-bar-row{flex-direction:column;align-items:stretch;gap:8px}
+  .bw-bar-btns{width:100%;display:flex;gap:6px;flex-wrap:nowrap}
+  .bw-bar-btns .btn{
+    flex:1 1 0;
+    min-width:0;
+    height:auto;
+    min-height:42px;
+    padding:4px 6px;
+    font-size:11px;
+    font-weight:600;
+    text-align:center;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    white-space:normal;
+    line-height:1.2;
+  }
 }
 `
 export { CSS as BATCH_CSS }

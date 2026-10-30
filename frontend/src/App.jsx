@@ -95,6 +95,7 @@ export default function App() {
       <Sidebar current={toolId} collapsed={collapsed} onToggle={() => setCollapsed(c => !c)}
         onNavigate={go} onSearch={() => { setDrawer(false); setPalette(true) }}
         onHistory={() => { setDrawer(false); setHistory(true) }}
+        onClose={() => setDrawer(false)}
         dark={dark} onToggleTheme={toggleTheme}/>
       <div className="scrim" onClick={() => setDrawer(false)}/>
       <main className="main" id="main">
