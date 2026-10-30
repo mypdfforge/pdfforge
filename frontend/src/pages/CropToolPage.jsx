@@ -1,757 +1,270 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react'
-import { useDropzone } from 'react-dropzone'
-import {
-  Loader2, CheckCircle, AlertCircle, Download,
-  RotateCcw, Crop, ChevronsRight, Maximize2, Check, X, FileText
-} from 'lucide-react'
-import TopBar from '../components/TopBar'
-import { clientCropVisual } from '../utils/editClient'
-import { downloadBlob } from '../utils/api'
-import { getThumbnailsProgressive } from '../utils/thumbCache'
+/**
+ * CropToolPage.jsx — multi-file Crop PDF on the shared BatchWorkspace.
+ *
+ * Crops are stored as FRACTIONS of the visual page {l,t,r,b}, never pixels. That is what makes
+ * Letter + A4 + landscape files in one batch work: "trim 10% off the top" means the same thing on every page.
+ * Precedence (most specific wins):  this PAGE  >  this FILE  >  ALL files.
+ * Export uses the existing clientCropVisual(file, {pageNum:{left,top,right,bottom}}) → no new PDF maths.
+ */
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { Scissors, X, ChevronLeft, ChevronRight, RotateCcw, Loader2 } from 'lucide-react'
+import BatchLayout, { useBatchFiles, useBatchRun, BatchBar, ThumbCard } from '../components/BatchWorkspace'
+import { runCropBatch, zipNameFor, isCoarse } from '../utils/batchClient'
+import { getFullResPage } from '../utils/thumbCache'
 
-// ─── PDF point conversion ─────────────────────────────────────────────────────
-function pxToPdfCrop(box, canvasW, canvasH, pdfW, pdfH) {
-  const sx = pdfW / canvasW, sy = pdfH / canvasH
-  return {
-    left:   Math.round(box.x * sx),
-    top:    Math.round(box.y * sy),
-    right:  Math.round((canvasW - box.x - box.w) * sx),
-    bottom: Math.round((canvasH - box.y - box.h) * sy),
-  }
+const ZERO = Object.freeze({ l: 0, t: 0, r: 0, b: 0 })
+const isCropped = m => !!m && (m.l > 0.002 || m.t > 0.002 || m.r > 0.002 || m.b > 0.002)
+const near = (a, b) => Math.abs(a - b) < 8
+function sizeLabel(t) {                      // thumbnails are rendered at scale 0.3 → points = px / 0.3
+  if (!t) return null
+  const w = t.w / 0.3, h = t.h / 0.3, s = Math.min(w, h), l = Math.max(w, h)
+  const name = near(s, 595) && near(l, 842) ? 'A4' : near(s, 612) && near(l, 792) ? 'Letter' : near(s, 612) && near(l, 1008) ? 'Legal'
+    : near(s, 420) && near(l, 595) ? 'A5' : near(s, 842) && near(l, 1191) ? 'A3' : `${Math.round(s / 72 * 25.4)}×${Math.round(l / 72 * 25.4)} mm`
+  return `${name} · ${w > h ? 'Landscape' : 'Portrait'}`
 }
+const fracToBox = (f, W, H) => ({ x: f.l * W, y: f.t * H, w: W * (1 - f.l - f.r), h: H * (1 - f.t - f.b) })
+const boxToFrac = (b, W, H) => ({ l: Math.max(0, b.x / W), t: Math.max(0, b.y / H), r: Math.max(0, (W - b.x - b.w) / W), b: Math.max(0, (H - b.y - b.h) / H) })
+const CURSORS = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', move: 'move' }
 
-const HANDLE_R = 7    // handle circle radius
-const MIN_BOX  = 40
-
-// Global snapshot read by applyToAll — never triggers re-render
-let currentCropSettings = null
-
-// ─── CropCanvas ───────────────────────────────────────────────────────────────
-// Uses RAF + direct canvas drawing — no React re-renders during drag
-function CropCanvas({ imgSrc, initCrop, onCropCommit }) {
-  const canvasRef  = useRef(null)
-  const imgRef     = useRef(null)
-  const cropRef    = useRef(initCrop)   // mutable, no state
-  const dragRef    = useRef(null)
-  const rafRef     = useRef(null)
-  const dirtyRef   = useRef(true)
-
-  // Keep cropRef in sync when parent changes page
-  useEffect(() => { cropRef.current = initCrop; dirtyRef.current = true }, [initCrop])
-
-  // ── Draw loop (only runs when dirty) ─────────────────────────────────────
+// ── interactive crop canvas (fractions in, fractions out) ────────────────────
+function CropCanvas({ imgSrc, frac, onCommit }) {
+  const cv = useRef(null), im = useRef(null), box = useRef(null), drag = useRef(null), raf = useRef(0), fr = useRef(frac)
+  fr.current = frac
+  const scale = () => { const c = cv.current, r = c.getBoundingClientRect(); return r.width ? c.width / r.width : 1 }
   const draw = useCallback(() => {
-    const canvas = canvasRef.current
-    const img    = imgRef.current
-    if (!canvas || !img || !img.complete || img.naturalWidth === 0) return
-
-    const ctx = canvas.getContext('2d')
-    const W = canvas.width, H = canvas.height
-    const { x, y, w, h } = cropRef.current
-
-    ctx.clearRect(0, 0, W, H)
-    ctx.drawImage(img, 0, 0, W, H)
-
-    // dim outside crop
-    ctx.fillStyle = 'rgba(0,0,0,0.58)'
-    ctx.fillRect(0, 0, W, y)
-    ctx.fillRect(0, y + h, W, H - y - h)
-    ctx.fillRect(0, y, x, h)
-    ctx.fillRect(x + w, y, W - x - w, h)
-
-    // crop border
-    ctx.strokeStyle = '#EA580C'
-    ctx.lineWidth = 2
-    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2)
-
-    // rule-of-thirds
-    ctx.strokeStyle = 'rgba(234,88,12,0.3)'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    for (let i = 1; i < 3; i++) {
-      ctx.moveTo(x + (w / 3) * i, y); ctx.lineTo(x + (w / 3) * i, y + h)
-      ctx.moveTo(x, y + (h / 3) * i); ctx.lineTo(x + w, y + (h / 3) * i)
-    }
-    ctx.stroke()
-
-    // handles
-    const handles = getHandlePositions(cropRef.current)
-    handles.forEach(hnd => {
-      ctx.beginPath()
-      ctx.arc(hnd.cx, hnd.cy, HANDLE_R, 0, Math.PI * 2)
-      ctx.fillStyle = '#fff'
-      ctx.fill()
-      ctx.strokeStyle = '#EA580C'
-      ctx.lineWidth = 2
-      ctx.stroke()
-    })
+    const c = cv.current, i = im.current, b = box.current
+    if (!c || !i || !b || !c.width) return
+    const g = c.getContext('2d'), s = scale()
+    g.clearRect(0, 0, c.width, c.height); g.drawImage(i, 0, 0, c.width, c.height)
+    g.fillStyle = 'rgba(0,0,0,.55)'
+    g.fillRect(0, 0, c.width, b.y); g.fillRect(0, b.y + b.h, c.width, c.height - b.y - b.h)
+    g.fillRect(0, b.y, b.x, b.h); g.fillRect(b.x + b.w, b.y, c.width - b.x - b.w, b.h)
+    g.strokeStyle = '#ea580c'; g.lineWidth = 2 * s; g.strokeRect(b.x, b.y, b.w, b.h)
+    g.fillStyle = '#fff'
+    for (const [, hx, hy] of handles(b)) { g.beginPath(); g.arc(hx, hy, 6 * s, 0, 7); g.fill(); g.stroke() }
   }, [])
+  const sched = () => { cancelAnimationFrame(raf.current); raf.current = requestAnimationFrame(draw) }
+  useEffect(() => () => cancelAnimationFrame(raf.current), [])
+  const onLoad = () => { const c = cv.current, i = im.current; c.width = i.naturalWidth; c.height = i.naturalHeight; box.current = fracToBox(fr.current, c.width, c.height); draw() }
+  useEffect(() => {                                     // frac changed from outside (Reset, Apply…)
+    const c = cv.current
+    if (!c || !c.width || drag.current) return
+    box.current = fracToBox(frac, c.width, c.height); sched()
+  }, [frac.l, frac.t, frac.r, frac.b])
 
-  // Schedule a single RAF draw when dirty
-  const schedDraw = useCallback(() => {
-    if (rafRef.current) return
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null
-      draw()
-    })
-  }, [draw])
-
-  // ── Image load: size canvas to fill container, then draw ─────────────────
-  const onImgLoad = useCallback(() => {
-    const canvas = canvasRef.current
-    const img    = imgRef.current
-    const container = canvas?.parentElement
-    if (!canvas || !img || !container) return
-
-    // Fill the container while preserving aspect ratio
-    const cw = container.clientWidth  || window.innerWidth
-    const ch = container.clientHeight || window.innerHeight
-    const aspect = img.naturalWidth / img.naturalHeight
-
-    let W = cw, H = cw / aspect
-    if (H > ch) { H = ch; W = H * aspect }
-
-    canvas.width  = img.naturalWidth   // logical size for hit-testing
-    canvas.height = img.naturalHeight
-    canvas.style.width  = `${Math.floor(W)}px`
-    canvas.style.height = `${Math.floor(H)}px`
-
-    // Reset crop to full page
-    cropRef.current = { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight }
-    if (initCrop && initCrop.w > 0) cropRef.current = { ...initCrop }
-
-    dirtyRef.current = true
-    schedDraw()
-  }, [initCrop, schedDraw])
-
-  useEffect(() => {
-    // Re-draw when initCrop changes (page switch)
-    dirtyRef.current = true
-    schedDraw()
-  }, [initCrop, schedDraw])
-
-  // Cleanup RAF on unmount
-  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
-
-  // ── Handle positions ──────────────────────────────────────────────────────
-  function getHandlePositions(b) {
-    const { x, y, w, h } = b
-    return [
-      { id:'nw', cx:x,       cy:y       }, { id:'n',  cx:x+w/2, cy:y       },
-      { id:'ne', cx:x+w,     cy:y       }, { id:'e',  cx:x+w,   cy:y+h/2   },
-      { id:'se', cx:x+w,     cy:y+h     }, { id:'s',  cx:x+w/2, cy:y+h     },
-      { id:'sw', cx:x,       cy:y+h     }, { id:'w',  cx:x,     cy:y+h/2   },
-    ]
+  const handles = b => [['nw', b.x, b.y], ['n', b.x + b.w / 2, b.y], ['ne', b.x + b.w, b.y], ['e', b.x + b.w, b.y + b.h / 2],
+    ['se', b.x + b.w, b.y + b.h], ['s', b.x + b.w / 2, b.y + b.h], ['sw', b.x, b.y + b.h], ['w', b.x, b.y + b.h / 2]]
+  const pos = e => { const c = cv.current, r = c.getBoundingClientRect(); return { x: (e.clientX - r.left) * c.width / r.width, y: (e.clientY - r.top) * c.height / r.height } }
+  const hit = p => {
+    const b = box.current; if (!b) return null
+    const t = 13 * scale()
+    for (const [n, hx, hy] of handles(b)) if (Math.abs(p.x - hx) < t && Math.abs(p.y - hy) < t) return n
+    return p.x > b.x && p.x < b.x + b.w && p.y > b.y && p.y < b.y + b.h ? 'move' : null
   }
-
-  // ── Coordinate mapping (CSS px → canvas logical px) ──────────────────────
-  function getPos(e) {
-    const canvas = canvasRef.current
-    const rect   = canvas.getBoundingClientRect()
-    const scaleX = canvas.width  / rect.width
-    const scaleY = canvas.height / rect.height
-    const src    = e.touches ? e.touches[0] : e
-    return {
-      mx: (src.clientX - rect.left)  * scaleX,
-      my: (src.clientY - rect.top)   * scaleY,
+  const down = e => {
+    const p = pos(e), m = hit(p); if (!m) return
+    cv.current.setPointerCapture(e.pointerId); drag.current = { m, p, o: { ...box.current } }
+  }
+  const move = e => {
+    const c = cv.current, p = pos(e), d = drag.current
+    if (!d) { c.style.cursor = CURSORS[hit(p)] || 'default'; return }
+    const dx = p.x - d.p.x, dy = p.y - d.p.y, o = d.o, W = c.width, H = c.height, min = 30 * scale()
+    let { x, y, w, h } = o
+    if (d.m === 'move') { x = Math.min(Math.max(0, o.x + dx), W - o.w); y = Math.min(Math.max(0, o.y + dy), H - o.h) }
+    else {
+      if (d.m.includes('w')) { x = Math.min(Math.max(0, o.x + dx), o.x + o.w - min); w = o.x + o.w - x }
+      if (d.m.includes('e')) w = Math.min(Math.max(min, o.w + dx), W - o.x)
+      if (d.m.includes('n')) { y = Math.min(Math.max(0, o.y + dy), o.y + o.h - min); h = o.y + o.h - y }
+      if (d.m.includes('s')) h = Math.min(Math.max(min, o.h + dy), H - o.y)
     }
+    box.current = { x, y, w, h }; sched()
   }
-
-  function hitHandle(mx, my, b) {
-    for (const hnd of getHandlePositions(b)) {
-      const dx = mx - hnd.cx, dy = my - hnd.cy
-      if (dx * dx + dy * dy < (HANDLE_R + 4) * (HANDLE_R + 4)) return hnd.id
-    }
-    return null
+  const up = () => {
+    if (!drag.current) return
+    drag.current = null
+    const c = cv.current; onCommit(boxToFrac(box.current, c.width, c.height))
   }
-  function hitMove(mx, my, b) {
-    return mx > b.x && mx < b.x + b.w && my > b.y && my < b.y + b.h
-  }
-
-  // ── Pointer events ────────────────────────────────────────────────────────
-  function onPointerDown(e) {
-    e.currentTarget.setPointerCapture(e.pointerId)
-    const { mx, my } = getPos(e)
-    const handle = hitHandle(mx, my, cropRef.current)
-    if (handle) {
-      dragRef.current = { type: handle, startX: mx, startY: my, startBox: { ...cropRef.current } }
-    } else if (hitMove(mx, my, cropRef.current)) {
-      dragRef.current = { type: 'move', startX: mx, startY: my, startBox: { ...cropRef.current } }
-    }
-  }
-
-  function onPointerMove(e) {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    // Update cursor even without drag
-    if (!dragRef.current) {
-      const { mx, my } = getPos(e)
-      const handle = hitHandle(mx, my, cropRef.current)
-      const cursors = { nw:'nw-resize', ne:'ne-resize', sw:'sw-resize', se:'se-resize', n:'n-resize', s:'s-resize', e:'e-resize', w:'w-resize' }
-      canvas.style.cursor = handle ? cursors[handle] : hitMove(mx, my, cropRef.current) ? 'move' : 'crosshair'
-      return
-    }
-
-    const W = canvas.width, H = canvas.height
-    const { mx, my }       = getPos(e)
-    const { type, startX, startY, startBox: s } = dragRef.current
-    const dx = mx - startX, dy = my - startY
-    let { x, y, w, h } = s
-
-    if (type === 'move') {
-      x = Math.max(0, Math.min(W - w, x + dx))
-      y = Math.max(0, Math.min(H - h, y + dy))
-    } else {
-      if (type.includes('e')) { w = Math.max(MIN_BOX, Math.min(W - x, w + dx)) }
-      if (type.includes('w')) { const nw = Math.max(MIN_BOX, w - dx); x = Math.min(x + w - MIN_BOX, x + dx); w = nw; x = Math.max(0, x) }
-      if (type.includes('s')) { h = Math.max(MIN_BOX, Math.min(H - y, h + dy)) }
-      if (type.includes('n')) { const nh = Math.max(MIN_BOX, h - dy); y = Math.min(y + h - MIN_BOX, y + dy); h = nh; y = Math.max(0, y) }
-    }
-
-    cropRef.current = { x, y, w, h }
-    currentCropSettings = { ...cropRef.current }  // keep global in sync
-    schedDraw()
-  }
-
-  function onPointerUp() {
-    if (!dragRef.current) return
-    dragRef.current = null
-    // Commit final value to parent (only once on release — no lag during drag)
-    onCropCommit({ ...cropRef.current })
-  }
-
   return (
-    <div style={{ width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
-      <img
-        ref={imgRef}
-        src={imgSrc}
-        alt=""
-        style={{ display:'none' }}
-        onLoad={onImgLoad}
-      />
-      <canvas
-        ref={canvasRef}
-        style={{
-          display: 'block',
-          cursor: 'crosshair',
-          borderRadius: '4px',
-          boxShadow: '0 8px 60px rgba(0,0,0,0.8)',
-          touchAction: 'none',    // prevent scroll during touch drag
-        }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-      />
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+      <img ref={im} src={imgSrc} onLoad={onLoad} alt="" style={{ display: 'none' }} />
+      <canvas ref={cv} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
+        style={{ maxWidth: '100%', maxHeight: '100%', touchAction: 'none', background: '#fff', borderRadius: 3 }} />
     </div>
   )
 }
 
-// ─── Full-screen Crop Modal ───────────────────────────────────────────────────
-// Mirrors ZoomModal pattern: position fixed, inset 0, zIndex 9999
-function CropModal({ thumb, pageNum, totalPages, cropBox, onCropChange, onClose, onResetPage, onApplyToAll, onNext }) {
-  const isModified = cropBox && thumb && (
-    cropBox.x > 2 || cropBox.y > 2 ||
-    cropBox.w < thumb.width - 2 || cropBox.h < thumb.height - 2
-  )
-
+// ── modal ────────────────────────────────────────────────────────────────────
+function CropModal({ files, thumbs, active, setActive, frac, onCommit, onApplyFile, onApplyAll, onReset, onClose }) {
+  const fi = files.findIndex(f => f.id === active.fileId), f = files[fi]
+  const [hi, setHi] = useState(null)
+  useEffect(() => {
+    let off = false; setHi(null)
+    getFullResPage(f.file, active.idx + 1, 1.4).then(t => !off && setHi(t.img)).catch(() => {})
+    return () => { off = true }
+  }, [f.file, active.idx])
+  const step = useCallback(d => {
+    let nf = fi, ni = active.idx + d
+    if (ni < 0) { nf = fi - 1; if (nf < 0) return; ni = files[nf].count - 1 }
+    else if (ni >= f.count) { nf = fi + 1; if (nf >= files.length) return; ni = 0 }
+    setActive({ fileId: files[nf].id, idx: ni })
+  }, [fi, active.idx, f.count, files, setActive])
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') onClose(); else if (e.key === 'ArrowRight') step(1); else if (e.key === 'ArrowLeft') step(-1) }
+    window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k)
+  }, [step, onClose])
+  const t = thumbs[f.id]?.[active.idx]
+  const pct = v => `${Math.round(v * 100)}%`
   return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      zIndex: 9999,
-      background: '#080810',
-      display: 'flex',
-      flexDirection: 'column',
-    }}>
-      {/* ── Header bar ── */}
-      <div style={{
-        height: '58px',
-        padding: '0 20px',
-        background: 'var(--bg2)',
-        borderBottom: '2px solid var(--border)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        flexShrink: 0,
-      }}>
-        {/* Icon + title */}
-        <div style={{
-          width: '34px', height: '34px', borderRadius: '9px',
-          background: 'rgba(234,88,12,0.15)', border: '1px solid rgba(234,88,12,0.35)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        }}>
-          <Crop size={16} color="var(--accent2)"/>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,.88)', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', flexWrap: 'wrap', background: 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
+        <button className="icon-btn" aria-label="Previous page" onClick={() => step(-1)}><ChevronLeft size={16} /></button>
+        <div style={{ fontSize: 13, color: 'var(--text)', fontWeight: 600, minWidth: 0 }} className="bw-ellip">
+          <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 5, background: f.color, marginRight: 6 }} />
+          Doc {fi + 1} · {f.name} · page {active.idx + 1}/{f.count}
         </div>
-        <div style={{ marginRight: 'auto' }}>
-          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)', lineHeight: 1.1 }}>
-            Crop — Page {pageNum} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>of {totalPages}</span>
+        <button className="icon-btn" aria-label="Next page" onClick={() => step(1)}><ChevronRight size={16} /></button>
+        <span style={{ fontSize: 11, color: 'var(--text3)' }}>T {pct(frac.t)} · B {pct(frac.b)} · L {pct(frac.l)} · R {pct(frac.r)}</span>
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-ghost" onClick={onReset} style={{ height: 32 }}><RotateCcw size={13} /> No crop on this page</button>
+        <button className="btn btn-ghost" onClick={onApplyFile} style={{ height: 32 }}>Apply to this file</button>
+        <button className="btn btn-primary" onClick={onApplyAll} style={{ height: 32 }}>Apply to all files</button>
+        <button className="btn btn-ghost" onClick={onClose} style={{ height: 32 }}>Done</button>
+      </div>
+      <CropCanvas key={`${f.id}:${active.idx}`} imgSrc={hi || t?.img} frac={frac} onCommit={onCommit} />
+      {!hi && <Loader2 size={16} className="spin" color="#fff" style={{ position: 'absolute', right: 20, bottom: 20 }} />}
+    </div>
+  )
+}
+
+// ── page ─────────────────────────────────────────────────────────────────────
+export default function CropToolPage(props) {
+  const batch = useBatchFiles()
+  const { files, thumbs, setErrs } = batch
+  const run = useBatchRun(m => setErrs(e => [...e, m]))
+  const [allBox, setAllBox] = useState(null)
+  const [fileBoxes, setFileBoxes] = useState({})
+  const [pageBoxes, setPageBoxes] = useState({})
+  const [active, setActive] = useState(null)
+  const coarse = isCoarse()
+
+  const eff = (fid, i) => {
+    const p = pageBoxes[`${fid}:${i}`]; if (p) return { box: p, src: 'page' }
+    const f = fileBoxes[fid]; if (f) return { box: f, src: 'file' }
+    return allBox ? { box: allBox, src: 'all' } : { box: ZERO, src: null }
+  }
+  const overrides = useMemo(() => { const m = {}; for (const k in pageBoxes) (m[k.split(':')[0]] ||= []).push(k); return m }, [pageBoxes])
+  const croppedIn = f => {                       // how many pages of f end up cropped (cheap: no per-page loop)
+    const base = isCropped(fileBoxes[f.id] || allBox) ? f.count : 0
+    let n = base
+    for (const k of overrides[f.id] || []) { const c = isCropped(pageBoxes[k]); if (base && !c) n--; else if (!base && c) n++ }
+    return n
+  }
+  const totalPages = files.reduce((s, f) => s + croppedIn(f), 0)
+  const filesWithCrop = files.filter(f => croppedIn(f) > 0).length
+  const labels = new Set(files.map(f => sizeLabel(thumbs[f.id]?.[0])).filter(Boolean))   // cheap; thumbs arrive after first render
+
+  const setPage = (fid, i, frac) => setPageBoxes(p => ({ ...p, [`${fid}:${i}`]: frac }))
+  const applyFile = (fid, frac) => { setFileBoxes(b => ({ ...b, [fid]: frac })); setPageBoxes(p => Object.fromEntries(Object.entries(p).filter(([k]) => k.split(':')[0] !== fid))) }
+  const applyAll = frac => { setAllBox(frac); setFileBoxes({}); setPageBoxes({}) }
+  const clearAll = () => { setAllBox(null); setFileBoxes({}); setPageBoxes({}) }
+  const clearFile = fid => { setFileBoxes(b => { const n = { ...b }; delete n[fid]; return n }); setPageBoxes(p => Object.fromEntries(Object.entries(p).filter(([k]) => k.split(':')[0] !== fid))) }
+  const setMargin = (k, v) => setAllBox(b => ({ ...(b || ZERO), [k]: Math.min(45, Math.max(0, +v || 0)) / 100 }))
+
+  const buildCrops = () => Object.fromEntries(files.map(f => {
+    const o = {}
+    for (let i = 0; i < f.count; i++) { const { box } = eff(f.id, i); o[i + 1] = { left: box.l, top: box.t, right: box.r, bottom: box.b } }
+    return [f.id, o]
+  }))
+  const go = mode => run.run(({ onProgress, shouldCancel }) => runCropBatch({ files, crops: buildCrops(), mode, onProgress, shouldCancel }), zipNameFor('crop', files.length))
+  const busy = run.status === 'loading'
+  const n = files.length
+  const buttons = [{
+    label: n === 1 ? '📄 Download PDF (.pdf)' : coarse && n <= 3 ? `⬇ Download ${n} Files` : `📦 Download ${n} Cropped Files (.zip)`,
+    primary: true, disabled: busy || !totalPages, onClick: () => go('files'),
+  }]
+  if (n > 1) buttons.push({ label: '📄 Merge & Download (.pdf)', disabled: busy || !totalPages, onClick: () => go('merged') })
+
+  const m = allBox || ZERO
+  const sideTop = (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg2)', padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <strong style={{ fontSize: 12, color: 'var(--text)' }}>Same margins for every file (%)</strong>
+        <span style={{ flex: 1 }} />
+        <button className="bw-chipbtn" onClick={clearAll}>Clear all</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6 }}>
+        {[['t', 'Top'], ['b', 'Bottom'], ['l', 'Left'], ['r', 'Right']].map(([k, l]) => (
+          <label key={k} style={{ fontSize: 11, color: 'var(--text3)' }}>{l}
+            <input type="number" min={0} max={45} value={Math.round(m[k] * 1000) / 10} onChange={e => setMargin(k, e.target.value)} style={{ width: '100%', height: 28, marginTop: 2 }} />
+          </label>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+        Click any page to crop it by hand. Page crop beats file crop beats this global crop.
+        {labels.size > 1 && <div style={{ color: 'var(--orange, #f59e0b)', marginTop: 4 }}>Mixed page sizes ({[...labels].join(', ')}). Crops are percentages, so every page is trimmed proportionally.</div>}
+      </div>
+    </div>
+  )
+  const renderSideBody = f => {
+    const fb = fileBoxes[f.id], ov = (overrides[f.id] || []).length
+    return (
+      <>
+        <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+          {sizeLabel(thumbs[f.id]?.[0]) || 'Reading page size…'}<br />
+          {ov ? `${ov} page${ov === 1 ? '' : 's'} with own crop · ` : ''}{fb ? 'file crop active' : allBox ? 'using global crop' : 'no crop yet'}
+        </div>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+          <button className="bw-chipbtn" onClick={() => setActive({ fileId: f.id, idx: 0 })}><Scissors size={11} style={{ verticalAlign: -1 }} /> Crop this file…</button>
+          {fb && <button className="bw-chipbtn" onClick={() => clearFile(f.id)}>Clear file crop</button>}
+          {ov > 0 && <button className="bw-chipbtn" onClick={() => setPageBoxes(p => Object.fromEntries(Object.entries(p).filter(([k]) => k.split(':')[0] !== f.id)))}>Clear page crops</button>}
+        </div>
+      </>
+    )
+  }
+  const renderCard = ({ f, n: docN, i, thumb, color }) => {
+    const { box, src } = eff(f.id, i), on = isCropped(box)
+    let overlay = null
+    if (on && thumb?.w) {
+      const sc = Math.min(134 / thumb.w, 174 / thumb.h), dw = thumb.w * sc, dh = thumb.h * sc
+      const mask = { position: 'absolute', background: 'rgba(0,0,0,.5)' }
+      overlay = (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+          <div style={{ position: 'relative', width: dw, height: dh }}>
+            <div style={{ ...mask, left: 0, right: 0, top: 0, height: `${box.t * 100}%` }} />
+            <div style={{ ...mask, left: 0, right: 0, bottom: 0, height: `${box.b * 100}%` }} />
+            <div style={{ ...mask, left: 0, width: `${box.l * 100}%`, top: `${box.t * 100}%`, bottom: `${box.b * 100}%` }} />
+            <div style={{ ...mask, right: 0, width: `${box.r * 100}%`, top: `${box.t * 100}%`, bottom: `${box.b * 100}%` }} />
+            <div style={{ position: 'absolute', left: `${box.l * 100}%`, right: `${box.r * 100}%`, top: `${box.t * 100}%`, bottom: `${box.b * 100}%`, border: '1.5px solid #ea580c' }} />
           </div>
-          {cropBox && thumb && (
-            <div style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '2px' }}>
-              {Math.round(cropBox.x)}, {Math.round(cropBox.y)}
-              &nbsp;&nbsp;{Math.round(cropBox.w)} × {Math.round(cropBox.h)} px
-              {isModified && <span style={{ color: 'var(--accent2)', marginLeft: '8px', fontWeight: 600 }}>✂ modified</span>}
-            </div>
-          )}
         </div>
-
-        {/* ── Buttons: big, colourful, impossible to miss ── */}
-        <button onClick={onResetPage}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '7px',
-            padding: '9px 16px', borderRadius: '9px',
-            border: '1px solid var(--red)44', background: 'rgba(229,83,75,0.1)',
-            color: 'var(--red)', fontSize: '13px', fontWeight: 600,
-            cursor: 'pointer', transition: 'background 0.15s', whiteSpace: 'nowrap',
-          }}
-          onMouseEnter={e => e.currentTarget.style.background = 'rgba(229,83,75,0.2)'}
-          onMouseLeave={e => e.currentTarget.style.background = 'rgba(229,83,75,0.1)'}>
-          <RotateCcw size={14}/> Reset Page
-        </button>
-
-        <button onClick={onApplyToAll}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '7px',
-            padding: '9px 16px', borderRadius: '9px',
-            border: '2px solid var(--accent)', background: 'rgba(234,88,12,0.12)',
-            color: '#a9a4ff', fontSize: '13px', fontWeight: 700,
-            cursor: 'pointer', transition: 'background 0.15s', whiteSpace: 'nowrap',
-          }}
-          onMouseEnter={e => e.currentTarget.style.background = 'rgba(234,88,12,0.25)'}
-          onMouseLeave={e => e.currentTarget.style.background = 'rgba(234,88,12,0.12)'}>
-          <Crop size={14}/> Apply to All Pages
-        </button>
-
-        <button onClick={onNext} disabled={pageNum >= totalPages}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '7px',
-            padding: '9px 16px', borderRadius: '9px',
-            border: '1px solid var(--border)', background: 'var(--bg3)',
-            color: pageNum >= totalPages ? 'var(--text3)' : 'var(--text2)',
-            fontSize: '13px', fontWeight: 600,
-            cursor: pageNum >= totalPages ? 'not-allowed' : 'pointer',
-            transition: 'all 0.15s', opacity: pageNum >= totalPages ? 0.4 : 1,
-            whiteSpace: 'nowrap',
-          }}
-          onMouseEnter={e => { if (pageNum < totalPages) { e.currentTarget.style.borderColor = 'var(--green)'; e.currentTarget.style.color = 'var(--green)' }}}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text2)' }}>
-          <ChevronsRight size={14}/> Next Page
-        </button>
-
-        {/* DONE — green, prominent */}
-        <button onClick={onClose}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '8px',
-            padding: '10px 22px', borderRadius: '9px', border: 'none',
-            background: 'var(--green)', color: '#fff',
-            fontSize: '14px', fontWeight: 700,
-            cursor: 'pointer', transition: 'opacity 0.15s',
-            boxShadow: '0 2px 14px rgba(21,128,61,0.4)',
-            whiteSpace: 'nowrap',
-          }}
-          onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
-          onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
-          <Check size={15}/> Done
-        </button>
-      </div>
-
-      {/* ── Canvas — fills ALL remaining space ── */}
-      <div style={{
-        flex: 1,
-        padding: '20px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-        background: '#080810',
-        minHeight: 0,        // critical: lets flex child shrink below content height
-      }}>
-        {thumb?.img && (
-          <CropCanvas
-            key={pageNum}           // remount on page change
-            imgSrc={thumb.img}
-            initCrop={cropBox}
-            onCropCommit={onCropChange}
-          />
-        )}
-      </div>
-
-      {/* ── Footer hint ── */}
-      <div style={{
-        height: '32px', padding: '0 20px',
-        background: 'var(--bg2)', borderTop: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0,
-      }}>
-        <span style={{ fontSize: '11px', color: 'var(--text3)' }}>
-          Drag handles to resize &nbsp;·&nbsp; Drag inside box to move &nbsp;·&nbsp; Press <strong style={{ color: 'var(--accent2)' }}>Done</strong> when finished
-        </span>
-        <span style={{ fontSize: '11px', color: 'var(--text3)', marginLeft: 'auto' }}>
-          Page {pageNum} / {totalPages}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-// ─── PageCard ─────────────────────────────────────────────────────────────────
-function PageCard({ thumb, pageNum, isModified, cropBox, onClick }) {
-  const cropPreview = cropBox && thumb && isModified ? {
-    left:   `${(cropBox.x / thumb.width)  * 100}%`,
-    top:    `${(cropBox.y / thumb.height) * 100}%`,
-    width:  `${(cropBox.w / thumb.width)  * 100}%`,
-    height: `${(cropBox.h / thumb.height) * 100}%`,
-  } : null
-
-  return (
-    <div
-      className="crop-card"
-      onClick={onClick}
-      style={{ position: 'relative', width: '130px', flexShrink: 0, cursor: 'pointer' }}
-    >
-      <div className="crop-thumb" style={{ width: '130px', height: '170px' }}>
-        {thumb?.img
-          ? <img src={thumb.img} alt={`Page ${pageNum}`} loading="lazy"
-              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}/>
-          : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Loader2 size={16} className="spin" color="var(--text3)"/>
-            </div>
-        }
-
-        {/* Crop region preview overlay */}
-        {cropPreview && (
-          <>
-            <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.40)', pointerEvents: 'none' }}/>
-            <div style={{
-              position: 'absolute',
-              left: cropPreview.left, top: cropPreview.top,
-              width: cropPreview.width, height: cropPreview.height,
-              border: '2px solid var(--accent)',
-              background: 'transparent',
-              pointerEvents: 'none',
-            }}/>
-          </>
-        )}
-
-        {/* ✂ badge */}
-        {isModified && (
-          <div style={{
-            position: 'absolute', top: '5px', left: '5px',
-            background: 'var(--accent)', color: '#fff',
-            fontSize: '9px', fontWeight: 700, borderRadius: '4px',
-            padding: '2px 5px',
-          }}>✂</div>
-        )}
-
-        {/* Hover overlay with Crop + Fullscreen buttons */}
-        <div className="crop-actions">
-          <button
-            onClick={e => { e.stopPropagation(); onClick() }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '8px 14px', borderRadius: '8px',
-              background: 'var(--accent)', color: '#fff', border: 'none',
-              fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-              boxShadow: '0 2px 10px rgba(234,88,12,0.6)',
-            }}>
-            <Crop size={13}/> Crop
-          </button>
-          <button
-            onClick={e => { e.stopPropagation(); onClick() }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '5px',
-              padding: '5px 11px', borderRadius: '7px', marginTop: '6px',
-              background: 'rgba(255,255,255,0.13)',
-              color: '#fff', border: '1px solid rgba(255,255,255,0.3)',
-              fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-            }}>
-            <Maximize2 size={11}/> Fullscreen
-          </button>
-        </div>
-      </div>
-
-      <div style={{ textAlign: 'center', marginTop: '5px' }}>
-        <span style={{
-          fontSize: '11px',
-          color: isModified ? 'var(--accent2)' : 'var(--text3)',
-          fontWeight: isModified ? 700 : 400,
-        }}>
-          Page {pageNum}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
-export default function CropToolPage({
-  onBack, dark, onToggleTheme, onGoHome,
-  showCategories, activeCategory, onCategoryChange,
-  search, onSearch,
-}) {
-  const [file,       setFile]       = useState(null)
-  const [pages,      setPages]      = useState([])
-  const [loading,    setLoading]    = useState(false)
-  const [activePage, setActivePage] = useState(null)
-  const [cropBoxes,  setCropBoxes]  = useState({})
-  const [status,     setStatus]     = useState('idle')
-  const [errMsg,     setErrMsg]     = useState('')
-  const [pct, setPct] = useState(0)
-  const [modCount,   setModCount]   = useState(0)
-
-  const onDrop = useCallback(accepted => {
-    if (!accepted.length) return
-    setFile(accepted[0]); setPages([]); setCropBoxes({})
-    setActivePage(null); setErrMsg(''); currentCropSettings = null
-  }, [])
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop, accept: { 'application/pdf': ['.pdf'] }, maxFiles: 1,
-  })
-
-  useEffect(() => {
-    if (!file) return
-    setLoading(true); setPages([])
-    let first = true
-    getThumbnailsProgressive(file, (thumb) => {
-      if (first) { setLoading(false); first = false }
-      if (thumb.img) {
-        setPages(prev => [...prev, thumb])
-        setCropBoxes(prev => ({
-          ...prev,
-          [thumb.page]: { x: 0, y: 0, w: thumb.width, h: thumb.height },
-        }))
-      }
-    }, 8).catch(() => setLoading(false))
-  }, [file])
-
-  // Keep global snapshot in sync (for Apply to All)
-  const activeCrop  = activePage ? cropBoxes[activePage] : null
-  const activeThumb = pages.find(t => t.page === activePage)
-  useEffect(() => { if (activeCrop) currentCropSettings = { ...activeCrop } }, [activeCrop])
-
-  useEffect(() => {
-    const count = pages.filter(t => {
-      const b = cropBoxes[t.page]
-      return b && (b.x > 2 || b.y > 2 || b.w < t.width - 2 || b.h < t.height - 2)
-    }).length
-    setModCount(count)
-  }, [cropBoxes, pages])
-
-  // Called only on pointer-up (not every frame) — no lag
-  const handleCropCommit = useCallback((box) => {
-    setCropBoxes(prev => ({ ...prev, [activePage]: box }))
-    currentCropSettings = { ...box }
-  }, [activePage])
-
-  const applyToAll = () => {
-    if (!currentCropSettings || !activeThumb) return
-    const snap = { ...currentCropSettings }
-    const newBoxes = {}
-    pages.forEach(t => {
-      const sx = t.width  / activeThumb.width
-      const sy = t.height / activeThumb.height
-      newBoxes[t.page] = {
-        x: Math.max(0, Math.round(snap.x * sx)),
-        y: Math.max(0, Math.round(snap.y * sy)),
-        w: Math.min(t.width,  Math.round(snap.w * sx)),
-        h: Math.min(t.height, Math.round(snap.h * sy)),
-      }
-    })
-    setCropBoxes(newBoxes)
-  }
-
-  const resetPage = () => {
-    const t = pages.find(p => p.page === activePage)
-    if (!t) return
-    const full = { x: 0, y: 0, w: t.width, h: t.height }
-    setCropBoxes(prev => ({ ...prev, [activePage]: full }))
-    currentCropSettings = { ...full }
-  }
-
-  const resetAll = () => {
-    const b = {}
-    pages.forEach(t => { b[t.page] = { x: 0, y: 0, w: t.width, h: t.height } })
-    setCropBoxes(b)
-  }
-
-  const download = async () => {
-    if (!file) return
-    setStatus('loading'); setErrMsg(''); setPct(0)
-    try {
-      const pageCrops = {}
-      pages.forEach(t => {
-        const box = cropBoxes[t.page]
-        if (!box) return
-        // fractions of the displayed page, so thumbnail scale no longer matters
-        pageCrops[t.page] = {
-          left: box.x / t.width, top: box.y / t.height,
-          right: (t.width - box.x - box.w) / t.width,
-          bottom: (t.height - box.y - box.h) / t.height,
-        }
-      })
-      const res = await clientCropVisual(file, pageCrops, p => setPct(Math.round(p.done / p.total * 100)))
-      downloadBlob(res.data, 'cropped.pdf')
-      setStatus('done'); setTimeout(() => setStatus('idle'), 3000)
-    } catch (e) {
-      setErrMsg(e.response?.data?.detail || e.message || 'Crop failed')
-      setStatus('error')
+      )
     }
+    return (
+      <ThumbCard thumb={thumb} color={color} docN={docN} page={i + 1} overlay={overlay} ring={on ? '#ea580c' : null}
+        label={on ? `✂ ${src === 'page' ? 'this page' : src === 'file' ? 'file crop' : 'all files'}` : 'click to crop'}
+        ariaLabel={`Crop document ${docN}, page ${i + 1}`} onClick={() => setActive({ fileId: f.id, idx: i })} />
+    )
   }
+  const summary = f => { const c = croppedIn(f); return c ? `${c} cropped` : 'no crop' }
+  const headerExtra = f => <span style={{ fontSize: 11, color: 'var(--text3)' }}>{sizeLabel(thumbs[f.id]?.[0])}</span>
 
+  const cur = active ? eff(active.fileId, active.idx).box : ZERO
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
-      <style>{`
-        .crop-card { transition: transform 0.12s; }
-        .crop-card:hover { transform: translateY(-3px); }
-        .crop-thumb {
-          border-radius: 8px; overflow: hidden;
-          background: var(--bg3); border: 2px solid var(--border);
-          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-          transition: border-color 0.12s, box-shadow 0.12s;
-          position: relative;
-        }
-        .crop-card:hover .crop-thumb {
-          border-color: var(--accent);
-          box-shadow: 0 6px 24px rgba(234,88,12,0.25);
-        }
-        .crop-actions {
-          position: absolute; inset: 0;
-          background: rgba(0,0,0,0.48);
-          display: flex; flex-direction: column;
-          align-items: center; justify-content: center;
-          opacity: 0; pointer-events: none;
-          transition: opacity 0.15s;
-        }
-        .crop-card:hover .crop-actions { opacity: 1; pointer-events: all; }
-      `}</style>
-
-      <TopBar
-        onBack={onBack} title="⬚ Crop PDF"
-        subtitle="Hover a page and click Crop to edit"
-        dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome}
-        showCategories={showCategories} activeCategory={activeCategory}
-        onCategoryChange={onCategoryChange} search={search} onSearch={onSearch}
-      />
-
-      {!file ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
-          <div style={{ width: '100%', maxWidth: '480px' }}>
-            <div {...getRootProps()} style={{
-              background: isDragActive ? 'rgba(91,91,214,0.08)' : 'var(--bg2)',
-              border: `2px dashed ${isDragActive ? 'var(--accent)' : 'var(--border)'}`,
-              borderRadius: '16px', padding: '60px 40px', textAlign: 'center',
-              cursor: 'pointer', transition: 'all 0.15s',
-            }}>
-              <input {...getInputProps()}/>
-              <div style={{
-                width: '56px', height: '56px', background: 'rgba(234,88,12,0.1)',
-                border: '1px solid rgba(234,88,12,0.3)', borderRadius: '14px',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                margin: '0 auto 16px', fontSize: '24px',
-              }}>⬚</div>
-              <p style={{ color: 'var(--text)', fontWeight: 600, fontSize: '16px', marginBottom: '8px' }}>
-                Drop your PDF here
-              </p>
-              <p style={{ color: 'var(--text3)', fontSize: '13px' }}>or click to browse</p>
-            </div>
-          </div>
-        </div>
-
-      ) : (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {/* Top bar */}
-          <div style={{
-            padding: '8px 20px', borderBottom: '1px solid var(--border)',
-            background: 'var(--bg2)', display: 'flex', alignItems: 'center',
-            gap: '10px', flexShrink: 0,
-          }}>
-            <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize: '13px', color: 'var(--text2)' }}>
-              <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
-              <strong style={{ color: 'var(--text)' }}>{file.name}</strong>
-              <span style={{ color: 'var(--text3)', marginLeft: '6px' }}>
-                {pages.length}{loading ? '…' : ''} pages
-              </span>
-            </span>
-            {modCount > 0 && (
-              <span style={{ fontSize: '12px', color: 'var(--accent2)', fontWeight: 700 }}>
-                · {modCount} page{modCount !== 1 ? 's' : ''} cropped
-              </span>
-            )}
-            {loading && <Loader2 size={13} color="var(--accent)" className="spin"/>}
-            <div style={{ flex: 1 }}/>
-            <button onClick={resetAll}
-              style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: '12px' }}>
-              Reset All
-            </button>
-            <button onClick={() => { setFile(null); setPages([]); setCropBoxes({}) }}
-              style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: '12px' }}>
-              Change PDF
-            </button>
-            {errMsg && (
-              <span style={{ fontSize: '12px', color: 'var(--red)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <AlertCircle size={12}/> {errMsg}
-              </span>
-            )}
-            <button onClick={download} disabled={status === 'loading'}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '7px',
-                padding: '8px 20px', borderRadius: '9px', border: 'none',
-                fontWeight: 700, fontSize: '13px', cursor: 'pointer',
-                background: status === 'done' ? 'var(--green)' : status === 'loading' ? 'var(--bg3)' : 'var(--accent)',
-                color: status === 'loading' ? 'var(--text3)' : '#fff',
-                boxShadow: status !== 'loading' ? '0 2px 12px rgba(91,91,214,0.3)' : 'none',
-              }}>
-              {status === 'loading' ? <><Loader2 size={14} className="spin"/>Cropping {pct}%</>
-                : status === 'done'  ? <><CheckCircle size={14}/>Downloaded!</>
-                :                      <><Download size={14}/>Download Cropped PDF</>}
-            </button>
-          </div>
-
-          {/* Grid */}
-          {loading && pages.length === 0 ? (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px', color: 'var(--text3)' }}>
-              <Loader2 size={32} className="spin" color="var(--accent)"/>
-              <p>Loading pages…</p>
-            </div>
-          ) : (
-            <div style={{
-              flex: 1, overflowY: 'auto', padding: '20px',
-              display: 'flex', flexWrap: 'wrap', gap: '14px', alignContent: 'flex-start',
-            }}>
-              {pages.map(t => {
-                const box = cropBoxes[t.page]
-                const isModified = box && (box.x > 2 || box.y > 2 || box.w < t.width - 2 || box.h < t.height - 2)
-                return (
-                  <PageCard
-                    key={t.page}
-                    thumb={t}
-                    pageNum={t.page}
-                    isModified={isModified}
-                    cropBox={box}
-                    onClick={() => setActivePage(t.page)}
-                  />
-                )
-              })}
-            </div>
-          )}
-        </div>
+    <>
+      <BatchLayout title="Crop PDF" subtitle="Trim margins from one or many PDFs" topProps={props} batch={batch}
+        sideTop={sideTop} summary={summary} renderSideBody={renderSideBody} renderCard={renderCard} headerExtra={headerExtra}
+        emptyHint={<div><p style={{ fontWeight: 600, color: 'var(--text2)' }}>Crop PDF — batch mode</p><p style={{ marginTop: 4 }}>Drop PDFs, set one margin for all, or click a page to crop it by hand.</p></div>}
+        footer={<BatchBar
+          summary={!n ? 'Add PDFs to start' : totalPages ? `${totalPages} page${totalPages === 1 ? '' : 's'} cropped in ${filesWithCrop} of ${n} file${n === 1 ? '' : 's'}` : 'Nothing cropped yet'}
+          note="Uncropped files are included unchanged · merged PDF keeps each page's own size" buttons={buttons} run={run} />} />
+      {active && (
+        <CropModal files={files} thumbs={thumbs} active={active} setActive={setActive} frac={cur}
+          onCommit={fr => setPage(active.fileId, active.idx, fr)}
+          onApplyFile={() => applyFile(active.fileId, cur)}
+          onApplyAll={() => applyAll(cur)}
+          onReset={() => setPage(active.fileId, active.idx, ZERO)}
+          onClose={() => setActive(null)} />
       )}
-
-      {/* Full-screen modal — same zIndex pattern as ZoomModal */}
-      {activePage && activeThumb && (
-        <CropModal
-          thumb={activeThumb}
-          pageNum={activePage}
-          totalPages={pages.length}
-          cropBox={cropBoxes[activePage]}
-          onCropChange={handleCropCommit}
-          onClose={() => setActivePage(null)}
-          onResetPage={resetPage}
-          onApplyToAll={applyToAll}
-          onNext={() => setActivePage(p => Math.min(pages.length, p + 1))}
-        />
-      )}
-    </div>
+    </>
   )
 }

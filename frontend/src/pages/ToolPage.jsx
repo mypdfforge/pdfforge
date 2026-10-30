@@ -4,6 +4,7 @@ import { Upload, Loader2, CheckCircle, AlertCircle, Info, X, Download,
          RotateCw, Trash2, Copy, ZoomIn, Undo2, FileText, ChevronUp, ChevronDown, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import MergeToolPage from './MergeToolPage'
+import BatchToolPage from './BatchToolPage'
 import * as api from '../utils/api'
 import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
 import { clientExtract, clientDuplicatePage, clientDeletePages, clientRepair, clientRedact, clientFindReplace } from '../utils/pdfClient'
@@ -941,7 +942,10 @@ function ClassicPreviewPanel({ file, selectedPages }) {
   )
 }
 
-// merge gets its own multi-file visual grid page; every other tool keeps the old flow
+// merge + the page-selection tools get a multi-file visual workspace; every other tool keeps the old flow
+const BATCH_TOOLS = ['split', 'extract', 'delete', 'duplicate']
 export default function ToolPage(props) {
-  return props.toolId === 'merge' ? <MergeToolPage onBack={props.onBack} /> : <ToolPageInner {...props} />
+  if (props.toolId === 'merge') return <MergeToolPage onBack={props.onBack} />
+  if (BATCH_TOOLS.includes(props.toolId)) return <BatchToolPage key={props.toolId} {...props} />
+  return <ToolPageInner {...props} />
 }

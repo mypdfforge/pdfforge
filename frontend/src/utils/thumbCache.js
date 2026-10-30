@@ -20,6 +20,8 @@
 const memCache   = new Map()
 const inProgress = new Map()
 const listeners  = new Map()   // key -> Set<onPageReady> for renders still running
+const doneMap    = new Map()   // key -> Promise that resolves when EVERY page of that file is rendered
+const MAX_MEM_FILES = 12       // cap in-memory thumbnail sets (batch tools can hold many PDFs)
 
 function fileKey(file) {
   return `${file.name}::${file.size}::${file.lastModified}`
@@ -137,10 +139,20 @@ export async function getThumbnailsProgressive(file, onPageReady, priority = 5) 
 
   const total  = pdfDoc.numPages
   const thumbs = new Array(total).fill(null)
+  // evict the oldest finished file(s) so 10+ PDFs don't pile up thumbnails forever
+  while (memCache.size >= MAX_MEM_FILES) {
+    const oldest = memCache.keys().next().value
+    if (doneMap.has(oldest)) break            // still rendering: keep it
+    memCache.delete(oldest)
+  }
   memCache.set(key, thumbs)
   const subs = new Set([onPageReady])
   listeners.set(key, subs)
+  let finish
+  doneMap.set(key, new Promise(r => { finish = r }))
+  const finishAll = () => { listeners.delete(key); doneMap.delete(key); finish() }
   const emit = (t, i) => subs.forEach(cb => cb(t, i))
+  try {
 
   // Render priority pages immediately (page 1 first — UI unblocks fast)
   const priorityCount = Math.min(priority, total)
@@ -160,18 +172,24 @@ export async function getThumbnailsProgressive(file, onPageReady, priority = 5) 
         thumbs[i-1] = thumb
         emit(thumb, i - 1)
       }
-      listeners.delete(key)
       await pdfDoc.destroy()
       await dbSet(key, thumbs)   // save to IndexedDB when all done
-    })().catch(console.error)
+    })().catch(console.error).finally(finishAll)
   } else {
-    listeners.delete(key)
     await pdfDoc.destroy()
     await dbSet(key, thumbs)
+    finishAll()
+  }
+  } catch (e) {                 // never leave a "pending forever" promise behind: batch queue would hang
+    memCache.delete(key); finishAll()
+    throw e
   }
 
   return thumbs
 }
+
+/** Resolves when every page of `file` has a thumbnail (or at once if cached / not rendering). Used to queue files one by one. */
+export const thumbsDone = (file) => doneMap.get(fileKey(file)) || Promise.resolve()
 
 /**
  * Standard getThumbnails — backwards compatible.
@@ -204,4 +222,4 @@ export async function getFullResPage(file, pageNum, scale = 1.5) {
 
 export function isCached(file)    { return memCache.has(fileKey(file)) }
 export function clearThumbCache() { memCache.clear() }
-export function evictFromCache(f) { memCache.delete(fileKey(f)) }
+export function evictFromCache(f) { memCache.delete(fileKey(f)) }  // running render just finishes into a detached array

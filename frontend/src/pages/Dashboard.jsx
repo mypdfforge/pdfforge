@@ -43,7 +43,10 @@ function ToolCard({ tool, onClick }) {
         </span>
         <div className="tool-body" style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{tool.label}</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>
+              {tool.label}
+              {tool.multi && <span className="badge" style={{ marginLeft: 8, fontSize: 10, padding: '1px 6px', verticalAlign: 'middle' }}>Batch</span>}
+            </span>
             <ArrowUpRight size={13} color="var(--text3)" style={{ opacity: mousePos.hover ? 1 : 0, transition: 'opacity 0.15s ease' }} />
           </div>
           <p className="tool-desc" style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5, marginTop: 2 }}>
