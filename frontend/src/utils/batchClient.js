@@ -11,7 +11,7 @@ import { clientCropVisual } from './editClient'
 import { rangeName } from './pageSpec'
 import { uniqueName } from './zipClient'
 
-export const SUFFIX = { delete: 'cleaned', duplicate: 'updated', extract: 'extracted', split: 'split', crop: 'cropped' }
+export const SUFFIX = { delete: 'cleaned', duplicate: 'updated', extract: 'extracted', split: 'split', crop: 'cropped', rotate: 'rotated' }
 
 /** "Client Invoice.pdf" -> "Client Invoice". Strips only characters no OS allows in file names. */
 export const baseName = (n) => (n || 'document').replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || 'document'
@@ -43,6 +43,9 @@ export function planFile(tool, f, st, opts = {}, mode = 'files') {
   const picked = all.filter(i => sel.has(i + 1))
   const anyRot = all.some(i => rot(i))
 
+  if (tool === 'rotate') {
+    return { jobs: [{ pages: all.map(i => mk(i)) }], passthrough: !anyRot }
+  }
   if (tool === 'delete') {
     const keep = all.filter(i => !sel.has(i + 1))
     return { jobs: keep.length ? [{ pages: keep.map(i => mk(i)) }] : [], passthrough: !picked.length && !anyRot }
@@ -89,6 +92,7 @@ export function countOutputs(tool, files, states, opts = {}, mode = 'files') {
     let n = 0, jobs = 0
     if (tool === 'delete')         { n = f.count - k; jobs = n > 0 ? 1 : 0 }
     else if (tool === 'duplicate') { n = f.count + k * Math.max(1, opts.copies || 1); jobs = 1 }
+    else if (tool === 'rotate')    { n = f.count; jobs = 1 }
     else if (tool === 'extract')   { n = k; jobs = mode === 'pages' ? k : (k ? 1 : 0) }
     else if (tool === 'split') {
       if (opts.splitMode === 'every') { n = f.count; jobs = Math.ceil(f.count / Math.max(1, opts.every || 1)) }

@@ -1,300 +1,567 @@
-import React, { useState, useCallback, useEffect } from 'react'
-import { useDropzone } from 'react-dropzone'
-import { Upload, Loader2, CheckCircle, AlertCircle, Download, RotateCw, RotateCcw, Trash2, Copy } from 'lucide-react'
-import TopBar from '../components/TopBar'
-import { clientRotateVisual, clientOrganize } from '../utils/editClient'
-import { downloadBlob } from '../utils/api'
-import { getThumbnailsProgressive } from '../utils/thumbCache'
+/**
+ * RotateToolPage.jsx — multi-file Rotate PDF built on the shared BatchWorkspace.
+ *
+ * Supports:
+ *   - Drag & drop multiple PDF files with dual-scroll layout and persistent dropzones
+ *   - Document accent color coding (DOC_COLORS) to identify page origins
+ *   - Global rotation shortcuts: Rotate All Files (+90° CW, -90° CCW, 180° Flip)
+ *   - Pattern presets: Rotate Odd pages, Rotate Even pages across all files
+ *   - Per-file controls: Rotate all pages in a specific file, reset file
+ *   - Per-page hover buttons: Rotate CW, Rotate CCW, Zoom in full resolution
+ *   - Visual live thumbnail rotation with smooth CSS transform (0°, 90°, 180°, 270°)
+ *   - Dual download options:
+ *       • Download Rotated Files (.zip or .pdf if 1 file)
+ *       • Merge & Download as 1 PDF (rotates and combines into a single document)
+ *       • Mobile direct download list for ≤ 3 files
+ */
+import React, { useState, useMemo, useCallback } from 'react'
+import {
+  RotateCw, RotateCcw, ZoomIn, Check, X, Undo2,
+  RefreshCw, CheckSquare, Square, Layers,
+} from 'lucide-react'
+import BatchLayout, {
+  useBatchFiles, useBatchRun, BatchBar, ThumbCard, CardBtn, ZoomModal,
+} from '../components/BatchWorkspace'
+import { runBatch, zipNameFor, isCoarse } from '../utils/batchClient'
+import { parseSpec, formatSpec } from '../utils/pageSpec'
 
-export default function RotateToolPage({ onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
-  const [file,      setFile]      = useState(null)
-  const [pages,     setPages]     = useState([])   // [{id, origIdx(0-based), img, width, height, rotation}] -- order = output order
-  const [ready,     setReady]     = useState(false) // all thumbnails loaded
-  const [edited,    setEdited]    = useState(false) // a card was deleted or duplicated
-  const [selected,  setSelected]  = useState(new Set())
-  const [loading,   setLoading]   = useState(false)
-  const [status,    setStatus]    = useState('idle')
-  const [errMsg,    setErrMsg]    = useState('')
-  const [pct, setPct] = useState(0)
+const normalizeDeg = (deg) => ((deg % 360) + 360) % 360
 
-  const onDrop = useCallback(a => {
-    if (!a.length) return
-    setFile(a[0]); setPages([]); setSelected(new Set()); setErrMsg(''); setReady(false); setEdited(false)
-  }, [])
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept:{'application/pdf':['.pdf']}, maxFiles:1 })
+export default function RotateToolPage(props) {
+  const batch = useBatchFiles()
+  const { files, thumbs, setErrs } = batch
+  const run = useBatchRun((m) => setErrs((e) => [...e, m]))
+  const coarse = isCoarse()
 
-  // Load thumbnails
-  useEffect(() => {
-    if (!file) return
-    setLoading(true)
-    setPages([])
-    setReady(false)
-    let first = true
-    getThumbnailsProgressive(file, (thumb) => {
-      if (first) { setLoading(false); first = false }  // hide spinner after page 1
-      if (thumb.img) {  // skip placeholders for unrendered pages
-        setPages(prev => [...prev, {
-          id: `p-${thumb.page}`, origIdx: thumb.page - 1, img: thumb.img,
-          width: thumb.width, height: thumb.height, rotation: 0
-        }])
-      }
-    }, 8)
-    .then(() => setReady(true))
-    .catch(() => setLoading(false))
-  }, [file])
+  // rotations map: `${fileId}:${pageIndex}` -> angle (0 | 90 | 180 | 270)
+  const [rotations, setRotations] = useState({})
+  // per-file selected pages for batch rotation in that file: { [fileId]: Set<pageNumber> }
+  const [selectedPages, setSelectedPages] = useState({})
+  // draft inputs for page ranges per file: { [fileId]: string }
+  const [draftInputs, setDraftInputs] = useState({})
+  // zoom modal target: { file, pageNum, rotation } | null
+  const [zoomTarget, setZoomTarget] = useState(null)
 
-  // ── Selection helpers ──
-  const toggleSelect = (id) => {
-    setSelected(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
+  // ── Rotation Helpers ────────────────────────────────────────────────────────
+  const getRot = useCallback(
+    (fileId, idx) => rotations[`${fileId}:${idx}`] || 0,
+    [rotations]
+  )
+
+  const rotatePage = useCallback((fileId, idx, delta) => {
+    setRotations((prev) => {
+      const key = `${fileId}:${idx}`
+      const current = prev[key] || 0
+      const next = normalizeDeg(current + delta)
+      const copy = { ...prev }
+      if (next === 0) delete copy[key]
+      else copy[key] = next
+      return copy
     })
-  }
-  const selectAll  = () => setSelected(new Set(pages.map(p => p.id)))
-  const selectNone = () => setSelected(new Set())
-  const selectOdd  = () => setSelected(new Set(pages.filter((_, i) => i % 2 === 0).map(p => p.id)))
-  const selectEven = () => setSelected(new Set(pages.filter((_, i) => i % 2 === 1).map(p => p.id)))
+  }, [])
 
-  // ── Rotate helpers ──
-  // Rotate a single page or all selected pages
-  const rotate = (id, dir) => {
-    const delta = dir === 'cw' ? 90 : -90
-    const targets = selected.has(id) && selected.size > 1 ? selected : new Set([id])
-    setPages(prev => prev.map(p =>
-      targets.has(p.id) ? { ...p, rotation: ((p.rotation + delta) % 360 + 360) % 360 } : p
-    ))
-  }
-
-  const rotateSelected = (dir) => {
-    if (selected.size === 0) return
-    const delta = dir === 'cw' ? 90 : -90
-    setPages(prev => prev.map(p =>
-      selected.has(p.id) ? { ...p, rotation: ((p.rotation + delta) % 360 + 360) % 360 } : p
-    ))
-  }
-
-  const resetAll = () => setPages(prev => prev.map(p => ({ ...p, rotation: 0 })))
-
-  // ── Card actions: delete / duplicate ──
-  const deletePage = (id) => {
-    setEdited(true)
-    setPages(prev => prev.filter(p => p.id !== id))
-    setSelected(prev => { const n = new Set(prev); n.delete(id); return n })
-  }
-  const duplicatePage = (id) => { setEdited(true); setPages(prev => {
-    const i = prev.findIndex(p => p.id === id)
-    if (i === -1) return prev
-    const clone = { ...prev[i], id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }
-    return [...prev.slice(0, i + 1), clone, ...prev.slice(i + 1)]
-  }) }
-
-  const structural = edited
-  const rotatedCount = pages.filter(p => p.rotation !== 0).length
-  const modifiedCount = rotatedCount + (structural ? 1 : 0)   // >0 = something to export
-
-  // ── Download ──
-  const download = async () => {
-    if (!file || !modifiedCount || !ready) return
-    setStatus('loading'); setErrMsg(''); setPct(0)
-    try {
-      const onP = p => setPct(Math.round(p.done / p.total * 100))
-      let res
-      if (structural) {
-        // deleted / duplicated pages: rebuild from the card list (same engine as Organize)
-        res = await clientOrganize(file, pages.map(p => ({ origIdx: p.origIdx, rotation: p.rotation, blank: false })), onP)
-      } else {
-        // rotation only: original rotate path, untouched
-        const rotations = {}
-        pages.forEach(p => { if (p.rotation !== 0) rotations[p.origIdx + 1] = p.rotation })
-        res = await clientRotateVisual(file, rotations, onP)
+  const rotateFile = useCallback((file, delta) => {
+    setRotations((prev) => {
+      const copy = { ...prev }
+      for (let i = 0; i < file.count; i++) {
+        const key = `${file.id}:${i}`
+        const current = prev[key] || 0
+        const next = normalizeDeg(current + delta)
+        if (next === 0) delete copy[key]
+        else copy[key] = next
       }
-      downloadBlob(res.data, 'rotated.pdf')
-      setStatus('done'); setTimeout(() => setStatus('idle'), 3000)
-    } catch(e) {
-      setErrMsg(e.response?.data?.detail || e.message || 'Rotation failed')
-      setStatus('error')
+      return copy
+    })
+  }, [])
+
+  const rotateAllFiles = useCallback((delta) => {
+    setRotations((prev) => {
+      const copy = { ...prev }
+      for (const f of files) {
+        for (let i = 0; i < f.count; i++) {
+          const key = `${f.id}:${i}`
+          const current = prev[key] || 0
+          const next = normalizeDeg(current + delta)
+          if (next === 0) delete copy[key]
+          else copy[key] = next
+        }
+      }
+      return copy
+    })
+  }, [files])
+
+  const rotatePattern = useCallback((pattern, delta) => {
+    // pattern: 'odd' | 'even'
+    setRotations((prev) => {
+      const copy = { ...prev }
+      for (const f of files) {
+        for (let i = 0; i < f.count; i++) {
+          const isOdd = (i + 1) % 2 === 1
+          if ((pattern === 'odd' && isOdd) || (pattern === 'even' && !isOdd)) {
+            const key = `${f.id}:${i}`
+            const current = prev[key] || 0
+            const next = normalizeDeg(current + delta)
+            if (next === 0) delete copy[key]
+            else copy[key] = next
+          }
+        }
+      }
+      return copy
+    })
+  }, [files])
+
+  const resetFile = useCallback((fileId, count) => {
+    setRotations((prev) => {
+      const copy = { ...prev }
+      for (let i = 0; i < count; i++) {
+        delete copy[`${fileId}:${i}`]
+      }
+      return copy
+    })
+  }, [])
+
+  const resetAll = useCallback(() => {
+    setRotations({})
+    setSelectedPages({})
+    setDraftInputs({})
+  }, [])
+
+  // ── Selection Helpers ───────────────────────────────────────────────────────
+  const toggleSelectPage = useCallback((fileId, pageNum) => {
+    setSelectedPages((prev) => {
+      const current = new Set(prev[fileId] || [])
+      if (current.has(pageNum)) current.delete(pageNum)
+      else current.add(pageNum)
+      return { ...prev, [fileId]: current }
+    })
+  }, [])
+
+  const selectPatternForFile = useCallback((file, pattern) => {
+    setSelectedPages((prev) => {
+      const next = new Set()
+      for (let p = 1; p <= file.count; p++) {
+        if (pattern === 'all') next.add(p)
+        else if (pattern === 'odd' && p % 2 === 1) next.add(p)
+        else if (pattern === 'even' && p % 2 === 0) next.add(p)
+      }
+      return { ...prev, [file.id]: next }
+    })
+    setDraftInputs((prev) => {
+      const sel = new Set()
+      for (let p = 1; p <= file.count; p++) {
+        if (pattern === 'all' || (pattern === 'odd' && p % 2 === 1) || (pattern === 'even' && p % 2 === 0)) sel.add(p)
+      }
+      return { ...prev, [file.id]: formatSpec(sel) }
+    })
+  }, [])
+
+  const rotateSelectedInFile = useCallback((file, delta) => {
+    const sel = selectedPages[file.id]
+    if (!sel || !sel.size) return
+    setRotations((prev) => {
+      const copy = { ...prev }
+      for (const p of sel) {
+        const i = p - 1
+        const key = `${file.id}:${i}`
+        const current = prev[key] || 0
+        const next = normalizeDeg(current + delta)
+        if (next === 0) delete copy[key]
+        else copy[key] = next
+      }
+      return copy
+    })
+  }, [selectedPages])
+
+  // ── Counts & Metrics ────────────────────────────────────────────────────────
+  const rotatedCountsPerFile = useMemo(() => {
+    const map = {}
+    for (const f of files) {
+      let count = 0
+      for (let i = 0; i < f.count; i++) {
+        if (rotations[`${f.id}:${i}`]) count++
+      }
+      map[f.id] = count
     }
+    return map
+  }, [files, rotations])
+
+  const totalRotatedPages = useMemo(
+    () => Object.values(rotatedCountsPerFile).reduce((a, b) => a + b, 0),
+    [rotatedCountsPerFile]
+  )
+  const filesWithRotations = useMemo(
+    () => files.filter((f) => (rotatedCountsPerFile[f.id] || 0) > 0).length,
+    [files, rotatedCountsPerFile]
+  )
+
+  // ── Export Flow ─────────────────────────────────────────────────────────────
+  const go = useCallback(
+    (mode) => {
+      run.run(
+        ({ onProgress, shouldCancel }) =>
+          runBatch({
+            tool: 'rotate',
+            mode,
+            files,
+            states: {},
+            opts: { rot: rotations },
+            onProgress,
+            shouldCancel,
+          }),
+        zipNameFor('rotate', files.length)
+      )
+    },
+    [files, rotations, run]
+  )
+
+  const busy = run.status === 'loading'
+  const n = files.length
+
+  const buttons = useMemo(() => {
+    if (!n) return []
+    const primaryLabel =
+      n === 1
+        ? '📄 Download Rotated PDF (.pdf)'
+        : coarse && n <= 3
+        ? `⬇ Download ${n} Rotated Files`
+        : `📦 Download ${n} Rotated Files (.zip)`
+
+    const list = [
+      {
+        label: primaryLabel,
+        primary: true,
+        disabled: busy,
+        onClick: () => go('files'),
+      },
+    ]
+    if (n > 1) {
+      list.push({
+        label: '📄 Merge & Download (.pdf)',
+        disabled: busy,
+        onClick: () => go('merged'),
+      })
+    }
+    return list
+  }, [n, coarse, busy, go])
+
+  // ── Sidebar: Global Controls ────────────────────────────────────────────────
+  const sideTop = (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 10,
+        background: 'var(--bg2)',
+        padding: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <strong style={{ fontSize: 13, color: 'var(--text)' }}>Rotate All Files</strong>
+        {totalRotatedPages > 0 && (
+          <button className="bw-chipbtn" onClick={resetAll} title="Reset all page rotations to 0°">
+            Reset all
+          </button>
+        )}
+      </div>
+
+      {/* Main rotation buttons */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+        <button
+          className="bw-chipbtn"
+          style={{ height: 32, justifyContent: 'center', fontWeight: 600 }}
+          onClick={() => rotateAllFiles(90)}
+          title="Rotate every page in all files 90° clockwise"
+        >
+          <RotateCw size={13} style={{ marginRight: 4 }} /> 90° CW
+        </button>
+        <button
+          className="bw-chipbtn"
+          style={{ height: 32, justifyContent: 'center', fontWeight: 600 }}
+          onClick={() => rotateAllFiles(-90)}
+          title="Rotate every page in all files 90° counter-clockwise"
+        >
+          <RotateCcw size={13} style={{ marginRight: 4 }} /> 90° CCW
+        </button>
+        <button
+          className="bw-chipbtn"
+          style={{ height: 32, justifyContent: 'center', fontWeight: 600 }}
+          onClick={() => rotateAllFiles(180)}
+          title="Flip every page in all files 180°"
+        >
+          180° Flip
+        </button>
+      </div>
+
+      {/* Quick Pattern shortcuts */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text3)' }}>Batch pattern:</span>
+        <button className="bw-chipbtn" onClick={() => rotatePattern('odd', 90)} title="Rotate odd pages in all files +90°">
+          Odd pages CW
+        </button>
+        <button className="bw-chipbtn" onClick={() => rotatePattern('even', 90)} title="Rotate even pages in all files +90°">
+          Even pages CW
+        </button>
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.4 }}>
+        Hover over any page thumbnail to rotate it individually, or click cards to select pages for bulk rotation.
+      </div>
+    </div>
+  )
+
+  // ── Sidebar: Per-File Details ───────────────────────────────────────────────
+  const renderSideBody = (f) => {
+    const rotCount = rotatedCountsPerFile[f.id] || 0
+    const sel = selectedPages[f.id] || new Set()
+    const draft = draftInputs[f.id] ?? ''
+
+    const handleRangeChange = (text) => {
+      setDraftInputs((prev) => ({ ...prev, [f.id]: text }))
+      const { set } = parseSpec(text, f.count)
+      setSelectedPages((prev) => ({ ...prev, [f.id]: set }))
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+        <div style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>
+            {rotCount > 0 ? (
+              <strong style={{ color: 'var(--brand)' }}>{rotCount} of {f.count} pages rotated</strong>
+            ) : (
+              'Original orientation'
+            )}
+          </span>
+          {rotCount > 0 && (
+            <button className="bw-chipbtn" onClick={() => resetFile(f.id, f.count)} style={{ fontSize: 10, padding: '2px 6px' }}>
+              Reset file
+            </button>
+          )}
+        </div>
+
+        {/* Quick file-level rotation buttons */}
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+          <button className="bw-chipbtn" onClick={() => rotateFile(f, 90)} title="Rotate all pages of this file +90°">
+            <RotateCw size={11} style={{ verticalAlign: -1 }} /> Rotate file CW
+          </button>
+          <button className="bw-chipbtn" onClick={() => rotateFile(f, -90)} title="Rotate all pages of this file -90°">
+            <RotateCcw size={11} style={{ verticalAlign: -1 }} /> Rotate file CCW
+          </button>
+        </div>
+
+        {/* Per-file page range selector */}
+        <div style={{ borderTop: '1px dashed var(--border)', paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600 }}>Pages in this file:</span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button className="bw-chipbtn" onClick={() => selectPatternForFile(f, 'all')} style={{ fontSize: 10, padding: '1px 5px' }}>All</button>
+              <button className="bw-chipbtn" onClick={() => selectPatternForFile(f, 'odd')} style={{ fontSize: 10, padding: '1px 5px' }}>Odd</button>
+              <button className="bw-chipbtn" onClick={() => selectPatternForFile(f, 'even')} style={{ fontSize: 10, padding: '1px 5px' }}>Even</button>
+              {sel.size > 0 && (
+                <button
+                  className="bw-chipbtn"
+                  onClick={() => {
+                    setSelectedPages((prev) => ({ ...prev, [f.id]: new Set() }))
+                    setDraftInputs((prev) => ({ ...prev, [f.id]: '' }))
+                  }}
+                  style={{ fontSize: 10, padding: '1px 5px' }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          <input
+            type="text"
+            className="input"
+            value={draft}
+            placeholder={`e.g. 1-3, 5 (of ${f.count})`}
+            onChange={(e) => handleRangeChange(e.target.value)}
+            style={{ width: '100%', height: 26, fontSize: 11, padding: '2px 8px' }}
+          />
+
+          {sel.size > 0 && (
+            <div style={{ display: 'flex', gap: 5, marginTop: 2 }}>
+              <button
+                className="bw-chipbtn"
+                style={{ flex: 1, justifyContent: 'center', background: 'var(--bg3)', fontWeight: 600 }}
+                onClick={() => rotateSelectedInFile(f, 90)}
+              >
+                <RotateCw size={11} style={{ marginRight: 3 }} /> Rotate {sel.size} selected CW
+              </button>
+              <button
+                className="bw-chipbtn"
+                style={{ justifyContent: 'center', background: 'var(--bg3)' }}
+                onClick={() => rotateSelectedInFile(f, -90)}
+                title="Rotate selected counter-clockwise"
+              >
+                <RotateCcw size={11} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // ── Grid: Render Page Thumbnail Cards ───────────────────────────────────────
+  const renderCard = ({ f, n: docN, i, thumb, color }) => {
+    const rot = getRot(f.id, i)
+    const isRot = rot !== 0
+    const sel = selectedPages[f.id]?.has(i + 1)
+
+    const labelBadge = isRot ? (
+      <span style={{ color: 'var(--brand)', fontWeight: 700 }}>
+        {rot === 90 ? '⟳ 90°' : rot === 180 ? '180°' : '⟲ 90°'}
+      </span>
+    ) : null
+
+    // Card Hover Actions
+    const actions = (
+      <div style={{ display: 'flex', gap: 4 }}>
+        <CardBtn title="Rotate 90° clockwise" onClick={() => rotatePage(f.id, i, 90)}>
+          <RotateCw size={13} />
+        </CardBtn>
+        <CardBtn title="Rotate 90° counter-clockwise" onClick={() => rotatePage(f.id, i, -90)}>
+          <RotateCcw size={13} />
+        </CardBtn>
+        <CardBtn
+          title="Zoom full resolution"
+          onClick={() => setZoomTarget({ file: f.file, pageNum: i + 1, rotation: rot })}
+        >
+          <ZoomIn size={13} />
+        </CardBtn>
+        {isRot && (
+          <CardBtn title="Reset to original orientation" onClick={() => rotatePage(f.id, i, -rot)} bg="rgba(229,83,75,0.85)">
+            <Undo2 size={13} />
+          </CardBtn>
+        )}
+      </div>
+    )
+
+    // Selection Indicator Overlay
+    const overlay = (
+      <div
+        onClick={(e) => {
+          e.stopPropagation()
+          toggleSelectPage(f.id, i + 1)
+        }}
+        title={sel ? 'Deselect page' : 'Select page'}
+        style={{
+          position: 'absolute',
+          top: 6,
+          right: 6,
+          width: 20,
+          height: 20,
+          borderRadius: 4,
+          background: sel ? color : 'rgba(0,0,0,0.5)',
+          border: '1.5px solid #fff',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          zIndex: 5,
+          color: '#fff',
+        }}
+      >
+        {sel && <Check size={13} strokeWidth={3} />}
+      </div>
+    )
+
+    return (
+      <ThumbCard
+        thumb={thumb}
+        color={color}
+        docN={docN}
+        page={i + 1}
+        rotation={rot}
+        label={labelBadge}
+        actions={actions}
+        overlay={overlay}
+        ring={sel ? color : isRot ? 'var(--brand)' : null}
+        ariaLabel={`Document ${docN}, page ${i + 1}${isRot ? `, rotated ${rot} degrees` : ''}`}
+        onClick={() => rotatePage(f.id, i, 90)}
+      />
+    )
+  }
+
+  const summary = (f) => {
+    const c = rotatedCountsPerFile[f.id] || 0
+    return c ? `${c} of ${f.count} rotated` : 'original'
+  }
+
+  const headerExtra = (f) => {
+    const c = rotatedCountsPerFile[f.id] || 0
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button
+          className="bw-chipbtn"
+          onClick={() => rotateFile(f, 90)}
+          title="Rotate all pages in this section +90°"
+          style={{ fontSize: 11 }}
+        >
+          <RotateCw size={11} style={{ marginRight: 3 }} /> +90° Section
+        </button>
+        {c > 0 && (
+          <button
+            className="bw-chipbtn"
+            onClick={() => resetFile(f.id, f.count)}
+            title="Reset this section to original orientation"
+            style={{ fontSize: 11 }}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+    )
   }
 
   return (
-    <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column' }}>
-      <TopBar onBack={onBack} title="↻ Rotate Pages" subtitle="Click arrows on thumbnails to rotate"
-        dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome}
-        showCategories={showCategories} activeCategory={activeCategory} onCategoryChange={onCategoryChange}
-        search={search} onSearch={onSearch}/>
-
-      {!file ? (
-        /* ── Upload screen ── */
-        <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px' }}>
-          <div style={{ width:'100%', maxWidth:'480px' }}>
-            <div {...getRootProps()} style={{ background:isDragActive?'rgba(91,91,214,0.08)':'var(--bg2)', border:`2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`, borderRadius:'16px', padding:'60px 40px', textAlign:'center', cursor:'pointer', transition:'all 0.15s' }}>
-              <input {...getInputProps()}/>
-              <div style={{ width:'56px', height:'56px', background:'rgba(21,128,61,0.1)', border:'1px solid rgba(21,128,61,0.3)', borderRadius:'14px', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px', fontSize:'24px' }}>↻</div>
-              <p style={{ color:'var(--text)', fontWeight:600, fontSize:'16px', marginBottom:'8px' }}>Drop your PDF here</p>
-              <p style={{ color:'var(--text3)', fontSize:'13px' }}>or click to browse</p>
-            </div>
+    <>
+      <BatchLayout
+        title="Rotate PDF"
+        subtitle="Rotate pages across one or many PDFs"
+        topProps={props}
+        batch={batch}
+        sideTop={sideTop}
+        summary={summary}
+        renderSideBody={renderSideBody}
+        renderCard={renderCard}
+        headerExtra={headerExtra}
+        emptyHint={
+          <div>
+            <p style={{ fontWeight: 600, color: 'var(--text2)' }}>Rotate PDF — Batch Mode</p>
+            <p style={{ marginTop: 4 }}>
+              Drop one or more PDFs. Rotate entire files, patterns (odd/even), or click individual pages to rotate.
+            </p>
           </div>
-        </div>
+        }
+        footer={
+          <BatchBar
+            summary={
+              !n
+                ? 'Add PDFs to start'
+                : totalRotatedPages
+                ? `${totalRotatedPages} page${totalRotatedPages === 1 ? '' : 's'} rotated across ${filesWithRotations} of ${n} file${n === 1 ? '' : 's'}`
+                : 'All pages in original orientation'
+            }
+            note="Unrotated pages stay unchanged · Merged PDF preserves each page's rotation"
+            buttons={buttons}
+            run={run}
+          />
+        }
+      />
 
-      ) : loading ? (
-        <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:'12px', color:'var(--text3)' }}>
-          <Loader2 size={32} className="spin" color="var(--accent)"/>
-          <p>Loading pages…</p>
-        </div>
-
-      ) : (
-        <div style={{ display:'flex', flex:1, flexDirection:'column', height:'calc(100vh - 52px)', overflow:'hidden' }}>
-
-          {/* ── Toolbar ── */}
-          <div style={{ padding:'10px 20px', borderBottom:'1px solid var(--border)', background:'var(--bg2)', display:'flex', alignItems:'center', gap:'8px', flexShrink:0, flexWrap:'wrap' }}>
-
-            {/* Selection */}
-            <span style={{ fontSize:'12px', color:'var(--text3)', fontWeight:600, marginRight:'4px' }}>Select:</span>
-            {[['All', selectAll], ['None', selectNone], ['Odd', selectOdd], ['Even', selectEven]].map(([l, fn]) => (
-              <button key={l} onClick={fn}
-                style={{ fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'var(--bg3)', color:'var(--text2)', cursor:'pointer' }}>
-                {l}
-              </button>
-            ))}
-
-            <div style={{ width:'1px', height:'20px', background:'var(--border)', margin:'0 4px' }}/>
-
-            {/* Batch rotate */}
-            <span style={{ fontSize:'12px', color:'var(--text3)', fontWeight:600 }}>
-              Rotate {selected.size > 0 ? `${selected.size} selected` : 'selected'}:
-            </span>
-            <button onClick={() => rotateSelected('ccw')} disabled={selected.size === 0}
-              style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:selected.size>0?'var(--bg3)':'var(--bg2)', color:selected.size>0?'var(--text2)':'#555566', cursor:selected.size>0?'pointer':'not-allowed' }}>
-              <RotateCcw size={13}/> 90° CCW
-            </button>
-            <button onClick={() => rotateSelected('cw')} disabled={selected.size === 0}
-              style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:selected.size>0?'var(--bg3)':'var(--bg2)', color:selected.size>0?'var(--text2)':'#555566', cursor:selected.size>0?'pointer':'not-allowed' }}>
-              <RotateCw size={13}/> 90° CW
-            </button>
-
-            <div style={{ flex:1 }}/>
-
-            {rotatedCount > 0 && (
-              <button onClick={resetAll}
-                style={{ fontSize:'12px', padding:'5px 12px', borderRadius:'6px', border:'1px solid var(--border)', background:'none', color:'var(--text3)', cursor:'pointer' }}>
-                Reset All
-              </button>
-            )}
-
-            {errMsg && (
-              <span style={{ fontSize:'12px', color:'var(--red)', display:'flex', alignItems:'center', gap:'5px' }}>
-                <AlertCircle size={12}/> {errMsg}
-              </span>
-            )}
-
-            {rotatedCount > 0 && (
-              <span style={{ fontSize:'12px', color:'var(--text3)' }}>
-                {rotatedCount} page{rotatedCount !== 1 ? 's' : ''} rotated
-              </span>
-            )}
-            {structural && <span style={{ fontSize:'12px', color:'var(--text3)' }}>{pages.length} pages in output</span>}
-
-            <button onClick={download} disabled={!modifiedCount || !ready || status === 'loading'}
-              style={{ display:'flex', alignItems:'center', gap:'7px', padding:'8px 20px', borderRadius:'8px', border:'none', fontWeight:700, fontSize:'13px', cursor: modifiedCount && ready ? 'pointer' : 'not-allowed', opacity: modifiedCount && ready ? 1 : 0.45, transition:'all 0.15s',
-                background: status==='done' ? 'var(--green)' : status==='loading' ? 'var(--bg3)' : 'var(--accent)',
-                color: status==='loading' ? 'var(--text3)' : '#fff',
-                boxShadow: modifiedCount ? '0 2px 12px rgba(234,88,12,0.35)' : 'none' }}>
-              {status==='loading' ? <><Loader2 size={13} className="spin"/>Applying {pct}%</>
-               : status==='done'  ? <><CheckCircle size={13}/>Downloaded!</>
-               :                    <><Download size={13}/>Download Rotated PDF</>}
-            </button>
-          </div>
-
-          {/* ── Page grid ── */}
-          <div style={{ flex:1, overflowY:'auto', padding:'24px', display:'flex', flexWrap:'wrap', gap:'16px', alignContent:'flex-start' }}>
-            <style>{`
-              .rot-actions { opacity:0; pointer-events:none; transition:opacity 0.1s }
-              .rot-card:hover .rot-actions { opacity:1; pointer-events:all }
-            `}</style>
-            {pages.map((p, idx) => {
-              const isSel = selected.has(p.id)
-              const isRotated = p.rotation !== 0
-              return (
-                <div key={p.id} className="rot-card"
-                  style={{ position:'relative', width:'140px', flexShrink:0, cursor:'pointer',
-                    borderRadius:'12px', border:`2px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`,
-                    background: isSel ? 'rgba(234,88,12,0.08)' : 'var(--bg2)',
-                    boxShadow: isSel ? '0 0 0 3px rgba(234,88,12,0.2)' : 'none',
-                    transition:'all 0.15s', overflow:'visible' }}>
-
-                  {/* Thumbnail — click to select */}
-                  <div onClick={() => toggleSelect(p.id)}
-                    style={{ padding:'8px', paddingBottom:'4px', overflow:'hidden', borderRadius:'10px 10px 0 0' }}>
-                    <div style={{ overflow:'hidden', borderRadius:'6px', background:'#fff' }}>
-                      <img src={p.img} alt={`p${p.id}`}
-                        style={{ width:'100%', display:'block', transition:'transform 0.3s ease',
-                          transform: `rotate(${p.rotation}deg)`,
-                          // For 90/270 we need to scale to fit
-                          ...(p.rotation === 90 || p.rotation === 270 ? {
-                            width: `${p.height / p.width * 100}%`,
-                            marginLeft: `${(1 - p.height/p.width) / 2 * 100}%`,
-                          } : {})
-                        }}/>
-                    </div>
-                  </div>
-
-                  {/* Page label + rotation badge */}
-                  <div style={{ padding:'4px 8px 6px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <span style={{ fontSize:'11px', color: isSel ? '#ffffff' : 'var(--text3)', fontWeight:600 }}>p.{idx + 1}</span>
-                    {isRotated && (
-                      <span style={{ fontSize:'10px', background:'var(--green)', color:'#000', borderRadius:'4px', padding:'1px 5px', fontWeight:700 }}>
-                        {p.rotation}°
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Rotate buttons — always visible at bottom */}
-                  <div style={{ position:'absolute', bottom:'-18px', left:'50%', transform:'translateX(-50%)', display:'flex', gap:'4px', zIndex:10 }}>
-                    <button onClick={e => { e.stopPropagation(); rotate(p.id, 'ccw') }}
-                      title="Rotate 90° counter-clockwise"
-                      style={{ width:'32px', height:'32px', borderRadius:'50%', border:'2px solid var(--border)', background:'var(--bg3)', color:'var(--text2)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s', boxShadow:'0 2px 8px rgba(0,0,0,0.3)' }}
-                      onMouseEnter={e => { e.currentTarget.style.background='var(--accent)'; e.currentTarget.style.color='#fff' }}
-                      onMouseLeave={e => { e.currentTarget.style.background='var(--bg3)'; e.currentTarget.style.color='var(--text2)' }}>
-                      <RotateCcw size={14}/>
-                    </button>
-                    <button onClick={e => { e.stopPropagation(); rotate(p.id, 'cw') }}
-                      title="Rotate 90° clockwise"
-                      style={{ width:'32px', height:'32px', borderRadius:'50%', border:'2px solid var(--border)', background:'var(--bg3)', color:'var(--text2)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s', boxShadow:'0 2px 8px rgba(0,0,0,0.3)' }}
-                      onMouseEnter={e => { e.currentTarget.style.background='var(--accent)'; e.currentTarget.style.color='#fff' }}
-                      onMouseLeave={e => { e.currentTarget.style.background='var(--bg3)'; e.currentTarget.style.color='var(--text2)' }}>
-                      <RotateCw size={14}/>
-                    </button>
-                  </div>
-
-                  {/* Hover action overlay (top-left): rotate CCW / CW, duplicate, delete */}
-                  <div className="rot-actions" style={{ position:'absolute', top:'6px', left:'6px', display:'flex', flexDirection:'column', gap:'4px', zIndex:10 }}>
-                    {[
-                      ['Rotate 90° counter-clockwise', 'rgba(234,88,12,0.9)',  <RotateCcw size={13}/>, () => rotate(p.id, 'ccw')],
-                      ['Rotate 90° clockwise',         'rgba(234,88,12,0.9)',  <RotateCw size={13}/>,  () => rotate(p.id, 'cw')],
-                      ['Duplicate — adds a copy after this page', 'rgba(16,155,117,0.9)', <Copy size={13}/>, () => duplicatePage(p.id)],
-                      ['Delete page',                  'rgba(229,83,75,0.9)',  <Trash2 size={13}/>,    () => deletePage(p.id)],
-                    ].map(([title, bg, icon, fn]) => (
-                      <button key={title} title={title} onClick={e => { e.stopPropagation(); fn() }}
-                        style={{ width:'26px', height:'26px', borderRadius:'6px', border:'none', background:bg, color:'#fff', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                        {icon}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Checkbox top-right */}
-                  <div onClick={() => toggleSelect(p.id)}
-                    style={{ position:'absolute', top:'6px', right:'6px', width:'20px', height:'20px', borderRadius:'50%',
-                      background: isSel ? 'var(--accent)' : 'rgba(0,0,0,0.5)', border:'2px solid #fff',
-                      display:'flex', alignItems:'center', justifyContent:'center', fontSize:'11px', color:'#fff', fontWeight:700, cursor:'pointer' }}>
-                    {isSel ? '✓' : ''}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+      {zoomTarget && (
+        <ZoomModal
+          file={zoomTarget.file}
+          pageNum={zoomTarget.pageNum}
+          rotation={zoomTarget.rotation}
+          onClose={() => setZoomTarget(null)}
+        />
       )}
-    </div>
+    </>
   )
 }

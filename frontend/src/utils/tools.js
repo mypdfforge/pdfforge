@@ -20,7 +20,7 @@ export const TOOLS = [
   { id:'merge',        icon:Layers,        label:'Merge PDF',        desc:'Combine several PDFs into one.',                  category:'organize', runs:'browser', multi:true },
   { id:'split',        icon:Scissors,      label:'Split PDF',        desc:'Cut one or many PDFs into parts, by range or every N pages.',  category:'organize', runs:'browser', multi:true },
   { id:'extract',      icon:FileOutput,    label:'Extract pages',    desc:'Keep chosen pages from one or many PDFs.',             category:'organize', runs:'browser', multi:true },
-  { id:'rotate',       icon:RotateCw,      label:'Rotate pages',     desc:'Rotate one or all pages.',                        category:'organize', runs:'browser' },
+  { id:'rotate',       icon:RotateCw,      label:'Rotate pages',     desc:'Rotate pages across one or many PDFs.',           category:'organize', runs:'browser', multi:true },
   { id:'delete',       icon:Trash2,        label:'Delete pages',     desc:'Remove unwanted pages from one or many PDFs.',                          category:'organize', runs:'browser', multi:true },
   { id:'duplicate',    icon:Copy,          label:'Duplicate page',   desc:'Insert copies of any pages, across many PDFs.',   category:'organize', runs:'browser', multi:true },
   { id:'organize',     icon:LayoutGrid,    label:'Organize pages',   desc:'Drag to reorder, rotate or delete pages.',        category:'organize', runs:'browser' },
