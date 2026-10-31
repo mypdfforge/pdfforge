@@ -396,130 +396,360 @@ export async function wordToPdf(file, onProgress) {
 //      slide frame → html2canvas → jsPDF landscape page per slide.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Parse PPTX slide XML into a structured object */
-function parsePptxSlideXml(xmlText) {
+/** Helper: calculate relative luminance of hex/rgb/rgba color */
+function getPptxLuminance(colorStr) {
+  if (!colorStr || colorStr === 'transparent') return 0
+  let hex = String(colorStr).trim()
+  if (hex.startsWith('rgba') || hex.startsWith('rgb')) {
+    const m = hex.match(/\d+/g)
+    if (m && m.length >= 3) {
+      const r = parseInt(m[0]) / 255
+      const g = parseInt(m[1]) / 255
+      const b = parseInt(m[2]) / 255
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    return 0.5
+  }
+  hex = hex.replace('#', '')
+  if (hex.length === 3) {
+    hex = hex.split('').map(ch => ch + ch).join('')
+  }
+  if (hex.length !== 6) return 0.5
+  const r = parseInt(hex.slice(0, 2), 16) / 255
+  const g = parseInt(hex.slice(2, 4), 16) / 255
+  const b = parseInt(hex.slice(4, 6), 16) / 255
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/** Helper: safely escape HTML characters */
+function escapePptxHtml(str) {
+  if (!str) return ''
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/** Parse PPTX slide XML into structured shapes and tables */
+function parsePptxSlideXml(xmlText, slideW = 9144000, slideH = 5143500) {
   const parser = new DOMParser()
   const doc = parser.parseFromString(xmlText, 'text/xml')
 
-  // Helper: get all text from a node
+  // Helper: get all runs from a paragraph or node
   const getText = (node) => {
-    const runs = node.querySelectorAll('r')
-    if (runs.length === 0) return node.textContent?.trim() || ''
-    return Array.from(runs).map(r => {
-      const t = r.querySelector('t')?.textContent || ''
-      const rPr = r.querySelector('rPr')
-      return { text: t, bold: rPr?.getAttribute('b') === '1', italic: rPr?.getAttribute('i') === '1', sz: parseInt(rPr?.getAttribute('sz') || '1800') / 100 }
-    })
+    const runNodes = [
+      ...Array.from(node.getElementsByTagName('a:r')),
+      ...Array.from(node.getElementsByTagName('a:fld')),
+      ...Array.from(node.querySelectorAll('r'))
+    ]
+    const uniqueRuns = Array.from(new Set(runNodes))
+    if (uniqueRuns.length === 0) {
+      const t = node.textContent?.trim() || ''
+      return t ? [{ text: t, bold: false, italic: false, sz: 18, color: null }] : []
+    }
+    return uniqueRuns.map(r => {
+      const tNode = r.getElementsByTagName('a:t')[0] || r.querySelector('t')
+      const t = tNode?.textContent || ''
+      const rPr = r.getElementsByTagName('a:rPr')[0] || r.querySelector('rPr')
+      const bold = rPr?.getAttribute('b') === '1'
+      const italic = rPr?.getAttribute('i') === '1'
+      const szAttr = rPr?.getAttribute('sz')
+      const sz = szAttr ? Math.max(9, Math.round(parseInt(szAttr) / 100)) : 16
+
+      // Extract explicit font color if available
+      let color = null
+      const solidFill = rPr?.querySelector('solidFill srgbClr') || rPr?.getElementsByTagName('a:srgbClr')[0]
+      if (solidFill) {
+        const val = solidFill.getAttribute('val')
+        if (val) color = '#' + val
+      }
+      return { text: t, bold, italic, sz, color }
+    }).filter(r => r.text)
   }
 
   const shapes = []
-  const spTree = doc.querySelector('spTree')
-  if (!spTree) return { shapes }
+  const tables = []
+  const spTree = doc.getElementsByTagName('p:spTree')[0] || doc.querySelector('spTree')
+  if (!spTree) return { shapes, tables }
 
-  spTree.querySelectorAll('sp').forEach(sp => {
-    const nvSpPr = sp.querySelector('nvSpPr nvPr')
-    const phType = nvSpPr?.getAttribute('type')
-    const txBody = sp.querySelector('txBody')
-    const spPr   = sp.querySelector('spPr')
+  // 1. Parse standard shapes
+  const spList = [
+    ...Array.from(spTree.getElementsByTagName('p:sp')),
+    ...Array.from(spTree.querySelectorAll('sp'))
+  ]
+  const uniqueSps = Array.from(new Set(spList))
+
+  uniqueSps.forEach(sp => {
+    const nvSpPr = sp.getElementsByTagName('p:nvSpPr')[0] || sp.querySelector('nvSpPr')
+    const nvPr = nvSpPr?.getElementsByTagName('p:nvPr')[0] || nvSpPr?.querySelector('nvPr')
+    const ph = nvPr?.getElementsByTagName('p:ph')[0] || nvPr?.querySelector('ph')
+    const phType = ph?.getAttribute('type')
+    const txBody = sp.getElementsByTagName('p:txBody')[0] || sp.querySelector('txBody')
+    const spPr = sp.getElementsByTagName('p:spPr')[0] || sp.querySelector('spPr')
 
     if (!txBody) return
 
-    // Extract position/size from xfrm
-    const xfrm  = spPr?.querySelector('xfrm')
-    const off   = xfrm?.querySelector('off')
-    const ext   = xfrm?.querySelector('ext')
+    // Position / dimensions
+    const xfrm = spPr?.getElementsByTagName('a:xfrm')[0] || spPr?.querySelector('xfrm')
+    const off = xfrm?.getElementsByTagName('a:off')[0] || xfrm?.querySelector('off')
+    const ext = xfrm?.getElementsByTagName('a:ext')[0] || xfrm?.querySelector('ext')
 
-    // EMU to percentage of slide (slide = 9144000 x 5143500 EMU for 16:9)
-    const slideW = 9144000, slideH = 5143500
-    const x  = off  ? (parseInt(off.getAttribute('x'))  / slideW * 100).toFixed(2) : 5
-    const y  = off  ? (parseInt(off.getAttribute('y'))  / slideH * 100).toFixed(2) : 5
-    const cx = ext  ? (parseInt(ext.getAttribute('cx')) / slideW * 100).toFixed(2) : 90
-    const cy = ext  ? (parseInt(ext.getAttribute('cy')) / slideH * 100).toFixed(2) : 20
+    const rawX = off ? (parseInt(off.getAttribute('x') || '0') / slideW * 100) : 5
+    const rawY = off ? (parseInt(off.getAttribute('y') || '0') / slideH * 100) : 5
+    const rawCx = ext ? (parseInt(ext.getAttribute('cx') || '0') / slideW * 100) : 90
+    const rawCy = ext ? (parseInt(ext.getAttribute('cy') || '0') / slideH * 100) : 20
 
-    // Background fill
+    // Clamp coordinates to prevent clipping
+    const x = Math.max(0, Math.min(96, rawX)).toFixed(2)
+    const y = Math.max(0, Math.min(96, rawY)).toFixed(2)
+    const cx = Math.max(2, Math.min(100 - parseFloat(x), rawCx)).toFixed(2)
+    const cy = Math.max(2, Math.min(100 - parseFloat(y), rawCy)).toFixed(2)
+
+    // Background fill & border
     let bgColor = null
-    const solidFill = spPr?.querySelector('solidFill srgbClr')
-    if (solidFill) bgColor = '#' + solidFill.getAttribute('val')
+    const solidFill = spPr?.querySelector('solidFill srgbClr') || spPr?.getElementsByTagName('a:srgbClr')[0]
+    if (solidFill) {
+      const val = solidFill.getAttribute('val')
+      if (val) bgColor = '#' + val
+    }
+
+    let borderColor = null
+    const ln = spPr?.querySelector('ln') || spPr?.getElementsByTagName('a:ln')[0]
+    if (ln) {
+      const lnFill = ln.querySelector('solidFill srgbClr') || ln.getElementsByTagName('a:srgbClr')[0]
+      if (lnFill) {
+        const val = lnFill.getAttribute('val')
+        if (val) borderColor = '#' + val
+      }
+    }
 
     // Paragraphs
     const paragraphs = []
-    txBody.querySelectorAll('p').forEach(p => {
-      const pPr = p.querySelector('pPr')
+    const pList = [
+      ...Array.from(txBody.getElementsByTagName('a:p')),
+      ...Array.from(txBody.querySelectorAll('p'))
+    ]
+    Array.from(new Set(pList)).forEach(p => {
+      const pPr = p.getElementsByTagName('a:pPr')[0] || p.querySelector('pPr')
       const align = pPr?.getAttribute('algn') || 'l'
       const indent = parseInt(pPr?.getAttribute('lvl') || '0')
       const rawRuns = getText(p)
-      if (Array.isArray(rawRuns) && rawRuns.some(r => r.text.trim())) {
+      if (rawRuns.length > 0) {
         paragraphs.push({ runs: rawRuns, align, indent })
-      } else if (typeof rawRuns === 'string' && rawRuns) {
-        paragraphs.push({ runs: [{ text: rawRuns, bold: false, italic: false, sz: 18 }], align, indent })
       }
     })
 
-    shapes.push({ phType, x, y, cx, cy, bgColor, paragraphs })
+    if (paragraphs.length > 0) {
+      shapes.push({ phType, x, y, cx, cy, bgColor, borderColor, paragraphs })
+    }
   })
 
-  return { shapes }
+  // 2. Parse tables (p:graphicFrame -> a:graphic -> a:tbl)
+  const gfList = [
+    ...Array.from(spTree.getElementsByTagName('p:graphicFrame')),
+    ...Array.from(spTree.querySelectorAll('graphicFrame'))
+  ]
+  Array.from(new Set(gfList)).forEach(gf => {
+    const tbl = gf.getElementsByTagName('a:tbl')[0] || gf.querySelector('tbl')
+    if (!tbl) return
+
+    const xfrm = gf.querySelector('xfrm') || gf.getElementsByTagName('p:xfrm')[0] || gf.getElementsByTagName('a:xfrm')[0]
+    const off = xfrm?.querySelector('off') || xfrm?.getElementsByTagName('a:off')[0]
+    const ext = xfrm?.querySelector('ext') || xfrm?.getElementsByTagName('a:ext')[0]
+
+    const rawX = off ? (parseInt(off.getAttribute('x') || '0') / slideW * 100) : 5
+    const rawY = off ? (parseInt(off.getAttribute('y') || '0') / slideH * 100) : 18
+    const rawCx = ext ? (parseInt(ext.getAttribute('cx') || '0') / slideW * 100) : 90
+    const rawCy = ext ? (parseInt(ext.getAttribute('cy') || '0') / slideH * 100) : 65
+
+    const x = Math.max(0, Math.min(96, rawX)).toFixed(2)
+    const y = Math.max(0, Math.min(96, rawY)).toFixed(2)
+    const cx = Math.max(4, Math.min(100 - parseFloat(x), rawCx)).toFixed(2)
+    const cy = Math.max(4, Math.min(100 - parseFloat(y), rawCy)).toFixed(2)
+
+    const rows = []
+    const trList = [
+      ...Array.from(tbl.getElementsByTagName('a:tr')),
+      ...Array.from(tbl.querySelectorAll('tr'))
+    ]
+    Array.from(new Set(trList)).forEach((tr, rIdx) => {
+      const cells = []
+      const tcList = [
+        ...Array.from(tr.getElementsByTagName('a:tc')),
+        ...Array.from(tr.querySelectorAll('tc'))
+      ]
+      Array.from(new Set(tcList)).forEach(tc => {
+        let cellBg = null
+        const tcPr = tc.getElementsByTagName('a:tcPr')[0] || tc.querySelector('tcPr')
+        const solidFill = tcPr?.querySelector('solidFill srgbClr') || tcPr?.getElementsByTagName('a:srgbClr')[0]
+        if (solidFill) {
+          const val = solidFill.getAttribute('val')
+          if (val) cellBg = '#' + val
+        }
+
+        const txBody = tc.getElementsByTagName('a:txBody')[0] || tc.querySelector('txBody')
+        const cellParas = []
+        if (txBody) {
+          const pList = [
+            ...Array.from(txBody.getElementsByTagName('a:p')),
+            ...Array.from(txBody.querySelectorAll('p'))
+          ]
+          Array.from(new Set(pList)).forEach(p => {
+            const pPr = p.getElementsByTagName('a:pPr')[0] || p.querySelector('pPr')
+            const align = pPr?.getAttribute('algn') || 'l'
+            const rawRuns = getText(p)
+            if (rawRuns.length > 0) {
+              cellParas.push({ runs: rawRuns, align })
+            }
+          })
+        }
+        cells.push({ cellBg, paragraphs: cellParas })
+      })
+      if (cells.length > 0) {
+        rows.push({ isHeader: rIdx === 0, cells })
+      }
+    })
+
+    if (rows.length > 0) {
+      tables.push({ x, y, cx, cy, rows })
+    }
+  })
+
+  return { shapes, tables }
 }
 
-/** Render a parsed slide as an HTML string */
-function slideToHtml(slide, bgHex) {
-  const SLIDE_W = 1280, SLIDE_H = 720  // 16:9 pixel canvas
+/** Render a parsed slide as an HTML string with dynamic high-contrast styling */
+function slideToHtml(slide, bgHex, canvasW = 1280, canvasH = 720) {
+  const isSlideBgDark = getPptxLuminance(bgHex || '#1a1a2e') < 0.45
 
   let html = `<div style="
-    position:relative; width:${SLIDE_W}px; height:${SLIDE_H}px;
+    position:relative; width:${canvasW}px; height:${canvasH}px;
     background:${bgHex || '#1a1a2e'};
-    overflow:hidden; font-family:system-ui,Arial,sans-serif;
+    overflow:hidden;
+    font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Segoe UI Emoji', sans-serif;
     box-sizing:border-box;
   ">`
 
-  // Decorative accent bar
+  // Accent bar
   html += `<div style="position:absolute;top:0;left:0;width:100%;height:6px;background:linear-gradient(90deg,#ea580c,#f97316);z-index:10;"></div>`
 
-  for (const shape of slide.shapes) {
+  // 1. Render shapes
+  for (const shape of slide.shapes || []) {
     if (!shape.paragraphs.length) continue
 
-    const isTitle    = shape.phType === 'title' || shape.phType === 'ctrTitle'
+    const isTitle = shape.phType === 'title' || shape.phType === 'ctrTitle'
     const isSubtitle = shape.phType === 'subTitle'
-    const isFtr      = shape.phType === 'ftr' || shape.phType === 'dt' || shape.phType === 'sldNum'
+    const isFtr = shape.phType === 'ftr' || shape.phType === 'dt' || shape.phType === 'sldNum'
 
-    if (isFtr) continue  // skip footers/slide numbers
+    if (isFtr) continue
 
-    const defaultFontSize = isTitle ? 40 : isSubtitle ? 24 : 18
+    // Determine background & contrasting font color
+    let boxBg = shape.bgColor
+    let defaultTextColor
+    if (boxBg && boxBg !== 'transparent') {
+      const lum = getPptxLuminance(boxBg)
+      defaultTextColor = lum > 0.55 ? '#111827' : '#ffffff'
+    } else {
+      boxBg = isTitle ? 'rgba(0,0,0,0.45)' : (isSlideBgDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.85)')
+      defaultTextColor = isSlideBgDark ? '#ffffff' : '#111827'
+    }
+
+    const defaultFontSize = isTitle ? 32 : isSubtitle ? 22 : 14
 
     const shapeHtml = shape.paragraphs.map(p => {
-      const alignMap = { l:'left', c:'center', r:'right', j:'justify' }
+      const alignMap = { l: 'left', c: 'center', r: 'right', j: 'justify' }
       const align = alignMap[p.align] || 'left'
-      const paddingLeft = p.indent * 20
+      const paddingLeft = (p.indent || 0) * 16
 
       const runsHtml = p.runs.map(r => {
         if (!r.text) return ''
-        const fs = Math.max(8, r.sz || defaultFontSize)
-        let s = `font-size:${fs}px;`
+        const fs = Math.max(9, Math.min(52, r.sz || defaultFontSize))
+        const c = r.color || defaultTextColor
+        let s = `font-size:${fs}px;color:${c};`
         if (r.bold || isTitle) s += 'font-weight:700;'
         if (r.italic) s += 'font-style:italic;'
-        return `<span style="${s}">${r.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>`
+        return `<span style="${s}">${escapePptxHtml(r.text)}</span>`
       }).join('')
 
-      return `<p style="margin:0 0 8px;padding-left:${paddingLeft}px;text-align:${align};line-height:1.35;">${runsHtml}</p>`
+      return `<p dir="auto" style="margin:0 0 6px;padding-left:${paddingLeft}px;text-align:${align};line-height:1.35;word-break:break-word;overflow-wrap:break-word;">${runsHtml}</p>`
     }).join('')
 
-    const boxBg   = shape.bgColor  ? shape.bgColor  : isTitle ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)'
-    const color   = '#fff'
-    const padding = isTitle ? '20px 28px' : '14px 20px'
-    const radius  = isTitle ? '10px' : '8px'
+    const padding = isTitle ? '14px 20px' : '12px 16px'
+    const radius = isTitle ? '8px' : '6px'
+    const borderStyle = shape.borderColor
+      ? `border:1px solid ${shape.borderColor};`
+      : isTitle
+        ? 'border-left:4px solid #ea580c;'
+        : (isSlideBgDark && (!shape.bgColor || shape.bgColor === 'transparent') ? 'border:1px solid rgba(255,255,255,0.1);' : '')
 
     html += `<div style="
       position:absolute;
       left:${shape.x}%; top:${shape.y}%;
       width:${shape.cx}%; min-height:${shape.cy}%;
+      max-width:${shape.cx}%;
       background:${boxBg};
-      color:${color};
       padding:${padding};
       border-radius:${radius};
       box-sizing:border-box;
       overflow:hidden;
-      ${isTitle ? 'border-left:4px solid #ea580c;' : ''}
+      ${borderStyle}
     ">${shapeHtml}</div>`
+  }
+
+  // 2. Render tables
+  for (const tbl of slide.tables || []) {
+    let rowsHtml = ''
+    tbl.rows.forEach(row => {
+      let cellsHtml = ''
+      row.cells.forEach(cell => {
+        const cellBg = cell.cellBg || (row.isHeader
+          ? (isSlideBgDark ? '#1e293b' : '#e2e8f0')
+          : (isSlideBgDark ? 'rgba(30,41,59,0.7)' : '#ffffff'))
+        const cellLum = getPptxLuminance(cellBg)
+        const cellDefaultColor = cellLum > 0.55 ? '#111827' : '#ffffff'
+
+        const cellContent = cell.paragraphs.map(p => {
+          const alignMap = { l: 'left', c: 'center', r: 'right', j: 'justify' }
+          const align = alignMap[p.align] || 'left'
+          const runsHtml = p.runs.map(r => {
+            const c = r.color || cellDefaultColor
+            const fs = Math.max(9, Math.min(16, r.sz || 12))
+            let s = `font-size:${fs}px;color:${c};`
+            if (r.bold || row.isHeader) s += 'font-weight:700;'
+            if (r.italic) s += 'font-style:italic;'
+            return `<span style="${s}">${escapePptxHtml(r.text)}</span>`
+          }).join('')
+          return `<div dir="auto" style="text-align:${align};line-height:1.35;word-break:break-word;">${runsHtml}</div>`
+        }).join('')
+
+        const tag = row.isHeader ? 'th' : 'td'
+        cellsHtml += `<${tag} style="
+          padding:10px 14px;
+          background:${cellBg};
+          border:1px solid ${isSlideBgDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'};
+          text-align:left;
+          vertical-align:middle;
+        ">${cellContent}</${tag}>`
+      })
+      rowsHtml += `<tr>${cellsHtml}</tr>`
+    })
+
+    html += `<div style="
+      position:absolute;
+      left:${tbl.x}%; top:${tbl.y}%;
+      width:${tbl.cx}%; max-width:${tbl.cx}%;
+      box-sizing:border-box;
+      overflow:hidden;
+      border-radius:8px;
+      border:1px solid ${isSlideBgDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.15)'};
+      box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);
+    ">
+      <table style="width:100%; border-collapse:collapse; font-size:12px;">
+        ${rowsHtml}
+      </table>
+    </div>`
   }
 
   html += '</div>'
@@ -530,7 +760,7 @@ export async function pptxToPdf(file, onProgress) {
   const [jsPDF, h2c, JSZip] = await Promise.all([loadJsPDF(), loadHtml2Canvas(), loadJSZip()])
 
   const arrayBuf = await toArrayBuffer(file)
-  const zip      = await JSZip.loadAsync(arrayBuf)
+  const zip = await JSZip.loadAsync(arrayBuf)
 
   // Enumerate slides
   const slideFiles = Object.keys(zip.files)
@@ -543,6 +773,25 @@ export async function pptxToPdf(file, onProgress) {
 
   if (!slideFiles.length) throw new Error('No slides found in PPTX file.')
 
+  // Extract presentation dimensions from ppt/presentation.xml if available
+  let slideW = 9144000, slideH = 5143500 // default 16:9
+  try {
+    const presXml = await zip.files['ppt/presentation.xml']?.async('string')
+    if (presXml) {
+      const parser = new DOMParser()
+      const presDoc = parser.parseFromString(presXml, 'text/xml')
+      const sldSz = presDoc.getElementsByTagName('p:sldSz')[0] || presDoc.querySelector('sldSz')
+      if (sldSz) {
+        const cx = parseInt(sldSz.getAttribute('cx') || '0')
+        const cy = parseInt(sldSz.getAttribute('cy') || '0')
+        if (cx > 0 && cy > 0) {
+          slideW = cx
+          slideH = cy
+        }
+      }
+    }
+  } catch (_) {}
+
   // Try to get a global background color from theme
   let globalBg = '#1a1a2e'
   try {
@@ -553,8 +802,14 @@ export async function pptxToPdf(file, onProgress) {
     }
   } catch (_) {}
 
-  const SLIDE_W = 1280, SLIDE_H = 720
-  const jspdf = new jsPDF({ unit: 'mm', format: [SLIDE_W * 0.2646, SLIDE_H * 0.2646], orientation: 'landscape' })
+  const aspect = slideW / slideH
+  const SLIDE_W = 1280
+  const SLIDE_H = Math.round(1280 / aspect)
+  const pageW_mm = SLIDE_W * 0.2646
+  const pageH_mm = SLIDE_H * 0.2646
+  const orientation = aspect >= 1 ? 'landscape' : 'portrait'
+
+  const jspdf = new jsPDF({ unit: 'mm', format: [pageW_mm, pageH_mm], orientation })
 
   // Offscreen container
   const host = document.createElement('div')
@@ -564,22 +819,15 @@ export async function pptxToPdf(file, onProgress) {
   for (let i = 0; i < slideFiles.length; i++) {
     await tick()
     const xmlText = await zip.files[slideFiles[i]].async('string')
-    const slide   = parsePptxSlideXml(xmlText)
+    const slide = parsePptxSlideXml(xmlText, slideW, slideH)
 
-    // Get slide-level background if any
+    // Slide-level background
     let slideBg = globalBg
-    try {
-      const relFile = slideFiles[i].replace('slides/slide', 'slides/_rels/slide').replace('.xml', '.xml.rels')
-      const rels = await zip.files[relFile]?.async('string')
-      if (rels) {
-        // Could parse slide layout for background — simplified: keep globalBg
-      }
-    } catch (_) {}
 
-    host.innerHTML = slideToHtml(slide, slideBg)
+    host.innerHTML = slideToHtml(slide, slideBg, SLIDE_W, SLIDE_H)
 
     const canvas = await h2c(host, {
-      scale: 1,
+      scale: 1.5,
       width: SLIDE_W,
       height: SLIDE_H,
       backgroundColor: slideBg,
@@ -588,10 +836,10 @@ export async function pptxToPdf(file, onProgress) {
       logging: false,
     })
 
-    if (i > 0) jspdf.addPage([SLIDE_W * 0.2646, SLIDE_H * 0.2646], 'landscape')
+    if (i > 0) jspdf.addPage([pageW_mm, pageH_mm], orientation)
 
     const imgData = canvas.toDataURL('image/jpeg', 0.92)
-    jspdf.addImage(imgData, 'JPEG', 0, 0, SLIDE_W * 0.2646, SLIDE_H * 0.2646, undefined, 'FAST')
+    jspdf.addImage(imgData, 'JPEG', 0, 0, pageW_mm, pageH_mm, undefined, 'FAST')
 
     canvas.width = 0; canvas.height = 0
     onProgress?.({ done: i + 1, total: slideFiles.length })
@@ -600,6 +848,7 @@ export async function pptxToPdf(file, onProgress) {
   document.body.removeChild(host)
   return { data: jspdf.output('blob') }
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  3.  XLSX → PDF
