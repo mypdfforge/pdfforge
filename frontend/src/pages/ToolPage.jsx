@@ -9,8 +9,12 @@ import * as api from '../utils/api'
 import { getThumbnailsProgressive, getFullResPage } from '../utils/thumbCache'
 import { clientExtract, clientDuplicatePage, clientDeletePages, clientRepair, clientRedact, clientFindReplace } from '../utils/pdfClient'
 import { clientProtect, clientUnlock } from '../utils/protectClient'
-import { clientPdfToImages, clientPdfToJpg } from '../utils/pdfToImageClient'
-import { pdfToWord, pdfToExcel, pdfToPptx, wordToPdf, pptxToPdf, xlsxToPdf, htmlToPdf, pdfToPdfa } from '../utils/convertClient'
+import { clientPdfToImages, clientPdfToJpg, clientBatchPdfToImages, clientBatchPdfToJpg } from '../utils/pdfToImageClient'
+import {
+  pdfToWord, pdfToExcel, pdfToPptx, wordToPdf, pptxToPdf, xlsxToPdf, htmlToPdf, pdfToPdfa,
+  batchWordToPdf, batchPptxToPdf, batchXlsxToPdf, batchHtmlToPdf,
+  batchPdfToWord, batchPdfToPptx, batchPdfToExcel, batchPdfToPdfa,
+} from '../utils/convertClient'
 import axios from 'axios'
 import { clientImagesToPdf, applyPageModifications, clientOrganize, pageSelected } from '../utils/editClient'
 
@@ -23,17 +27,17 @@ const CONFIGS = {
   duplicate:    { title:'Duplicate Page',    desc:'Duplicate a page.',                     guide:'Enter the page number to duplicate.', fields:[{id:'page',label:'Page number',placeholder:'1',default:'1'}], action:(f,v)=>clientDuplicatePage(f[0],v.page||'1'), out:'duplicated.pdf', clientSide:true },
   compress:     { title:'Compress PDF',      desc:'Reduce file size.',                     guide:'Renders every page as compressed JPEG — works on any PDF including image-heavy ones.', fields:[], action:(f, v, onP) => api.compressPDF(f[0], onP), out:'compressed.pdf', noPreview:true, clientSide:true },
   repair:       { title:'Repair PDF',        desc:'Fix corrupted PDF files.',              guide:'Upload your damaged PDF.', fields:[], action:(f)=>clientRepair(f[0]), out:'repaired.pdf', noPreview:true, clientSide:true },
-  images:       { title:'PDF to Images',     desc:'Convert each page to PNG (ZIP).',       guide:'Each page becomes a PNG.', fields:[], action:(f,v,onP)=>clientPdfToImages(f[0],onP), out:'pdf_images.zip', mime:'application/zip', noPreview:true, clientSide:true },
+  images:       { title:'PDF to Images',     desc:'Convert each page to PNG (ZIP).',       guide:'Each page becomes a PNG. Upload multiple PDFs to batch-convert all their pages into one ZIP.', multi:true, fields:[], action:(f,v,onP)=>clientBatchPdfToImages(f,onP), out:(f)=>'pdf_images.zip', mime:'application/zip', noPreview:true, clientSide:true },
   'image-to-pdf':{ title:'Images to PDF',   desc:'Convert images to a PDF.',              guide:'Upload images in order.', multi:true, accept:{'image/jpeg':['.jpg','.jpeg'],'image/png':['.png'],'image/webp':['.webp'],'image/gif':['.gif'],'image/bmp':['.bmp']}, fields:[], action:(f,v,onP)=>clientImagesToPdf(f,onP), out:'from_images.pdf', mime:'application/pdf', noPreview:true, clientSide:true },
-  'pdf-to-word':{ title:'PDF to Word',       desc:'Convert to .docx (text only).',          guide:'Text only, one paragraph per line. No images or styling.', fields:[], action:(f)=>pdfToWord(f[0]), out:'converted.docx', mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document', noPreview:true, clientSide:true },
-  'word-to-pdf':{ title:'Word to PDF',       desc:'Convert .docx to PDF.',                 guide:'Preserves headings, bold, tables, lists, and images. 100% on-device.', accept:{'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['.docx']}, fields:[], action:(f,v,onP)=>wordToPdf(f[0],onP), out:'converted.pdf', noPreview:true, clientSide:true },
-  'pptx-to-pdf':{ title:'PowerPoint to PDF', desc:'Convert .pptx to PDF.',                guide:'Each slide becomes a landscape page. Titles, text, and backgrounds preserved. 100% on-device.', accept:{'application/vnd.openxmlformats-officedocument.presentationml.presentation':['.pptx']}, fields:[], action:(f,v,onP)=>pptxToPdf(f[0],onP), out:'converted.pdf', noPreview:true, clientSide:true },
-  'xlsx-to-pdf':{ title:'Excel to PDF',      desc:'Convert .xlsx to PDF.',                 guide:'Auto-fit columns, zebra rows, right-aligned numbers. Multi-sheet support. 100% on-device.', accept:{'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx']}, fields:[], action:(f,v,onP)=>xlsxToPdf(f[0],onP), out:'converted.pdf', noPreview:true, clientSide:true },
-  'html-to-pdf':{ title:'HTML to PDF',       desc:'Convert HTML file to PDF.',             guide:'Renders full CSS3, Flexbox, Grid. Sliced into A4 pages. Sandboxed iframe, zero network. 100% on-device.', accept:{'text/html':['.html','.htm']}, fields:[], action:(f,v,onP)=>htmlToPdf(f[0],onP), out:'converted.pdf', noPreview:true, clientSide:true },
-  'pdf-to-jpg': { title:'PDF to JPG',        desc:'Convert pages to JPG (ZIP).',           guide:'Each page becomes a JPG.', fields:[], action:(f,v,onP)=>clientPdfToJpg(f[0],onP), out:'pdf_images_jpg.zip', mime:'application/zip', noPreview:true, clientSide:true },
-  'pdf-to-pptx':{ title:'PDF to PowerPoint', desc:'Convert pages to image slides.',         guide:'Each page becomes a slide image (not editable).', fields:[], action:(f)=>pdfToPptx(f[0]), out:'converted.pptx', mime:'application/vnd.openxmlformats-officedocument.presentationml.presentation', noPreview:true, clientSide:true },
-  'pdf-to-xlsx':{ title:'PDF to Excel',      desc:'Extract content to spreadsheet.',       guide:'Preserves column alignment, table grid, numbers, borders, fills, and headers. 100% on-device.', fields:[{ id:'singleSheet', label:'Combine all pages into a single sheet', type:'checkbox', default:false }], action:(f,v,onP)=>pdfToExcel(f[0],onP,{ singleSheet: !!v.singleSheet }), out:'converted.xlsx', mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', noPreview:true, clientSide:true },
-  'pdf-to-pdfa':{ title:'PDF to PDF/A',      desc:'Archive-compliant PDF/A-1b.',            guide:'Injects XMP metadata (pdfaid:part + pdfaid:conformance), sRGB OutputIntent, strips JS/launch actions. 100% on-device.', fields:[], action:(f,v,onP)=>pdfToPdfa(f[0],onP), out:'converted_pdfa.pdf', noPreview:true, clientSide:true },
+  'pdf-to-word':{ title:'PDF to Word',       desc:'Convert to .docx (text only).',          guide:'Text only, one paragraph per line. No images or styling. Upload multiple PDFs to convert in batch.', multi:true, fields:[], action:(f,v,onP)=>batchPdfToWord(f,onP), out:(f)=>f.length>1?'pdf_to_word.zip':'converted.docx', mime:(f)=>f.length>1?'application/zip':'application/vnd.openxmlformats-officedocument.wordprocessingml.document', noPreview:true, clientSide:true },
+  'word-to-pdf':{ title:'Word to PDF',       desc:'Convert .docx to PDF.',                 guide:'Preserves headings, bold, tables, lists, and images. 100% on-device. Upload multiple .docx files to batch-convert.', multi:true, accept:{'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['.docx'],'application/msword':['.doc']}, fields:[], action:(f,v,onP)=>batchWordToPdf(f,onP), out:(f)=>f.length>1?'word_to_pdf.zip':'converted.pdf', noPreview:true, clientSide:true },
+  'pptx-to-pdf':{ title:'PowerPoint to PDF', desc:'Convert .pptx to PDF.',                guide:'Each slide becomes a landscape page. Titles, text, and backgrounds preserved. 100% on-device. Upload multiple .pptx files to batch-convert.', multi:true, accept:{'application/vnd.openxmlformats-officedocument.presentationml.presentation':['.pptx'],'application/vnd.ms-powerpoint':['.ppt']}, fields:[], action:(f,v,onP)=>batchPptxToPdf(f,onP), out:(f)=>f.length>1?'pptx_to_pdf.zip':'converted.pdf', noPreview:true, clientSide:true },
+  'xlsx-to-pdf':{ title:'Excel to PDF',      desc:'Convert .xlsx to PDF.',                 guide:'Auto-fit columns, zebra rows, right-aligned numbers. Multi-sheet support. 100% on-device. Upload multiple spreadsheets to batch-convert.', multi:true, accept:{'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx'],'application/vnd.ms-excel':['.xls'],'text/csv':['.csv']}, fields:[], action:(f,v,onP)=>batchXlsxToPdf(f,onP), out:(f)=>f.length>1?'excel_to_pdf.zip':'converted.pdf', noPreview:true, clientSide:true },
+  'html-to-pdf':{ title:'HTML to PDF',       desc:'Convert HTML file to PDF.',             guide:'Renders full CSS3, Flexbox, Grid. Sliced into A4 pages. Sandboxed iframe, zero network. 100% on-device. Upload multiple HTML files to batch-convert.', multi:true, accept:{'text/html':['.html','.htm']}, fields:[], action:(f,v,onP)=>batchHtmlToPdf(f,onP), out:(f)=>f.length>1?'html_to_pdf.zip':'converted.pdf', noPreview:true, clientSide:true },
+  'pdf-to-jpg': { title:'PDF to JPG',        desc:'Convert pages to JPG (ZIP).',           guide:'Each page becomes a JPG. Upload multiple PDFs to batch-convert all their pages into one ZIP.', multi:true, fields:[], action:(f,v,onP)=>clientBatchPdfToJpg(f,onP), out:(f)=>'pdf_images_jpg.zip', mime:'application/zip', noPreview:true, clientSide:true },
+  'pdf-to-pptx':{ title:'PDF to PowerPoint', desc:'Convert pages to image slides.',         guide:'Each page becomes a slide image (not editable). Upload multiple PDFs to batch-convert.', multi:true, fields:[], action:(f,v,onP)=>batchPdfToPptx(f,onP), out:(f)=>f.length>1?'pdf_to_pptx.zip':'converted.pptx', mime:(f)=>f.length>1?'application/zip':'application/vnd.openxmlformats-officedocument.presentationml.presentation', noPreview:true, clientSide:true },
+  'pdf-to-xlsx':{ title:'PDF to Excel',      desc:'Extract content to spreadsheet.',       guide:'Preserves column alignment, table grid, numbers, borders, fills, and headers. 100% on-device. Upload multiple PDFs to batch-convert.', multi:true, fields:[{ id:'singleSheet', label:'Combine all pages into a single sheet', type:'checkbox', default:false }], action:(f,v,onP)=>batchPdfToExcel(f,onP,{ singleSheet: !!v.singleSheet }), out:(f)=>f.length>1?'pdf_to_excel.zip':'converted.xlsx', mime:(f)=>f.length>1?'application/zip':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', noPreview:true, clientSide:true },
+  'pdf-to-pdfa':{ title:'PDF to PDF/A',      desc:'Archive-compliant PDF/A-1b.',            guide:'Injects XMP metadata (pdfaid:part + pdfaid:conformance), sRGB OutputIntent, strips JS/launch actions. 100% on-device. Upload multiple PDFs to batch-convert.', multi:true, fields:[], action:(f,v,onP)=>batchPdfToPdfa(f,onP), out:(f)=>f.length>1?'pdf_to_pdfa.zip':'converted_pdfa.pdf', noPreview:true, clientSide:true },
   pagenums:     { title:'Add Page Numbers',  desc:'Add page numbers to every page.',       guide:'Choose position.', fields:[{id:'position',label:'Position',type:'select',options:['bottom-center','bottom-right','top-center','top-right'],default:'bottom-center'}], action:(f,v)=>api.pageNumbersPDF(f[0],v.position||'bottom-center'), out:'numbered.pdf' },
   crop:         { title:'Crop PDF',          desc:'Trim margins from all pages.',          guide:'Enter margin amounts in points (1pt ≈ 0.35mm).', fields:[{id:'left',label:'Left',placeholder:'0',default:'0'},{id:'top',label:'Top',placeholder:'0',default:'0'},{id:'right',label:'Right',placeholder:'0',default:'0'},{id:'bottom',label:'Bottom',placeholder:'0',default:'0'}], action:(f,v)=>{ const form=new FormData(); form.append('file',f[0]); Object.entries(v).forEach(([k,val])=>form.append(k,val||'0')); return api._post('/tools/crop',form) }, out:'cropped.pdf' },
   protect:      { title:'Protect PDF',       desc:'Lock with a password.',                 guide:'Enter a strong password — cannot be recovered.', fields:[{id:'password',label:'Password',placeholder:'Enter password',type:'password',tip:'Keep this safe'}], action:(f,v)=>clientProtect(f[0],v.password||''), out:'protected.pdf', mime:'application/pdf', noPreview:true, clientSide:true },
@@ -440,14 +444,19 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
     setStatus('loading'); setErrMsg(''); setProgress(null); setDownloadResult(null)
     try {
 
+      // Helper: resolve `out` / `mime` — may be a function (f) => string or a plain string
+      const resolveOut  = (val) => typeof val === 'function' ? val(files) : val
+      const outFilename = resolveOut(cfg.out)
+      const outMime     = resolveOut(cfg.mime) || 'application/pdf'
+
       if (cfg.clientSide) {
-        // ── Client-side tools (compress, repair, merge, split…) ──
-        const originalSize = files[0]?.size || 0
+        // ── Client-side tools (compress, repair, merge, split, convert…) ──
+        const originalSize = files.reduce((s, f) => s + (f?.size || 0), 0)
         const onP = (p) => {
           if (typeof p === 'object' && p.stage === 'compressing') {
             setProgress({ current: p.done, total: p.total, label: `Compressing page ${p.done} of ${p.total}…` })
           } else if (typeof p === 'object' && p.total) {
-            setProgress({ current: p.done, total: p.total })
+            setProgress({ current: p.done ?? p.current, total: p.total, label: p.label })
           } else if (typeof p === 'number') {
             setProgress({ current: p, total: 100 })
           }
@@ -488,8 +497,8 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
           // duplicate: card edits are the result (its form page defaults to 1, so it is ignored here).
           // delete: card edits are the result unless the form still names pages that survive.
           if (toolId === 'duplicate' || (toolId === 'delete' && !mapped.length)) {
-            api.downloadBlob(modified.data, cfg.out)
-            setDownloadResult({ blob: modified.data, name: cfg.out, originalSize })
+            api.downloadBlob(modified.data, outFilename)
+            setDownloadResult({ blob: modified.data, name: outFilename, originalSize })
             setProgress(null); setStatus('done')
             return
           }
@@ -499,30 +508,34 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
           const res = await cfg.action([modifiedFile, ...files.slice(1)], raw ? { ...vals, pages: mapped.join(',') } : vals, onP)
           const blob = res?.data
           if (blob && blob instanceof Blob) {
-            api.downloadBlob(blob, cfg.out)
-            setDownloadResult({ blob, name: cfg.out, originalSize })
+            api.downloadBlob(blob, outFilename)
+            setDownloadResult({ blob, name: outFilename, originalSize })
           }
           setProgress(null); setStatus('done')
           return
         }
 
         const res = await cfg.action(files, vals, onP)
-        // res = { data: blob } from pdfClient functions
-        const blob = res?.data
+        // res = { data: blob, errors?: string[] } from converters
+        const blob   = res?.data
+        const errors = res?.errors   // partial-failure list from batch converters
         if (blob && blob instanceof Blob) {
           // trigger download
           const url = URL.createObjectURL(blob)
           const a   = document.createElement('a')
-          a.href = url; a.download = cfg.out
+          a.href = url; a.download = outFilename
           document.body.appendChild(a); a.click()
           document.body.removeChild(a)
           setTimeout(() => URL.revokeObjectURL(url), 1000)
-          // show result panel
-          setDownloadResult({ blob, name: cfg.out, originalSize })
+          // show result panel; surface partial failures as a non-fatal warning
+          if (errors?.length) {
+            setErrMsg(`${errors.length} file(s) failed: ${errors.join('; ')}`)
+          }
+          setDownloadResult({ blob, name: outFilename, originalSize, fileCount: files.length, errorCount: errors?.length || 0 })
         }
 
       } else {
-        // ── Server-side tools (pdf-to-word, xlsx-to-pdf, compress etc.) ──
+        // ── Server-side tools (OCR, translate etc.) ──
         const originalSize = files[0]?.size || 0
         const onProgress = (p) => {
           if (typeof p === 'object' && p.stage) {
@@ -533,16 +546,16 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
           }
         }
         const res = await cfg.action(files, vals, onProgress)
-        const blob = new Blob([res.data], { type: cfg.mime || 'application/pdf' })
+        const blob = new Blob([res.data], { type: outMime })
         // trigger download
         const url = URL.createObjectURL(blob)
         const a   = document.createElement('a')
-        a.href = url; a.download = cfg.out
+        a.href = url; a.download = outFilename
         document.body.appendChild(a); a.click()
         document.body.removeChild(a)
         setTimeout(() => URL.revokeObjectURL(url), 1000)
         // show result panel
-        setDownloadResult({ blob, name: cfg.out, originalSize })
+        setDownloadResult({ blob, name: outFilename, originalSize, fileCount: files.length, errorCount: 0 })
       }
 
       setProgress(null)
@@ -557,11 +570,15 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
 
   // ── Inline success panel shown after download ─────────────────
   if (downloadResult) {
-    const outSize  = downloadResult.blob?.size || 0
-    const origSize = downloadResult.originalSize || 0
-    const saved    = origSize > 0 && outSize < origSize
+    const outSize   = downloadResult.blob?.size || 0
+    const origSize  = downloadResult.originalSize || 0
+    const fileCount = downloadResult.fileCount || 1
+    const errCount  = downloadResult.errorCount || 0
+    const saved     = origSize > 0 && outSize < origSize
       ? Math.round((1 - outSize / origSize) * 100) : null
     const fmt = (b) => b < 1024*1024 ? `${(b/1024).toFixed(1)} KB` : `${(b/1024/1024).toFixed(2)} MB`
+    const isBatch = fileCount > 1
+    const successCount = fileCount - errCount
     return (
       <div style={{ minHeight:'100vh', background:'var(--bg)', display:'flex', flexDirection:'column' }}>
         <TopBar onBack={onBack} title={cfg.title} subtitle={cfg.desc} dark={dark} onToggleTheme={onToggleTheme} onGoHome={onGoHome}
@@ -572,12 +589,19 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
             <div style={{ width:'64px', height:'64px', borderRadius:'50%', background:'rgba(21,128,61,0.12)', border:'2px solid var(--green)', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 20px' }}>
               <CheckCircle size={28} color="var(--green)"/>
             </div>
-            <h2 style={{ fontSize:'20px', fontWeight:700, color:'var(--text)', marginBottom:'8px' }}>Done! File downloaded.</h2>
-            <p style={{ fontSize:'13px', color:'var(--text3)', marginBottom:'24px' }}>{downloadResult.name}</p>
+            <h2 style={{ fontSize:'20px', fontWeight:700, color:'var(--text)', marginBottom:'8px' }}>
+              {isBatch ? `Done! ${successCount} of ${fileCount} file${fileCount!==1?'s':''} converted.` : 'Done! File downloaded.'}
+            </h2>
+            <p style={{ fontSize:'13px', color:'var(--text3)', marginBottom: errCount ? '10px' : '24px' }}>{downloadResult.name}</p>
+            {errCount > 0 && (
+              <div style={{ background:'rgba(229,72,77,0.08)', border:'1px solid rgba(229,72,77,0.25)', borderRadius:'8px', padding:'9px 13px', fontSize:'12px', color:'var(--red)', marginBottom:'20px', textAlign:'left' }}>
+                <strong>{errCount} file{errCount!==1?'s':''} failed:</strong> {errMsg}
+              </div>
+            )}
             {origSize > 0 && (
               <div style={{ display:'flex', justifyContent:'center', gap:'32px', marginBottom:'24px' }}>
                 <div>
-                  <div style={{ fontSize:'11px', color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'4px' }}>Original</div>
+                  <div style={{ fontSize:'11px', color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:'4px' }}>{isBatch ? 'Input total' : 'Original'}</div>
                   <div style={{ fontSize:'16px', fontWeight:600, color:'var(--text)' }}>{fmt(origSize)}</div>
                 </div>
                 {outSize > 0 && outSize !== origSize && (
@@ -608,7 +632,7 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                 <Download size={14}/> Download Again
               </button>
               <button
-                onClick={() => { setDownloadResult(null); setStatus('idle'); setFiles([]) }}
+                onClick={() => { setDownloadResult(null); setStatus('idle'); setFiles([]); setErrMsg('') }}
                 style={{ fontSize:'13px', color:'var(--text3)', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'9px', padding:'10px 20px', cursor:'pointer' }}>
                 Convert Another
               </button>
@@ -632,7 +656,7 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
       {isDragActive
         ? <p style={{ color:'var(--accent2)', fontWeight:600, fontSize:'13px' }}>Drop it!</p>
         : <><p style={{ color:'var(--text)', fontWeight:500, fontSize:'13px' }}>Drop {cfg.multi?'files':'file'} or <span style={{ color:'var(--accent2)' }}>browse</span></p>
-           <p style={{ color:'var(--text3)', fontSize:'11px', marginTop:'3px' }}>{cfg.multi?'Multiple PDFs':'PDF only'}</p></>}
+           <p style={{ color:'var(--text3)', fontSize:'11px', marginTop:'3px' }}>{cfg.multi?'Multiple files supported':'PDF only'}</p></>}
     </div>
   )
 
@@ -706,9 +730,9 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
       {progress && (
         <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'8px', padding:'12px' }}>
           <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-            <span style={{ fontSize:'12px', color:'var(--text2)', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
+            <span style={{ fontSize:'12px', color:'var(--text2)', fontWeight:600, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', paddingRight:'6px' }}>{progress.label || 'Processing…'}</span>
             {progress.stage !== 'processing' && (
-              <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700 }}>{Math.round((progress.current/progress.total)*100) || 0}%</span>
+              <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700, flexShrink:0 }}>{Math.round((progress.current/progress.total)*100) || 0}%</span>
             )}
           </div>
           <div style={{ height:'5px', background:'var(--bg3)', borderRadius:'3px', overflow:'hidden' }}>
@@ -725,7 +749,7 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
           display:'flex', alignItems:'center', justifyContent:'center', gap:'7px',
           background:status==='done'?'var(--green)':status==='loading'?'var(--bg3)':'var(--accent)',
           color:status==='loading'?'var(--text2)':'#fff', boxShadow:files.length?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
-        {status==='loading'?<><Loader2 size={13} className="spin"/>Processing…</>:status==='done'?<><CheckCircle size={13}/>Downloaded!</>:<><Download size={13}/>{cfg.title}</>}
+        {status==='loading'?<><Loader2 size={13} className="spin"/>Processing…</>:status==='done'?<><CheckCircle size={13}/>Downloaded!</>:<><Download size={13}/>{cfg.multi && files.length > 1 ? `Convert ${files.length} files` : cfg.title}</>}
       </button>
     </div>
   )
@@ -832,8 +856,8 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
           {progress && (
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'8px', padding:'12px' }}>
               <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-                <span style={{ fontSize:'12px', color:'var(--text2)', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
-                <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700 }}>{progress.current}/{progress.total}</span>
+                <span style={{ fontSize:'12px', color:'var(--text2)', fontWeight:600, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', paddingRight:'8px' }}>{progress.label || 'Processing…'}</span>
+                <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700, flexShrink:0 }}>{progress.total > 1 ? `${progress.current}/${progress.total}` : `${Math.round((progress.current/progress.total)*100)||0}%`}</span>
               </div>
               <div style={{ height:'5px', background:'var(--bg3)', borderRadius:'3px', overflow:'hidden' }}>
                 <div style={{ height:'100%', width:`${progress.total ? Math.round((progress.current/progress.total)*100) : 100}%`, background:'var(--accent)', borderRadius:'3px', transition:'width 0.3s ease'}}/>
@@ -846,7 +870,7 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
               display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
               background:status==='done'?'var(--green)':'var(--accent)', color:'#fff',
               boxShadow:files.length?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
-            {status==='loading'?<><Loader2 size={14} className="spin"/>Processing…</>:status==='done'?<><CheckCircle size={14}/>Downloaded!</>:<><Upload size={14}/>{cfg.title}</>}
+            {status==='loading'?<><Loader2 size={14} className="spin"/>Processing…</>:status==='done'?<><CheckCircle size={14}/>Downloaded!</>:<><Upload size={14}/>{cfg.multi && files.length > 1 ? `Convert ${files.length} files` : cfg.title}</>}
           </button>
         </div>
       )}

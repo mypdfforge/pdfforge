@@ -16,14 +16,16 @@
 import PptxGenJS from 'pptxgenjs'
 import { Document, Packer, Paragraph, TextRun } from 'docx'
 import * as XLSX from 'xlsx'
+import { renderDocxToPages } from './docxOoxmlRenderer.js'
 
 // ─── Lazy-loaded heavy libraries (code-split, loaded only when tool runs) ────
 const loadJsPDF      = () => import('jspdf').then(m => m.jsPDF)
-const loadAutoTable  = () => import('jspdf-autotable')
+const loadAutoTable  = () => import('jspdf-autotable').then(m => m.default || m.autoTable || m)
 const loadHtml2Canvas= () => import('html2canvas').then(m => m.default)
 const loadMammoth    = () => import('mammoth').then(m => m.default ?? m)
 const loadJSZip      = () => import('jszip').then(m => m.default ?? m)
 const loadPdfLib     = () => import('@cantoo/pdf-lib').then(m => m)
+const loadDocxPreview = () => import('docx-preview').then(m => m.renderAsync ? m : (m.default || m))
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -83,7 +85,8 @@ export async function pdfToWord(file) {
   return { data: await Packer.toBlob(new Document({ sections })) }
 }
 
-export { pdfToExcel, setPdfjs } from './pdfToExcel.js'
+import { pdfToExcel, setPdfjs } from './pdfToExcel.js'
+export { pdfToExcel, setPdfjs }
 
 export async function pdfToPptx(file, scale = 2) {
   const pdf = await load(file), pptx = new PptxGenJS()
@@ -104,17 +107,198 @@ export async function pdfToPptx(file, scale = 2) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  1.  WORD → PDF
-//      Strategy: mammoth extracts .docx → semantic HTML → render in hidden div
-//      → html2canvas slice per A4 page → jsPDF.
+//      High-fidelity renderer: Direct OOXML parsing preserves exact Word
+//      page geometry, margins, heading bars, tables, typography, and page breaks.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function wordToPdf(file, onProgress) {
-  const [jsPDF, h2c, mammoth] = await Promise.all([loadJsPDF(), loadHtml2Canvas(), loadMammoth()])
-
+  const [jsPDF, h2c, JSZip] = await Promise.all([loadJsPDF(), loadHtml2Canvas(), loadJSZip()])
   const arrayBuf = await toArrayBuffer(file)
 
-  // Convert DOCX → HTML (mammoth preserves headings, bold, italic, tables, lists)
-  const { value: html, messages } = await mammoth.convertToHtml(
+  // ── Primary Engine: High-Fidelity Direct OOXML Renderer ──
+  try {
+    const { pages, pageWidthPt, pageHeightPt, cleanup } = await renderDocxToPages(arrayBuf, JSZip)
+
+    if (pages && pages.length > 0) {
+      await tick()
+      await new Promise(r => setTimeout(r, 120))
+      if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+        await document.fonts.ready
+      }
+
+      // 1 pt = 25.4 / 72 mm = 0.352778 mm
+      const PT_TO_MM = 25.4 / 72.0
+      const widthMm = pageWidthPt * PT_TO_MM
+      const heightMm = pageHeightPt * PT_TO_MM
+      const orientation = widthMm > heightMm ? 'landscape' : 'portrait'
+
+      const jspdf = new jsPDF({ unit: 'mm', format: [widthMm, heightMm], orientation })
+
+      for (let i = 0; i < pages.length; i++) {
+        await tick()
+        const pageEl = pages[i]
+
+        const canvas = await h2c(pageEl, {
+          scale: 2, // 2x sharp rendering
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          allowTaint: true,
+          logging: false,
+        })
+
+        if (i > 0) {
+          jspdf.addPage([widthMm, heightMm], orientation)
+        }
+
+        const imgData = canvas.toDataURL('image/jpeg', 0.96)
+        jspdf.addImage(imgData, 'JPEG', 0, 0, widthMm, heightMm, undefined, 'FAST')
+
+        canvas.width = 0
+        canvas.height = 0
+        onProgress?.({ done: i + 1, total: pages.length })
+      }
+
+      cleanup()
+      return { data: jspdf.output('blob') }
+    }
+  } catch (err) {
+    console.warn('Direct OOXML renderer encountered an issue, trying docx-preview fallback:', err)
+  }
+
+  // ── Secondary Engine: docx-preview ──
+  try {
+    const docxPreview = await loadDocxPreview()
+    const renderAsync = docxPreview.renderAsync || docxPreview.default?.renderAsync
+
+    if (renderAsync) {
+      const host = document.createElement('div')
+      host.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: -99999px;
+        width: 1200px;
+        background: #ffffff;
+        opacity: 0;
+        pointer-events: none;
+        z-index: -9999;
+      `
+
+      // Clean default wrapper styles: remove gray background, shadows, and margins
+      const docxStyle = document.createElement('style')
+      docxStyle.textContent = `
+        .docx-wrapper {
+          background: transparent !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          display: block !important;
+        }
+        .docx-wrapper > section.docx {
+          box-shadow: none !important;
+          margin: 0 auto !important;
+          margin-bottom: 0 !important;
+          background: #ffffff !important;
+        }
+        .docx {
+          color: #111111;
+        }
+        .docx table {
+          border-collapse: collapse;
+        }
+      `
+      host.appendChild(docxStyle)
+      document.body.appendChild(host)
+
+      const docContainer = document.createElement('div')
+      host.appendChild(docContainer)
+
+      await renderAsync(arrayBuf, docContainer, host, {
+        inWrapper: true,
+        ignoreWidth: false,
+        ignoreHeight: false,
+        ignoreFonts: false,
+        breakPages: true,
+        experimental: false,
+        renderHeaders: true,
+        renderFooters: true,
+        useBase64URL: true,
+      })
+
+      await tick()
+      await new Promise(r => setTimeout(r, 120))
+      if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready
+      }
+
+      const pages = Array.from(host.querySelectorAll('section.docx'))
+
+      if (pages.length > 0) {
+        const jspdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
+        let pageIndex = 0
+        const totalEstimated = pages.length
+
+        for (let i = 0; i < pages.length; i++) {
+          await tick()
+          const pageEl = pages[i]
+
+          const pageW = pageEl.offsetWidth || 794
+          const pageH = pageEl.offsetHeight || 1123
+          const scrollH = Math.max(pageEl.scrollHeight, pageH)
+
+          const isLandscape = pageW > pageH
+          const baseW_mm = isLandscape ? 297 : 210
+          const baseH_mm = isLandscape ? 210 : 297
+          const orientation = isLandscape ? 'landscape' : 'portrait'
+
+          // Slice tall continuous sections if they exceed physical page height
+          const sliceHeightPx = pageH > 100 ? pageH : Math.round(pageW * (baseH_mm / baseW_mm))
+          const numSlices = scrollH > sliceHeightPx * 1.15 ? Math.ceil(scrollH / sliceHeightPx) : 1
+
+          for (let s = 0; s < numSlices; s++) {
+            await tick()
+            const yOffset = s * sliceHeightPx
+            const currSliceH = Math.min(sliceHeightPx, scrollH - yOffset)
+
+            const canvas = await h2c(pageEl, {
+              scale: 2, // 2x for high resolution text and borders
+              x: 0,
+              y: yOffset,
+              width: pageW,
+              height: currSliceH,
+              windowWidth: pageW,
+              backgroundColor: '#ffffff',
+              useCORS: true,
+              allowTaint: true,
+              logging: false,
+            })
+
+            if (pageIndex > 0) {
+              jspdf.addPage([baseW_mm, baseH_mm], orientation)
+            }
+
+            const imgData = canvas.toDataURL('image/jpeg', 0.95)
+            const sliceHeightMm = (currSliceH / pageW) * baseW_mm
+            jspdf.addImage(imgData, 'JPEG', 0, 0, baseW_mm, Math.min(baseH_mm, sliceHeightMm), undefined, 'FAST')
+
+            canvas.width = 0
+            canvas.height = 0
+            pageIndex++
+            onProgress?.({ done: pageIndex, total: Math.max(totalEstimated, pageIndex) })
+          }
+        }
+
+        document.body.removeChild(host)
+        return { data: jspdf.output('blob') }
+      }
+
+      document.body.removeChild(host)
+    }
+  } catch (err) {
+    console.warn('docx-preview engine encountered an issue, falling back to enhanced mammoth renderer:', err)
+  }
+
+  // ── Fallback Engine: Enhanced Mammoth Renderer ──
+  const mammoth = await loadMammoth()
+  const { value: html } = await mammoth.convertToHtml(
     { arrayBuffer: arrayBuf },
     {
       styleMap: [
@@ -131,51 +315,44 @@ export async function wordToPdf(file, onProgress) {
     }
   )
 
-  // Mount a hidden, A4-proportioned container (595px wide = A4 at 72dpi)
-  const A4_PX_W = 794   // A4 @ 96dpi
-  const A4_PX_H = 1123  // A4 @ 96dpi
+  const A4_PX_W = 794
+  const A4_PX_H = 1123
 
   const host = document.createElement('div')
   host.style.cssText = `
     position:fixed; top:-9999px; left:-9999px;
     width:${A4_PX_W}px;
-    font-family: system-ui, Arial, sans-serif;
-    font-size: 14px;
-    line-height: 1.6;
+    font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.25;
     color: #111;
     background: #fff;
-    padding: 60px 70px;
+    padding: 45px 50px;
     box-sizing: border-box;
   `
 
-  // Inject document styles
   const style = document.createElement('style')
   style.textContent = `
-    h1 { font-size:26px; font-weight:700; margin:0 0 16px; color:#111; border-bottom:2px solid #e2e8f0; padding-bottom:8px; }
-    h2 { font-size:20px; font-weight:700; margin:20px 0 10px; color:#1a1a2e; }
-    h3 { font-size:16px; font-weight:600; margin:16px 0 8px; color:#2d3748; }
-    h4 { font-size:14px; font-weight:600; margin:12px 0 6px; color:#4a5568; }
-    p  { margin:0 0 10px; }
+    h1 { font-size:18px; font-weight:700; margin:0 0 8px; color:#111; }
+    h2 { font-size:15px; font-weight:700; margin:12px 0 6px; color:#111; }
+    h3 { font-size:13px; font-weight:700; margin:10px 0 4px; color:#222; }
+    p  { margin:0 0 6px; }
     strong { font-weight:700; }
     em { font-style:italic; }
     u  { text-decoration:underline; }
     s  { text-decoration:line-through; }
-    table { width:100%; border-collapse:collapse; margin:14px 0; }
-    th { background:#1a1a2e; color:#fff; padding:8px 10px; font-size:12px; text-align:left; }
-    td { padding:7px 10px; font-size:12px; border-bottom:1px solid #e2e8f0; }
-    tr:nth-child(even) td { background:#f7f8fa; }
-    ul, ol { padding-left:28px; margin:0 0 10px; }
-    li { margin-bottom:4px; }
-    img { max-width:100%; height:auto; margin:8px 0; border-radius:4px; }
-    blockquote { border-left:4px solid #e2e8f0; padding-left:16px; color:#666; margin:12px 0; }
-    pre, code { font-family:monospace; background:#f5f5f5; padding:2px 6px; border-radius:3px; font-size:12px; }
+    table { width:100%; border-collapse:collapse; margin:8px 0; }
+    th, td { border:1px solid #cbd5e1; padding:5px 8px; font-size:11.5px; text-align:left; color:#111; }
+    ul, ol { padding-left:22px; margin:0 0 6px; }
+    li { margin-bottom:2px; }
+    img { max-width:100%; height:auto; margin:6px 0; }
+    blockquote { border-left:3px solid #cbd5e1; padding-left:12px; color:#555; margin:8px 0; }
   `
   host.appendChild(style)
   host.innerHTML += html
   document.body.appendChild(host)
 
-  // Calculate how many A4 slices are needed
-  await tick()  // let browser layout
+  await tick()
   const totalHeight = host.scrollHeight
   const pageCount = Math.ceil(totalHeight / A4_PX_H)
 
@@ -186,36 +363,31 @@ export async function wordToPdf(file, onProgress) {
     await tick()
     const yOffset = page * A4_PX_H
 
-    // Capture this A4 slice
     const canvas = await h2c(host, {
-      scale: 1.5,
+      scale: 2,
       x: 0,
       y: yOffset,
       width: A4_PX_W,
       height: Math.min(A4_PX_H, totalHeight - yOffset),
       windowWidth: A4_PX_W,
       backgroundColor: '#ffffff',
-      useCORS: false,  // zero-network: no external resources
+      useCORS: false,
       allowTaint: false,
       logging: false,
     })
 
     if (page > 0) jspdf.addPage()
 
-    const imgData = canvas.toDataURL('image/jpeg', 0.92)
-    const sliceHeightMm = (canvas.height / 1.5) * MM_PER_PX
+    const imgData = canvas.toDataURL('image/jpeg', 0.95)
+    const sliceHeightMm = (canvas.height / 2) * MM_PER_PX
     jspdf.addImage(imgData, 'JPEG', 0, 0, 210, sliceHeightMm, undefined, 'FAST')
 
-    // free canvas memory
     canvas.width = 0; canvas.height = 0
-
     onProgress?.({ done: page + 1, total: pageCount })
   }
 
   document.body.removeChild(host)
-
-  const pdfBlob = jspdf.output('blob')
-  return { data: pdfBlob }
+  return { data: jspdf.output('blob') }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -467,7 +639,7 @@ function fmtCell(cell) {
 const isNumericStr = (s) => /^[\d,.\-+$€£%\s]+$/.test(s.trim()) && s.trim().length > 0
 
 export async function xlsxToPdf(file, onProgress) {
-  await loadAutoTable()  // side-effect: patches jsPDF.prototype.autoTable
+  const autoTable = await loadAutoTable()
   const jsPDF = await loadJsPDF()
 
   const arrayBuf = await toArrayBuffer(file)
@@ -542,7 +714,7 @@ export async function xlsxToPdf(file, onProgress) {
     jspdf.setTextColor(0, 0, 0)
 
     // Autotable
-    jspdf.autoTable({
+    autoTable(jspdf, {
       head: [headerRow],
       body: dataRows,
       startY: 18,
@@ -864,4 +1036,137 @@ export async function pdfToPdfa(file, onProgress) {
   onProgress?.({ done: 4, total: 4 })
 
   return { data: new Blob([pdfBytes], { type: 'application/pdf' }) }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  BATCH WRAPPERS
+//  Each function accepts an array of File objects and converts them all.
+//  Single file  → direct download of the single output (no ZIP wrapping).
+//  Multiple files → all outputs are bundled into a ZIP using zipClient.makeZip.
+//
+//  Error isolation: if one file fails the rest still complete.
+//  The returned promise resolves to { data: Blob, errors: string[] }.
+//  Throws only when EVERY file fails.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { makeZip, uniqueName } from './zipClient.js'
+
+/** Strip file extension: "report.docx" → "report" */
+function stemName(filename) {
+  const dot = filename.lastIndexOf('.')
+  return dot > 0 ? filename.slice(0, dot) : filename
+}
+
+/**
+ * Generic batch converter.
+ * @param {File[]}   files       - input files
+ * @param {Function} convertOne  - async (file, subProgress) => Blob
+ * @param {string}   outExt      - output extension including dot, e.g. '.pdf'
+ * @param {Function} onProgress  - ({ current, total, label }) outer progress
+ * @param {Object}   [opts]      - optional extra args forwarded to convertOne
+ */
+async function runBatchConvert(files, convertOne, outExt, onProgress, opts) {
+  if (!files?.length) throw new Error('No files provided.')
+
+  // Single-file: skip ZIP, call the converter directly and return its blob.
+  if (files.length === 1) {
+    const subP = (p) => onProgress?.({
+      current: typeof p === 'object' ? p.done : p,
+      total:   typeof p === 'object' ? p.total : 100,
+      label:   (typeof p === 'object' && p.label) ? p.label : `Converting ${files[0].name}…`,
+    })
+    const result = await convertOne(files[0], subP, opts)
+    return { data: result.data ?? result, errors: [] }
+  }
+
+  // Multi-file: convert each independently, zip successes.
+  const entries = []
+  const errors  = []
+  const usedNames = new Set()
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    onProgress?.({ current: i, total: files.length, label: `Converting file ${i + 1} of ${files.length}: ${file.name}` })
+
+    try {
+      const subP = (p) => onProgress?.({
+        current: typeof p === 'object' ? p.done : p,
+        total:   typeof p === 'object' ? p.total : 100,
+        label:   `${file.name} — ${typeof p === 'object' && p.label ? p.label : 'processing…'}`,
+      })
+      const result = await convertOne(file, subP, opts)
+      const blob   = result.data ?? result
+      const name   = uniqueName(stemName(file.name) + outExt, usedNames)
+      entries.push({ name, blob })
+    } catch (e) {
+      errors.push(`${file.name}: ${e.message || String(e)}`)
+    }
+
+    onProgress?.({ current: i + 1, total: files.length, label: `Done ${i + 1} of ${files.length}` })
+  }
+
+  if (entries.length === 0) throw new Error(`All ${files.length} files failed.\n${errors.join('\n')}`)
+
+  onProgress?.({ current: files.length, total: files.length, label: 'Building ZIP…' })
+  const zipBlob = await makeZip(entries, (p) =>
+    onProgress?.({ current: p.done, total: p.total, label: p.label || 'Building ZIP…' })
+  )
+
+  return { data: zipBlob, errors }
+}
+
+// ── Public batch exports ───────────────────────────────────────────────────
+
+/** Batch Word (.docx) → PDF */
+export function batchWordToPdf(files, onProgress) {
+  return runBatchConvert(files, wordToPdf, '.pdf', onProgress)
+}
+
+/** Batch PowerPoint (.pptx) → PDF */
+export function batchPptxToPdf(files, onProgress) {
+  return runBatchConvert(files, pptxToPdf, '.pdf', onProgress)
+}
+
+/** Batch Excel (.xlsx) → PDF */
+export function batchXlsxToPdf(files, onProgress) {
+  return runBatchConvert(files, xlsxToPdf, '.pdf', onProgress)
+}
+
+/** Batch HTML (.html/.htm) → PDF */
+export function batchHtmlToPdf(files, onProgress) {
+  return runBatchConvert(files, htmlToPdf, '.pdf', onProgress)
+}
+
+/** Batch PDF → Word (.docx) */
+export function batchPdfToWord(files, onProgress) {
+  // pdfToWord signature: (file) → { data: Blob }; wrap for uniform sub-progress
+  const convertOne = async (file, subP) => {
+    subP({ done: 0, total: 1, label: 'Extracting text…' })
+    const result = await pdfToWord(file)
+    subP({ done: 1, total: 1 })
+    return result
+  }
+  return runBatchConvert(files, convertOne, '.docx', onProgress)
+}
+
+/** Batch PDF → PowerPoint (.pptx) */
+export function batchPdfToPptx(files, onProgress) {
+  const convertOne = async (file, subP) => {
+    subP({ done: 0, total: 1, label: 'Converting slides…' })
+    const result = await pdfToPptx(file)
+    subP({ done: 1, total: 1 })
+    return result
+  }
+  return runBatchConvert(files, convertOne, '.pptx', onProgress)
+}
+
+/** Batch PDF → Excel (.xlsx) */
+export function batchPdfToExcel(files, onProgress, opts) {
+  const convertOne = (file, subP) => pdfToExcel(file, subP, opts)
+  return runBatchConvert(files, convertOne, '.xlsx', onProgress, opts)
+}
+
+/** Batch PDF → PDF/A */
+export function batchPdfToPdfa(files, onProgress) {
+  return runBatchConvert(files, pdfToPdfa, '.pdf', onProgress)
 }

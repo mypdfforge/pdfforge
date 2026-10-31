@@ -13,6 +13,10 @@
  *
  * SPEED: A 10-page PDF at 2x scale takes ~3-5 seconds in browser.
  * Each page renders progressively so users see a progress indicator.
+ *
+ * Batch exports (multi-file):
+ *   clientBatchPdfToImages — convert N PDFs, one flat ZIP of all pages
+ *   clientBatchPdfToJpg    — same for JPG
  */
 
 function getPdfjs() {
@@ -139,4 +143,134 @@ export async function clientPdfToJpg(file, onProgress, scale = 2, quality = 0.9)
   a.click()
   URL.revokeObjectURL(url)
   return { data: zipBlob }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  BATCH variants — process multiple PDFs, output one flat ZIP of all pages.
+//  Each page is prefixed with the source PDF name so filenames are unique.
+//  Error-isolated: if one PDF fails the rest still succeed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Strip extension from filename for use as a page-name prefix.
+ * @param {string} name - e.g. "report.pdf"
+ * @returns {string}    - e.g. "report"
+ */
+function baseName(name) {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(0, dot) : name
+}
+
+/**
+ * Convert multiple PDFs to a single flat ZIP of PNG pages.
+ * @param {File[]}   files      - array of PDF File objects
+ * @param {Function} onProgress - ({ current, total, label }) callback
+ * @param {number}   scale      - render DPI scale (default 2 ≈ 144 dpi)
+ */
+export async function clientBatchPdfToImages(files, onProgress, scale = 2) {
+  if (!files?.length) throw new Error('No files provided.')
+  const pdfjs = getPdfjs()
+  const JSZip = getJSZip()
+  const zip   = new JSZip()
+
+  const errors = []
+  let globalDone = 0
+  // Pre-count total pages across all PDFs for accurate overall progress.
+  // We estimate first then update as we open each doc.
+  const totalFiles = files.length
+
+  for (let fi = 0; fi < totalFiles; fi++) {
+    const file   = files[fi]
+    const prefix = baseName(file.name)
+    onProgress?.({ current: fi, total: totalFiles, label: `Opening ${file.name}…` })
+    try {
+      const buffer = await file.arrayBuffer()
+      const pdfDoc = await pdfjs.getDocument({ data: buffer }).promise
+      const total  = pdfDoc.numPages
+
+      for (let i = 1; i <= total; i++) {
+        const blob     = await renderPageToBlob(pdfDoc, i, scale, 'png')
+        const arrayBuf = await blob.arrayBuffer()
+        // Prefix ensures unique names: "report_page_01.png", "slides_page_01.png"
+        const pageName = totalFiles > 1
+          ? `${prefix}_page_${String(i).padStart(3, '0')}.png`
+          : `page_${String(i).padStart(3, '0')}.png`
+        zip.file(pageName, arrayBuf)
+        globalDone++
+        await yieldToBrowser()
+      }
+
+      await pdfDoc.destroy()
+    } catch (e) {
+      errors.push(`${file.name}: ${e.message}`)
+    }
+    onProgress?.({ current: fi + 1, total: totalFiles, label: `Converted ${fi + 1} of ${totalFiles}` })
+  }
+
+  if (globalDone === 0) throw new Error(`All files failed:\n${errors.join('\n')}`)
+
+  onProgress?.({ current: totalFiles, total: totalFiles, label: 'Building ZIP…' })
+  const zipBlob = await zip.generateAsync({
+    type:              'blob',
+    compression:       'DEFLATE',
+    compressionOptions: { level: 6 },
+  })
+
+  return { data: zipBlob, errors }
+}
+
+/**
+ * Convert multiple PDFs to a single flat ZIP of JPG pages.
+ * @param {File[]}   files      - array of PDF File objects
+ * @param {Function} onProgress - ({ current, total, label }) callback
+ * @param {number}   scale      - render DPI scale (default 2 ≈ 144 dpi)
+ * @param {number}   quality    - JPEG quality 0–1 (default 0.9)
+ */
+export async function clientBatchPdfToJpg(files, onProgress, scale = 2, quality = 0.9) {
+  if (!files?.length) throw new Error('No files provided.')
+  const pdfjs = getPdfjs()
+  const JSZip = getJSZip()
+  const zip   = new JSZip()
+
+  const errors = []
+  let globalDone = 0
+  const totalFiles = files.length
+
+  for (let fi = 0; fi < totalFiles; fi++) {
+    const file   = files[fi]
+    const prefix = baseName(file.name)
+    onProgress?.({ current: fi, total: totalFiles, label: `Opening ${file.name}…` })
+    try {
+      const buffer = await file.arrayBuffer()
+      const pdfDoc = await pdfjs.getDocument({ data: buffer }).promise
+      const total  = pdfDoc.numPages
+
+      for (let i = 1; i <= total; i++) {
+        const blob     = await renderPageToBlob(pdfDoc, i, scale, 'jpeg', quality)
+        const arrayBuf = await blob.arrayBuffer()
+        const pageName = totalFiles > 1
+          ? `${prefix}_page_${String(i).padStart(3, '0')}.jpg`
+          : `page_${String(i).padStart(3, '0')}.jpg`
+        zip.file(pageName, arrayBuf)
+        globalDone++
+        await yieldToBrowser()
+      }
+
+      await pdfDoc.destroy()
+    } catch (e) {
+      errors.push(`${file.name}: ${e.message}`)
+    }
+    onProgress?.({ current: fi + 1, total: totalFiles, label: `Converted ${fi + 1} of ${totalFiles}` })
+  }
+
+  if (globalDone === 0) throw new Error(`All files failed:\n${errors.join('\n')}`)
+
+  onProgress?.({ current: totalFiles, total: totalFiles, label: 'Building ZIP…' })
+  const zipBlob = await zip.generateAsync({
+    type:              'blob',
+    compression:       'DEFLATE',
+    compressionOptions: { level: 6 },
+  })
+
+  return { data: zipBlob, errors }
 }

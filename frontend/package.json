@@ -14,6 +14,7 @@
     "@cantoo/pdf-lib": "^2.11.1",
     "axios": "^1.7.2",
     "docx": "^9.12.0",
+    "docx-preview": "^0.4.1",
     "exceljs": "^4.4.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",

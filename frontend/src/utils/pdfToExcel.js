@@ -18,7 +18,13 @@ const CFG = {
 
 let _pdfjs = null
 export const setPdfjs = (lib) => { _pdfjs = lib }
-const pdfjs = () => _pdfjs || globalThis.pdfjsLib || (typeof window !== 'undefined' && window.pdfjsLib)
+const pdfjs = () => {
+  const lib = _pdfjs || globalThis.pdfjsLib || (typeof window !== 'undefined' && window.pdfjsLib)
+  if (typeof window !== 'undefined' && lib?.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) {
+    lib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+  }
+  return lib
+}
 
 // ───────────────────────── 1. EXTRACT ─────────────────────────
 function deduplicateOverlappingText(items) {
@@ -503,7 +509,8 @@ function layout(ws, pages) {
 
 // ───────────────────────── 7. PUBLIC API ─────────────────────────
 export async function pdfToExcel(file, onProgress, options = {}) {
-  const ExcelJS = (await import('exceljs')).default // lazy: keeps main bundle small
+  const exceljsMod = await import('exceljs')
+  const ExcelJS = exceljsMod.default || exceljsMod // lazy: keeps main bundle small
   const buf = file.arrayBuffer ? await file.arrayBuffer() : file
   
   // Pre-scan bold fonts from raw PDF buffer
