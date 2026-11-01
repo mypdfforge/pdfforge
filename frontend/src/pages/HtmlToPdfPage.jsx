@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
 import {
-  Upload, Link, Globe, Monitor, Tablet, Smartphone,
+  Upload, Globe, Monitor, Tablet, Smartphone,
   Download, Loader2, CheckCircle, AlertCircle, RefreshCw,
   ZoomIn, ZoomOut, FileCode, ArrowRight, ArrowLeft, X,
   FileText
@@ -79,8 +79,8 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
   const [margin, setMargin]           = useState(0)
   const [mediaMode, setMediaMode]     = useState('screen')
   
-  // Studio Preview state
-  const [zoom, setZoom]                 = useState(0.8)
+  // Studio Preview scale (null means auto-fit to container)
+  const [userZoom, setUserZoom]         = useState(null)
   const [studioFetching, setStudioFetching] = useState(false)
   const [studioConverting, setStudioConverting] = useState(false)
   const [studioProgress, setStudioProgress] = useState(0)
@@ -88,7 +88,21 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
   const [studioSuccess, setStudioSuccess] = useState(false)
   const [previewKey, setPreviewKey]     = useState(0)
 
-  const previewFrameRef = useRef(null)
+  // Measure right preview pane width for responsive auto-fit
+  const previewScrollWrapRef = useRef(null)
+  const [workspaceWidth, setWorkspaceWidth] = useState(850)
+
+  useEffect(() => {
+    if (viewMode !== 'studio' || !previewScrollWrapRef.current) return
+    const el = previewScrollWrapRef.current
+    const update = () => {
+      if (el) setWorkspaceWidth(el.clientWidth || 850)
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [viewMode])
 
   // Handle incoming pending files from Home
   useEffect(() => {
@@ -102,7 +116,7 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
   }, [pendingFiles])
 
   // Dropzone for File Upload (Path A)
-  const { getRootProps, getInputProps, isDragActive, open: openFileDialog } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'text/html': ['.html', '.htm'] },
     multiple: false,
     noClick: false,
@@ -115,7 +129,7 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
     }
   })
 
-  // Convert uploaded local HTML file directly (just like before)
+  // Convert uploaded local HTML file directly
   const handleConvertFile = async () => {
     if (!uploadedFile) return
     setFileConverting(true)
@@ -162,6 +176,7 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
     setStudioFetching(true)
     setViewMode('studio')
     setStudioError('')
+    setUserZoom(null) // Reset to auto-fit for newly loaded webpage
 
     try {
       let fetchedHtml = ''
@@ -198,7 +213,7 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
       }
 
       if (!fetchedHtml) {
-        throw new Error('Unable to retrieve webpage HTML. The server may require authentication or blocked requests.')
+        throw new Error('Unable to retrieve webpage HTML directly due to remote host restrictions. You can save the webpage as an HTML file and use "Upload a file".')
       }
 
       setHtmlContent(fetchedHtml)
@@ -219,23 +234,26 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
     }
   }
 
-  // Update Studio Live Preview Frame
+  // Viewport calculation & Auto-fitting scale logic
   const currentViewport = VIEWPORTS.find(v => v.id === viewport) || VIEWPORTS[0]
   const targetWidth = currentViewport.width
 
-  useEffect(() => {
-    if (viewMode !== 'studio' || !previewFrameRef.current || !htmlContent) return
+  // Auto-calculated fit scale ensuring Desktop 1280px or Tablet/Mobile fits 100% of workspace without getting cut in half
+  const autoFitScale = useMemo(() => {
+    const available = Math.max(300, workspaceWidth - 48) // 24px padding on each side
+    const ratio = available / targetWidth
+    return Math.min(1.0, Math.max(0.25, Number(ratio.toFixed(2))))
+  }, [workspaceWidth, targetWidth])
 
-    const iframe = previewFrameRef.current
-    const doc = iframe.contentDocument || iframe.contentWindow?.document
-    if (!doc) return
+  const effectiveScale = userZoom === null ? autoFitScale : userZoom
 
-    let renderHtml = htmlContent
+  // Generate safe HTML for the preview iframe using srcDoc (avoids doc.write wiping iframe)
+  const previewSrcDoc = useMemo(() => {
+    if (!htmlContent) return ''
     const baseTag = loadedUrl ? `<base href="${loadedUrl}">` : ''
     const mediaCss = mediaMode === 'print'
       ? `@media screen { body { background: #fff !important; } }`
       : ''
-
     const previewResetCss = `
       <style id="pdfforge-preview-style">
         html, body {
@@ -249,16 +267,12 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
       </style>
     `
 
+    let renderHtml = htmlContent
     if (/<head[^>]*>/i.test(renderHtml)) {
-      renderHtml = renderHtml.replace(/(<head[^>]*>)/i, `$1${baseTag}${previewResetCss}`)
-    } else {
-      renderHtml = `<head>${baseTag}${previewResetCss}</head>${renderHtml}`
+      return renderHtml.replace(/(<head[^>]*>)/i, `$1${baseTag}${previewResetCss}`)
     }
-
-    doc.open()
-    doc.write(renderHtml)
-    doc.close()
-  }, [viewMode, htmlContent, loadedUrl, targetWidth, mediaMode, previewKey])
+    return `<head>${baseTag}${previewResetCss}</head>${renderHtml}`
+  }, [htmlContent, loadedUrl, targetWidth, mediaMode])
 
   // Convert from Studio view
   const handleStudioConvert = async () => {
@@ -303,7 +317,7 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // VIEW A: Success panel after file conversion (just like before)
+  // VIEW A: Success panel after file conversion
   // ─────────────────────────────────────────────────────────────────────────────
   if (viewMode === 'initial' && fileDownloadResult) {
     const fmt = (b) => b < 1024 * 1024 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1024 / 1024).toFixed(2)} MB`
@@ -436,7 +450,10 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
                   return (
                     <button
                       key={vp.id}
-                      onClick={() => setViewport(vp.id)}
+                      onClick={() => {
+                        setViewport(vp.id)
+                        setUserZoom(null) // auto-fit smoothly to the new viewport
+                      }}
                       style={{
                         display: 'flex',
                         flexDirection: 'column',
@@ -669,7 +686,7 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
               {/* Zoom Buttons */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <button
-                  onClick={() => setZoom(z => Math.max(0.3, Number((z - 0.1).toFixed(1))))}
+                  onClick={() => setUserZoom(z => Math.max(0.2, Number(((z ?? autoFitScale) - 0.1).toFixed(2))))}
                   style={{
                     background: 'var(--bg3)', border: '1px solid var(--border)',
                     borderRadius: '5px', padding: '3px 6px', cursor: 'pointer',
@@ -679,11 +696,11 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
                 >
                   <ZoomOut size={12} />
                 </button>
-                <span style={{ fontSize: '11px', color: 'var(--text3)', width: '34px', textAlign: 'center', fontWeight: 600 }}>
-                  {Math.round(zoom * 100)}%
+                <span style={{ fontSize: '11px', color: 'var(--text3)', width: '38px', textAlign: 'center', fontWeight: 600 }}>
+                  {Math.round(effectiveScale * 100)}%
                 </span>
                 <button
-                  onClick={() => setZoom(z => Math.min(1.5, Number((z + 0.1).toFixed(1))))}
+                  onClick={() => setUserZoom(z => Math.min(1.5, Number(((z ?? autoFitScale) + 0.1).toFixed(2))))}
                   style={{
                     background: 'var(--bg3)', border: '1px solid var(--border)',
                     borderRadius: '5px', padding: '3px 6px', cursor: 'pointer',
@@ -694,27 +711,32 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
                   <ZoomIn size={12} />
                 </button>
                 <button
-                  onClick={() => setZoom(0.8)}
+                  onClick={() => setUserZoom(null)}
                   style={{
                     background: 'var(--bg3)', border: '1px solid var(--border)',
                     borderRadius: '5px', padding: '3px 7px', cursor: 'pointer',
-                    color: 'var(--text3)', fontSize: '11px', fontWeight: 600,
+                    color: userZoom === null ? 'var(--accent)' : 'var(--text3)',
+                    fontSize: '11px', fontWeight: 600,
                   }}
+                  title="Auto Fit Preview"
                 >
-                  Reset
+                  Fit
                 </button>
               </div>
             </div>
 
-            {/* Preview Frame Container */}
-            <div style={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'flex-start',
-              justifyContent: 'center',
-              padding: '24px',
-              overflow: 'auto',
-            }}>
+            {/* Preview Frame Container with Auto-Fit geometry */}
+            <div
+              ref={previewScrollWrapRef}
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'center',
+                padding: '24px',
+                overflow: 'auto',
+              }}
+            >
               {studioFetching ? (
                 <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text3)' }}>
                   <Loader2 size={32} color="var(--accent)" className="spin" style={{ margin: '0 auto 10px' }} />
@@ -726,62 +748,73 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
                   <p style={{ fontSize: '13px', fontWeight: 600 }}>Enter a URL to see the live preview</p>
                 </div>
               ) : (
+                /* Auto-scaled container: matches exact scaled layout bounding box to eliminate overflow clipping */
                 <div style={{
-                  transform: `scale(${zoom})`,
-                  transformOrigin: 'top center',
-                  transition: 'transform 0.15s ease-out',
+                  width: `${Math.round(targetWidth * effectiveScale)}px`,
+                  height: `${Math.round(870 * effectiveScale)}px`,
                   boxShadow: '0 12px 48px rgba(0,0,0,0.25)',
                   borderRadius: '8px',
                   background: '#fff',
                   overflow: 'hidden',
                   border: '1px solid var(--border)',
-                  width: `${targetWidth}px`,
+                  flexShrink: 0,
+                  margin: '0 auto',
+                  transition: 'width 0.15s ease-out, height 0.15s ease-out',
                 }}>
-                  {/* Browser Mockup Bar */}
                   <div style={{
-                    height: '30px',
-                    background: '#f1f5f9',
-                    borderBottom: '1px solid #e2e8f0',
-                    display: 'flex',
-                    alignItems: 'center',
-                    padding: '0 10px',
-                    gap: '5px',
+                    width: `${targetWidth}px`,
+                    height: '870px',
+                    transform: `scale(${effectiveScale})`,
+                    transformOrigin: 'top left',
                   }}>
-                    <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#ef4444' }} />
-                    <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#f59e0b' }} />
-                    <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981' }} />
+                    {/* Browser Mockup Bar */}
                     <div style={{
-                      flex: 1,
-                      background: '#fff',
-                      borderRadius: '4px',
-                      height: '18px',
-                      margin: '0 8px',
+                      height: '30px',
+                      background: '#f1f5f9',
+                      borderBottom: '1px solid #e2e8f0',
                       display: 'flex',
                       alignItems: 'center',
-                      padding: '0 8px',
-                      fontSize: '10px',
-                      color: '#64748b',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      border: '1px solid #e2e8f0',
+                      padding: '0 10px',
+                      gap: '5px',
                     }}>
-                      {loadedUrl}
+                      <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#ef4444' }} />
+                      <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#f59e0b' }} />
+                      <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981' }} />
+                      <div style={{
+                        flex: 1,
+                        background: '#fff',
+                        borderRadius: '4px',
+                        height: '18px',
+                        margin: '0 8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '0 8px',
+                        fontSize: '10px',
+                        color: '#64748b',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        border: '1px solid #e2e8f0',
+                      }}>
+                        {loadedUrl}
+                      </div>
                     </div>
-                  </div>
 
-                  <iframe
-                    ref={previewFrameRef}
-                    title="Live Web Preview"
-                    sandbox="allow-same-origin allow-scripts"
-                    style={{
-                      width: `${targetWidth}px`,
-                      height: '840px',
-                      border: 'none',
-                      display: 'block',
-                      background: '#fff',
-                    }}
-                  />
+                    {/* Live Preview Iframe with Declarative srcDoc & Viewport Key for Instant Update */}
+                    <iframe
+                      key={`${viewport}-${previewKey}`}
+                      srcDoc={previewSrcDoc}
+                      title="Live Web Preview"
+                      sandbox="allow-same-origin allow-scripts"
+                      style={{
+                        width: `${targetWidth}px`,
+                        height: '840px',
+                        border: 'none',
+                        display: 'block',
+                        background: '#fff',
+                      }}
+                    />
+                  </div>
                 </div>
               )}
             </div>

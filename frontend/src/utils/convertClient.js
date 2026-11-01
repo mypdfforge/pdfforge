@@ -1559,25 +1559,24 @@ export async function htmlToPdf(fileOrHtml, onProgress, options = {}) {
     safeHtml = `<head>${baseTag}${metaCsp}${styleTag}</head>${safeHtml}`
   }
 
-  // Create a blob URL to avoid tainted canvas issues
-  const blobUrl = URL.createObjectURL(new Blob([safeHtml], { type: 'text/html' }))
-
   const iframe = document.createElement('iframe')
   iframe.style.cssText = `
     position: fixed; top: -9999px; left: -9999px;
     width: ${VP_W}px; height: ${VP_H}px; border: none;
     visibility: hidden; pointer-events: none;
   `
-  // sandbox="allow-same-origin" → JS disabled, but styles and images from data-URIs work
-  iframe.sandbox = 'allow-same-origin'
   document.body.appendChild(iframe)
 
-  await new Promise(resolve => {
-    iframe.onload = resolve
-    iframe.src = blobUrl
-  })
+  const iDoc = iframe.contentDocument || iframe.contentWindow?.document
+  if (!iDoc) {
+    document.body.removeChild(iframe)
+    throw new Error('Unable to initialize conversion environment in browser.')
+  }
 
-  const iDoc = iframe.contentDocument
+  iDoc.open()
+  iDoc.write(safeHtml)
+  iDoc.close()
+
   if (iDoc.fonts && iDoc.fonts.ready) {
     try {
       await iDoc.fonts.ready
@@ -1747,7 +1746,6 @@ export async function htmlToPdf(fileOrHtml, onProgress, options = {}) {
   }
 
   document.body.removeChild(iframe)
-  URL.revokeObjectURL(blobUrl)
 
   return { data: jspdf.output('blob') }
 }
