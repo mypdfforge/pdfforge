@@ -1028,10 +1028,10 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
               )}
 
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
-                {/* 1. Quick Convert Button */}
+                {/* 1. Quick Convert Card */}
                 <button
                   type="button"
-                  onClick={() => { setWordMode('quick'); runWithMode('quick') }}
+                  onClick={() => setWordMode('quick')}
                   disabled={!files.length || status === 'loading'}
                   style={{
                     padding:'16px 14px',
@@ -1063,7 +1063,7 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                   </p>
                 </button>
 
-                {/* 2. Accurate Convert Button */}
+                {/* 2. Accurate Convert Card */}
                 <button
                   type="button"
                   onClick={() => {
@@ -1071,7 +1071,6 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                     if (canWarmEngine()) {
                       warmEngine({ needsCjk: wordHasCjk })
                     }
-                    runWithMode('accurate')
                   }}
                   disabled={!files.length || status === 'loading' || !isIsolated}
                   style={{
@@ -1093,9 +1092,15 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                     <span style={{ fontSize:'14.5px', fontWeight:700, color:'var(--text)' }}>
                       🎯 Accurate convert
                     </span>
-                    <span style={{ fontSize:'10px', fontWeight:700, color:'var(--accent)', background:'rgba(91,91,214,0.12)', border:'1px solid rgba(91,91,214,0.3)', borderRadius:'12px', padding:'2px 8px', whiteSpace:'nowrap' }}>
-                      Recommended
-                    </span>
+                    {wordMode === 'accurate' ? (
+                      <span style={{ fontSize:'10px', fontWeight:700, color:'var(--accent)', background:'rgba(91,91,214,0.12)', border:'1px solid rgba(91,91,214,0.3)', borderRadius:'12px', padding:'2px 8px', whiteSpace:'nowrap' }}>
+                        Selected
+                      </span>
+                    ) : (
+                      <span style={{ fontSize:'10px', fontWeight:700, color:'var(--accent)', background:'rgba(91,91,214,0.12)', border:'1px solid rgba(91,91,214,0.3)', borderRadius:'12px', padding:'2px 8px', whiteSpace:'nowrap' }}>
+                        Recommended
+                      </span>
+                    )}
                   </div>
                   <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                     <span style={{ fontSize:'11px', fontWeight:600, color: !isIsolated ? 'var(--red)' : isEngineCached ? 'var(--green)' : 'var(--accent2)' }}>
@@ -1109,6 +1114,41 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                   </p>
                 </button>
               </div>
+
+              {/* Dedicated Convert Action Button */}
+              <button
+                type="button"
+                onClick={() => runWithMode(wordMode)}
+                disabled={!files.length || status === 'loading' || (wordMode === 'accurate' && !isIsolated)}
+                style={{
+                  width: '100%',
+                  padding: '13px',
+                  fontSize: '15px',
+                  fontWeight: 600,
+                  borderRadius: '10px',
+                  border: 'none',
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  cursor: !files.length || status === 'loading' || (wordMode === 'accurate' && !isIsolated) ? 'not-allowed' : 'pointer',
+                  opacity: !files.length || (wordMode === 'accurate' && !isIsolated) ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  marginTop: '4px',
+                  boxShadow: '0 2px 12px rgba(91,91,214,0.25)',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {status === 'loading' ? (
+                  <>
+                    <span className="spinner" style={{ width:16, height:16, border:'2px solid rgba(255,255,255,0.3)', borderTopColor:'#fff', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} />
+                    <span>Converting to PDF…</span>
+                  </>
+                ) : (
+                  <span>Convert to PDF ({wordMode === 'accurate' ? 'Accurate' : 'Quick'})</span>
+                )}
+              </button>
 
               <div style={{ textAlign:'center', marginTop:'4px', fontSize:'11.5px', color:'var(--text3)' }}>
                 🔒 Files never leave your device. Works offline after first load.

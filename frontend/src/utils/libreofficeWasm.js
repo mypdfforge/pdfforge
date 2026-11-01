@@ -176,7 +176,7 @@ export async function getConverter(options = {}) {
   const wasmPaths = createWasmPaths(`${origin}/dist/`);
   const converter = new WorkerBrowserConverter({
     ...wasmPaths,
-    browserWorkerJs: '/dist/browser.worker.js',
+    browserWorkerJs: '/dist/browser.worker.js?v=43f88055',
     fonts,
     onProgress: (progressInfo) => {
       if (progressInfo && typeof progressInfo === 'object') {
