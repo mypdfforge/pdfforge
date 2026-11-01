@@ -852,152 +852,626 @@ export async function pptxToPdf(file, onProgress) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  3.  XLSX → PDF
-//      Strategy: xlsx parses workbook → jsPDF-autotable renders commercial-
-//      grade styled tables, one sheet per page, landscape orientation.
+//      High-Fidelity DOM/Canvas Rendering Pipeline
+//      - Native browser typography for 100% full Unicode / Multilingual support
+//        (Arabic with RTL, Hebrew with RTL, CJK, Hindi/Devanagari, Cyrillic, Greek)
+//      - Smart Sheet Title Banner & true Column Header row detection
+//      - Repeating table headers on all multi-page splits
+//      - Built-in safe formula evaluator for uncalculated sheets & cell references
+//      - Accurate formatting: currency, accounting negatives, %, dates, errors (#DIV/0!)
+//      - Adaptive column sizing & horizontal tiling for super-wide datasets (e.g. 30 cols)
+//      - Visual polish with enterprise styling, subtle borders, and status pill badges
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Format a raw cell value into display string */
-function fmtCell(cell) {
-  if (cell === null || cell === undefined) return ''
-  if (!cell || typeof cell !== 'object') return String(cell)
-  switch (cell.t) {
-    case 'n': {
-      const v = cell.v
-      if (cell.z) {
-        // Formatted number — use xlsx's formatter if available
-        if (typeof XLSX.SSF !== 'undefined') {
-          try { return XLSX.SSF.format(cell.z, v) } catch (_) {}
-        }
-        // Fallback: detect % and currency
-        const z = String(cell.z)
-        if (z.includes('%'))  return (v * 100).toFixed(1) + '%'
-        if (z.includes('$'))  return '$' + v.toLocaleString()
-        if (z.includes('€'))  return '€' + v.toLocaleString()
-        if (z.includes('£'))  return '£' + v.toLocaleString()
-      }
-      return typeof v === 'number' ? v.toLocaleString() : String(v)
+const EXCEL_ERROR_CODES = {
+  0x00: '#NULL!',
+  0x07: '#DIV/0!',
+  0x0f: '#VALUE!',
+  0x17: '#REF!',
+  0x1d: '#NAME?',
+  0x24: '#NUM!',
+  0x2a: '#N/A',
+  0x2b: '#GETTING_DATA'
+}
+
+/** Helper: safely escape HTML characters */
+function escapeXlsxHtml(str) {
+  if (str === null || str === undefined) return ''
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/** Check if text contains RTL scripts (Arabic or Hebrew) */
+function isRtlText(str) {
+  if (!str) return false
+  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\u0590-\u05FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(str)
+}
+
+/** Detect if a value string looks numeric or currency/percentage (for right-alignment) */
+const isNumericStr = (s) => /^[\d,.\-+$€£₹₽¥%()\s]+$/.test(String(s).trim()) && String(s).trim().length > 0
+
+/**
+ * Built-in Safe Formula Evaluator
+ * Evaluates standard Excel formulas (SUM, AVERAGE, MIN, MAX, ROUND, ABS, POWER, SQRT, MOD,
+ * CONCATENATE, LEN, IF, basic arithmetic, and cell references like D4-E4) when cached
+ * values are omitted by generation libraries.
+ */
+function evaluateCellFormula(formulaStr, sheet, depth = 0) {
+  if (!formulaStr || depth > 10) return ''
+  let str = String(formulaStr).trim()
+  if (str.startsWith('=')) str = str.slice(1).trim()
+  if (!str) return ''
+
+  // Direct error token
+  if (str.startsWith('#')) return str
+
+  const getCellValue = (cellRef) => {
+    const c = sheet[cellRef]
+    if (!c) return 0
+    if (c.f && (c.v === 0 || c.v === undefined || c.v === null || c.t === 'z')) {
+      return evaluateCellFormula(c.f, sheet, depth + 1)
     }
-    case 'd': return cell.w || (cell.v instanceof Date ? cell.v.toLocaleDateString() : String(cell.v))
-    case 'b': return cell.v ? 'TRUE' : 'FALSE'
-    case 'e': return cell.w || '#ERR'
-    default:  return cell.w || String(cell.v ?? '')
+    if (typeof c.v === 'number') return c.v
+    const n = Number(c.v)
+    return !isNaN(n) && c.v !== '' && c.v !== null ? n : (c.v ?? 0)
+  }
+
+  const evalFunc = (funcName, argsStr) => {
+    const args = []
+    let cur = '', parenDepth = 0, inQuote = false
+    for (let i = 0; i < argsStr.length; i++) {
+      const ch = argsStr[i]
+      if (ch === '"') inQuote = !inQuote
+      if (!inQuote) {
+        if (ch === '(') parenDepth++
+        else if (ch === ')') parenDepth--
+        else if (ch === ',' && parenDepth === 0) {
+          args.push(cur.trim())
+          cur = ''
+          continue
+        }
+      }
+      cur += ch
+    }
+    if (cur.trim()) args.push(cur.trim())
+
+    const evalArg = (a) => {
+      a = a.trim()
+      if ((a.startsWith('"') && a.endsWith('"')) || (a.startsWith("'") && a.endsWith("'"))) {
+        return a.slice(1, -1)
+      }
+      return evalExpr(a)
+    }
+
+    const name = funcName.toUpperCase()
+    if (name === 'IF') {
+      const condVal = evalArg(args[0])
+      const isTruthy = condVal === true || condVal === 'TRUE' || (typeof condVal === 'number' && condVal !== 0)
+      return isTruthy ? evalArg(args[1]) : (args[2] !== undefined ? evalArg(args[2]) : false)
+    }
+    if (name === 'CONCATENATE' || name === 'CONCAT') {
+      return args.map(a => String(evalArg(a) ?? '')).join('')
+    }
+    if (name === 'LEN') {
+      return String(evalArg(args[0]) ?? '').length
+    }
+    if (name === 'SUM') {
+      let sum = 0
+      for (const a of args) {
+        if (a.includes(':')) {
+          const range = XLSX.utils.decode_range(a)
+          for (let r = range.s.r; r <= range.e.r; r++) {
+            for (let c = range.s.c; c <= range.e.c; c++) {
+              sum += Number(getCellValue(XLSX.utils.encode_cell({ r, c }))) || 0
+            }
+          }
+        } else {
+          sum += Number(evalArg(a)) || 0
+        }
+      }
+      return sum
+    }
+    if (name === 'AVERAGE') {
+      const nums = []
+      for (const a of args) {
+        if (a.includes(':')) {
+          const range = XLSX.utils.decode_range(a)
+          for (let r = range.s.r; r <= range.e.r; r++) {
+            for (let c = range.s.c; c <= range.e.c; c++) {
+              nums.push(Number(getCellValue(XLSX.utils.encode_cell({ r, c }))) || 0)
+            }
+          }
+        } else {
+          nums.push(Number(evalArg(a)) || 0)
+        }
+      }
+      return nums.length ? (nums.reduce((acc, v) => acc + v, 0) / nums.length) : 0
+    }
+    if (name === 'MIN') {
+      const vals = args.map(a => Number(evalArg(a)) || 0)
+      return Math.min(...vals)
+    }
+    if (name === 'MAX') {
+      const vals = args.map(a => Number(evalArg(a)) || 0)
+      return Math.max(...vals)
+    }
+    if (name === 'ROUND') {
+      const num = Number(evalArg(args[0])) || 0
+      const dec = Number(evalArg(args[1] || '0')) || 0
+      return Number(num.toFixed(dec))
+    }
+    if (name === 'ABS') {
+      return Math.abs(Number(evalArg(args[0])) || 0)
+    }
+    if (name === 'POWER') {
+      return Math.pow(Number(evalArg(args[0])) || 0, Number(evalArg(args[1])) || 0)
+    }
+    if (name === 'SQRT') {
+      return Math.sqrt(Number(evalArg(args[0])) || 0)
+    }
+    if (name === 'MOD') {
+      const n = Number(evalArg(args[0])) || 0
+      const d = Number(evalArg(args[1])) || 1
+      return n % d
+    }
+    return evalArg(args[0] || '0')
+  }
+
+  const evalExpr = (expr) => {
+    expr = expr.trim()
+    if (!expr) return 0
+    if ((expr.startsWith('"') && expr.endsWith('"')) || (expr.startsWith("'") && expr.endsWith("'"))) {
+      return expr.slice(1, -1)
+    }
+
+    // Replace innermost function calls
+    while (true) {
+      const m = expr.match(/([A-Z_]+)\(([^()]+)\)/i)
+      if (!m) break
+      const full = m[0]
+      const fn = m[1]
+      const args = m[2]
+      const val = evalFunc(fn, args)
+      const replacement = typeof val === 'string' ? JSON.stringify(val) : String(val)
+      expr = expr.replace(full, replacement)
+    }
+
+    // Replace cell references (e.g. D4, REC01)
+    expr = expr.replace(/\b([A-Z]+[0-9]+)\b/g, (match) => {
+      const v = getCellValue(match)
+      return typeof v === 'string' ? JSON.stringify(v) : String(v)
+    })
+
+    // Check comparisons: =, ==, !=, <=, >=, <, >
+    const compMatch = expr.match(/^(.+?)(<=|>=|!=|==|=|<|>)(.+)$/)
+    if (compMatch) {
+      const left = evalExpr(compMatch[1])
+      const op = compMatch[2]
+      const right = evalExpr(compMatch[3])
+      if (op === '=' || op === '==') return left == right
+      if (op === '!=') return left != right
+      if (op === '<') return Number(left) < Number(right)
+      if (op === '>') return Number(left) > Number(right)
+      if (op === '<=') return Number(left) <= Number(right)
+      if (op === '>=') return Number(left) >= Number(right)
+    }
+
+    // Safely evaluate simple math expressions
+    try {
+      if (/^[\d+\-*\/().\s]+$/.test(expr)) {
+        return Function('return (' + expr + ')')()
+      }
+    } catch (_) {}
+
+    return expr
+  }
+
+  try {
+    return evalExpr(str)
+  } catch (_) {
+    return formulaStr
   }
 }
 
-/** Detect if a value string looks numeric (for right-alignment) */
-const isNumericStr = (s) => /^[\d,.\-+$€£%\s]+$/.test(s.trim()) && s.trim().length > 0
+/** Format a raw cell into display string with formula evaluation and SSF masks */
+function fmtCell(cell, sheet) {
+  if (!cell) return ''
+
+  // Formula error tokens stored directly
+  if (cell.f && String(cell.f).startsWith('#')) return String(cell.f)
+
+  // Standard Excel error cell type
+  if (cell.t === 'e') {
+    return EXCEL_ERROR_CODES[cell.v] || cell.w || '#ERR'
+  }
+
+  let val = cell.v
+
+  // If cell has formula and value is missing or 0
+  if (cell.f && (val === undefined || val === 0 || val === null || cell.t === 'z')) {
+    val = evaluateCellFormula(cell.f, sheet)
+  }
+
+  if (val === null || val === undefined) return ''
+
+  // Number formatting
+  if (typeof val === 'number') {
+    if (cell.z && typeof XLSX.SSF !== 'undefined') {
+      try {
+        return XLSX.SSF.format(cell.z, val)
+      } catch (_) {}
+    }
+    const z = String(cell.z || '')
+    if (z.includes('%')) return (val * 100).toFixed(2) + '%'
+    if (z.includes('$')) return '$' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    if (z.includes('€')) return '€' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    if (z.includes('£')) return '£' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    if (z.includes('₹')) return '₹' + val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    return val.toLocaleString(undefined, { maximumFractionDigits: 4 })
+  }
+
+  if (cell.t === 'b') return val ? 'TRUE' : 'FALSE'
+  if (cell.t === 'd') return cell.w || (val instanceof Date ? val.toLocaleDateString() : String(val))
+
+  return cell.w || String(val)
+}
+
+/** Analyze worksheet structure: title banner, column headers, and data row range */
+function analyzeWorksheet(ws) {
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1')
+  const numRows = range.e.r - range.s.r + 1
+  const numCols = range.e.c - range.s.c + 1
+
+  let titleBanner = null
+  let headerRowIdx = range.s.r
+
+  // Check row 0 for title banner (either merged A1:X1 or single text in row 0)
+  const r0Cells = []
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: range.s.r, c })]
+    if (cell && (cell.v !== undefined || cell.f)) {
+      const text = fmtCell(cell, ws)
+      if (text) r0Cells.push({ c, val: text })
+    }
+  }
+
+  const merges = ws['!merges'] || []
+  const r0Merge = merges.find(m => m.s.r === range.s.r && m.e.c > m.s.c)
+
+  if (r0Merge || (r0Cells.length === 1 && numCols >= 3)) {
+    titleBanner = r0Cells[0]?.val || null
+
+    // Search for the true column header row below the title
+    for (let r = range.s.r + 1; r <= range.e.r; r++) {
+      let nonNullCount = 0
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })]
+        if (cell && (cell.v !== undefined || cell.f)) {
+          const val = fmtCell(cell, ws)
+          if (val && String(val).trim()) nonNullCount++
+        }
+      }
+      if (nonNullCount >= Math.min(3, numCols)) {
+        headerRowIdx = r
+        break
+      }
+    }
+  }
+
+  return { range, numRows, numCols, titleBanner, headerRowIdx }
+}
+
+/** Render a single page HTML string for a worksheet slice */
+function renderSheetPageHtml({
+  sheetName,
+  titleBanner,
+  isFirstPage,
+  pageNum,
+  totalPages,
+  colIndices,
+  headerRow,
+  dataRows,
+  colWidthsPct,
+  tileLabel,
+  totalCols,
+  totalDataRows
+}) {
+  // Build <th> headers
+  const ths = colIndices.map((colIdx, i) => {
+    const text = escapeXlsxHtml(headerRow[colIdx] || '')
+    const isNum = isNumericStr(text)
+    const align = isNum ? 'right' : 'center'
+    const w = colWidthsPct[i]
+    return `<th style="
+      background: #1e293b;
+      color: #ffffff;
+      font-weight: 700;
+      font-size: 10px;
+      line-height: 1.3;
+      padding: 8px 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      border: 1px solid #334155;
+      text-align: ${align};
+      width: ${w}%;
+      box-sizing: border-box;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    ">${text}</th>`
+  }).join('')
+
+  // Build <tr> rows
+  const trs = dataRows.map((row, rIdx) => {
+    const rowBg = rIdx % 2 === 1 ? '#f8fafc' : '#ffffff'
+    const tds = colIndices.map((colIdx, i) => {
+      const rawVal = row[colIdx] || ''
+      const text = String(rawVal).trim()
+      const isRtl = isRtlText(text)
+      const isNum = isNumericStr(text)
+      const w = colWidthsPct[i]
+
+      let align = isRtl ? 'right' : isNum ? 'right' : 'left'
+      let cellInnerHtml = escapeXlsxHtml(text)
+
+      // Status pill badges
+      if (/^(APPROVED|PASS|VALID|VERIFIED)$/i.test(text)) {
+        align = 'center'
+        cellInnerHtml = `<span style="background: #dcfce7; color: #15803d; font-weight: 700; padding: 2px 8px; border-radius: 12px; font-size: 9.5px; display: inline-block;">${escapeXlsxHtml(text)}</span>`
+      } else if (/^(UNDER_REVIEW|PENDING|WARNING)$/i.test(text)) {
+        align = 'center'
+        cellInnerHtml = `<span style="background: #fef3c7; color: #b45309; font-weight: 700; padding: 2px 8px; border-radius: 12px; font-size: 9.5px; display: inline-block;">${escapeXlsxHtml(text)}</span>`
+      } else if (/^(#DIV\/0!|#REF!|#VALUE!|#N\/A|#NAME\?|#NUM!|#NULL!|#ERR|ERROR|FAIL|INVALID)$/i.test(text)) {
+        align = 'center'
+        cellInnerHtml = `<span style="background: #fee2e2; color: #b91c1c; font-weight: 700; padding: 2px 8px; border-radius: 12px; font-size: 9.5px; display: inline-block;">${escapeXlsxHtml(text)}</span>`
+      } else if (isRtl) {
+        cellInnerHtml = `<span dir="rtl" style="direction: rtl; unicode-bidi: embed;">${escapeXlsxHtml(text)}</span>`
+      }
+
+      const fontFam = isNum ? 'font-variant-numeric: tabular-nums;' : ''
+
+      return `<td style="
+        padding: 6px 10px;
+        border: 1px solid #e2e8f0;
+        background: ${rowBg};
+        text-align: ${align};
+        font-size: 10px;
+        color: #1e293b;
+        width: ${w}%;
+        box-sizing: border-box;
+        ${fontFam}
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      ">${cellInnerHtml}</td>`
+    }).join('')
+
+    return `<tr>${tds}</tr>`
+  }).join('')
+
+  // Header Banner or continuation header
+  let topHeaderHtml = ''
+  if (isFirstPage && titleBanner) {
+    topHeaderHtml = `
+      <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #ffffff; border-radius: 6px; padding: 10px 16px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
+        <div style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.3px; line-height: 1.3;">${escapeXlsxHtml(titleBanner)}</div>
+        <div style="font-size: 10px; background: rgba(255,255,255,0.18); padding: 3px 10px; border-radius: 12px; font-weight: 600; white-space: nowrap; margin-left: 12px;">${escapeXlsxHtml(sheetName)}</div>
+      </div>`
+  } else {
+    topHeaderHtml = `
+      <div style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; margin-bottom: 10px; border-bottom: 1.5px solid #e2e8f0;">
+        <div style="font-size: 12px; font-weight: 700; color: #0f172a;">
+          ${escapeXlsxHtml(titleBanner || sheetName)}
+          <span style="font-size: 10px; font-weight: 500; color: #64748b; margin-left: 6px;">(Continued)</span>
+        </div>
+        <div style="font-size: 10px; font-weight: 600; color: #475569; background: #f1f5f9; padding: 2px 8px; border-radius: 6px;">
+          ${escapeXlsxHtml(tileLabel || sheetName)}
+        </div>
+      </div>`
+  }
+
+  return `
+    <div style="
+      width: 1122px;
+      height: 794px;
+      box-sizing: border-box;
+      padding: 24px 32px;
+      background: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+      color: #1e293b;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    ">
+      <div>
+        ${topHeaderHtml}
+        <table style="width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 2px;">
+          <thead>
+            <tr>${ths}</tr>
+          </thead>
+          <tbody>
+            ${trs}
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 8px; border-top: 1px solid #e2e8f0; font-size: 9.5px; color: #64748b;">
+        <span><strong>${escapeXlsxHtml(sheetName)}</strong> &bull; ${totalDataRows} rows &times; ${totalCols} cols ${tileLabel ? '&bull; ' + escapeXlsxHtml(tileLabel) : ''}</span>
+        <span>Page ${pageNum} of ${totalPages}</span>
+      </div>
+    </div>`
+}
 
 export async function xlsxToPdf(file, onProgress) {
-  const autoTable = await loadAutoTable()
-  const jsPDF = await loadJsPDF()
+  const [jsPDF, h2c] = await Promise.all([loadJsPDF(), loadHtml2Canvas()])
 
   const arrayBuf = await toArrayBuffer(file)
-  const wb = XLSX.read(arrayBuf, { type: 'array', cellStyles: true, cellDates: true, cellNF: true })
+  const wb = XLSX.read(arrayBuf, {
+    type: 'array',
+    cellStyles: true,
+    cellDates: true,
+    cellNF: true,
+    cellFormula: true
+  })
 
   const sheetNames = wb.SheetNames
   if (!sheetNames.length) throw new Error('No sheets found in workbook.')
 
-  const jspdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' })
-  const PAGE_W_MM = 287  // landscape A4 usable width (297 - 10mm margins)
+  // Prepare landscape A4 PDF: 297mm x 210mm
+  const PAGE_W_MM = 297
+  const PAGE_H_MM = 210
+  const jspdf = new jsPDF({ unit: 'mm', format: [PAGE_W_MM, PAGE_H_MM], orientation: 'landscape' })
 
-  for (let si = 0; si < sheetNames.length; si++) {
-    await tick()
-    const sheetName = sheetNames[si]
-    const ws        = wb.Sheets[sheetName]
-    const range     = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1')
+  // Offscreen rendering host
+  const host = document.createElement('div')
+  host.style.cssText = 'position: fixed; top: 0; left: -99999px; z-index: -1000; pointer-events: none; width: 1122px; background: #ffffff;'
+  document.body.appendChild(host)
 
-    // Build header row + data rows
-    const numRows = range.e.r - range.s.r + 1
-    const numCols = range.e.c - range.s.c + 1
+  let globalPageCount = 0
 
-    const headerRow  = []
-    const dataRows   = []
-    const colWidths  = new Array(numCols).fill(10)  // min 10mm
+  try {
+    for (let si = 0; si < sheetNames.length; si++) {
+      await tick()
+      const sheetName = sheetNames[si]
+      const ws = wb.Sheets[sheetName]
+      if (!ws || !ws['!ref']) continue
 
-    // First row = header
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: range.s.r, c })]
-      const val  = fmtCell(cell)
-      headerRow.push(val)
-      colWidths[c - range.s.c] = Math.max(colWidths[c - range.s.c], Math.min(val.length * 2.2, 50))
-    }
+      const { range, numRows, numCols, titleBanner, headerRowIdx } = analyzeWorksheet(ws)
 
-    // Data rows
-    for (let r = range.s.r + 1; r <= range.e.r; r++) {
-      const row = []
+      // Extract Header Row values
+      const headerRow = []
+      const colLengths = new Array(numCols).fill(8)
       for (let c = range.s.c; c <= range.e.c; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r, c })]
-        const val  = fmtCell(cell)
-        row.push(val)
-        colWidths[c - range.s.c] = Math.max(colWidths[c - range.s.c], Math.min(val.length * 2.2, 50))
+        const cIdx = c - range.s.c
+        const cell = ws[XLSX.utils.encode_cell({ r: headerRowIdx, c })]
+        const val = fmtCell(cell, ws)
+        headerRow[cIdx] = val || `Column ${cIdx + 1}`
+        colLengths[cIdx] = Math.max(colLengths[cIdx], String(headerRow[cIdx]).length)
       }
-      dataRows.push(row)
-    }
 
-    // Auto-scale column widths to fit page
-    const totalW = colWidths.reduce((a, b) => a + b, 0)
-    const scaledWidths = totalW > PAGE_W_MM
-      ? colWidths.map(w => (w / totalW) * PAGE_W_MM)
-      : colWidths
+      // Extract Data Rows (skip title row and header row)
+      const dataRows = []
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        // Skip title row and header row
+        if (titleBanner && r < headerRowIdx) continue
+        if (r === headerRowIdx) continue
 
-    // Detect numeric columns for right-alignment
-    const columnStyles = {}
-    for (let c = 0; c < numCols; c++) {
-      const sampleValues = dataRows.slice(0, 10).map(row => row[c]).filter(Boolean)
-      const isNumeric = sampleValues.length > 0 && sampleValues.every(v => isNumericStr(v))
-      columnStyles[c] = {
-        halign: isNumeric ? 'right' : 'left',
-        cellWidth: scaledWidths[c],
-      }
-    }
-
-    if (si > 0) jspdf.addPage('a4', 'landscape')
-
-    // Sheet title banner
-    jspdf.setFillColor(26, 26, 46)
-    jspdf.rect(5, 5, PAGE_W_MM + 5, 10, 'F')
-    jspdf.setTextColor(255, 255, 255)
-    jspdf.setFontSize(11)
-    jspdf.setFont(undefined, 'bold')
-    jspdf.text(`${sheetName}  (${numRows > 0 ? numRows - 1 : 0} rows × ${numCols} cols)`, 9, 12)
-    jspdf.setTextColor(0, 0, 0)
-
-    // Autotable
-    autoTable(jspdf, {
-      head: [headerRow],
-      body: dataRows,
-      startY: 18,
-      margin: { left: 5, right: 5 },
-      tableWidth: 'auto',
-      columnStyles,
-      styles: {
-        fontSize: dataRows.length > 500 ? 7 : dataRows.length > 200 ? 8 : 9,
-        cellPadding: 2.5,
-        overflow: 'linebreak',
-        lineColor: [220, 220, 230],
-        lineWidth: 0.3,
-      },
-      headStyles: {
-        fillColor: [26, 26, 46],
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-        fontSize: 9,
-        cellPadding: 3,
-      },
-      alternateRowStyles: {
-        fillColor: [247, 248, 250],
-      },
-      rowPageBreak: 'auto',
-      didParseCell(data) {
-        // Right-align numbers in body
-        if (data.section === 'body') {
-          const v = String(data.cell.raw || '')
-          if (isNumericStr(v)) data.cell.styles.halign = 'right'
+        let hasData = false
+        const row = []
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const cIdx = c - range.s.c
+          const cell = ws[XLSX.utils.encode_cell({ r, c })]
+          const val = fmtCell(cell, ws)
+          row[cIdx] = val
+          if (val && String(val).trim().length > 0) hasData = true
+          colLengths[cIdx] = Math.max(colLengths[cIdx], String(val || '').length)
         }
-      },
-    })
+        if (hasData) {
+          dataRows.push(row)
+        }
+      }
 
-    onProgress?.({ done: si + 1, total: sheetNames.length })
+      // Determine column chunking (horizontal tiling for wide sheets like 30 columns)
+      // Max ~10 columns per tile for optimal readability
+      const MAX_COLS_PER_PAGE = 10
+      const colChunks = []
+      if (numCols <= 12) {
+        colChunks.push(Array.from({ length: numCols }, (_, i) => i))
+      } else {
+        for (let c = 0; c < numCols; c += MAX_COLS_PER_PAGE) {
+          const end = Math.min(c + MAX_COLS_PER_PAGE, numCols)
+          const chunk = []
+          for (let i = c; i < end; i++) chunk.push(i)
+          colChunks.push(chunk)
+        }
+      }
+
+      // Determine vertical row pagination: ~16 rows on first page with banner, ~19 on continuation pages
+      const ROWS_PER_FIRST_PAGE = titleBanner ? 16 : 18
+      const ROWS_PER_SUB_PAGE = 19
+
+      // Build pages for this sheet
+      for (let ci = 0; ci < colChunks.length; ci++) {
+        const colIndices = colChunks[ci]
+        const tileLabel = colChunks.length > 1
+          ? `Columns ${colIndices[0] + 1}–${colIndices[colIndices.length - 1] + 1} of ${numCols}`
+          : ''
+
+        // Calculate proportional widths for this column chunk
+        const chunkWeights = colIndices.map(cIdx => Math.min(Math.max(colLengths[cIdx] * 1.8, 12), 45))
+        const totalWeight = chunkWeights.reduce((a, b) => a + b, 0)
+        const colWidthsPct = chunkWeights.map(w => ((w / totalWeight) * 100).toFixed(2))
+
+        let rStart = 0
+        let sheetPageIdx = 0
+        const totalRows = Math.max(dataRows.length, 1)
+
+        while (rStart < totalRows) {
+          await tick()
+          const isFirstPage = sheetPageIdx === 0
+          const pageSize = isFirstPage ? ROWS_PER_FIRST_PAGE : ROWS_PER_SUB_PAGE
+          const rEnd = Math.min(rStart + pageSize, totalRows)
+          const sliceRows = dataRows.length > 0 ? dataRows.slice(rStart, rEnd) : [new Array(numCols).fill('')]
+
+          sheetPageIdx++
+          globalPageCount++
+
+          // Render HTML page
+          host.innerHTML = renderSheetPageHtml({
+            sheetName,
+            titleBanner,
+            isFirstPage,
+            pageNum: sheetPageIdx,
+            totalPages: Math.ceil(totalRows / ROWS_PER_SUB_PAGE) || 1,
+            colIndices,
+            headerRow,
+            dataRows: sliceRows,
+            colWidthsPct,
+            tileLabel,
+            totalCols: numCols,
+            totalDataRows: dataRows.length
+          })
+
+          // Offscreen font readiness check
+          if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+            await document.fonts.ready
+          }
+
+          // Capture via html2canvas with sharp 1.6x scaling
+          const pageEl = host.firstElementChild || host
+          const canvas = await h2c(pageEl, {
+            scale: 1.6,
+            width: 1122,
+            height: 794,
+            backgroundColor: '#ffffff',
+            useCORS: true,
+            logging: false,
+          })
+
+          if (globalPageCount > 1) {
+            jspdf.addPage([PAGE_W_MM, PAGE_H_MM], 'landscape')
+          }
+
+          const imgData = canvas.toDataURL('image/jpeg', 0.94)
+          jspdf.addImage(imgData, 'JPEG', 0, 0, PAGE_W_MM, PAGE_H_MM, undefined, 'FAST')
+
+          canvas.width = 0
+          canvas.height = 0
+
+          rStart = rEnd
+          onProgress?.({ done: si + 1, total: sheetNames.length })
+        }
+      }
+    }
+  } finally {
+    if (host.parentNode) {
+      document.body.removeChild(host)
+    }
   }
 
   return { data: jspdf.output('blob') }

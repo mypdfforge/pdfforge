@@ -33,3 +33,10 @@ e2e/dist/
 e2e/out/
 e2e/lucide-stub.js
 e2e/dbg.mjs
+
+# LibreOffice WASM binary assets (installed via postinstall)
+frontend/public/wasm/
+frontend/public/assets/
+frontend/public/dist/
+graphify-out/
+backend/stress_test_results.json
