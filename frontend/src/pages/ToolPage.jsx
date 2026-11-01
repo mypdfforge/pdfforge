@@ -504,7 +504,11 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
       if (toolId === 'word-to-pdf' && activeMode === 'accurate') {
         const onP = (p) => {
           if (p && typeof p === 'object') {
-            setProgress({ current: p.percent || 0, total: 100, label: p.message || 'Converting via LibreOffice WASM…' })
+            let label = p.message || 'Converting via LibreOffice WASM…'
+            if (isEngineCached && (p.message?.includes('download') || p.message?.includes('Downloading'))) {
+              label = 'You already have the engine. Starting conversion…'
+            }
+            setProgress({ current: p.percent || 0, total: 100, label })
           }
         }
         const blob = await docxToPdfAccurate(files[0], onP, { needsCjk: wordHasCjk })
@@ -1046,11 +1050,13 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                   </div>
                   <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                     <span style={{ fontSize:'11px', fontWeight:600, color: !isIsolated ? 'var(--red)' : isEngineCached ? 'var(--green)' : 'var(--accent2)' }}>
-                      {!isIsolated ? 'Unavailable (headers not isolated)' : isEngineCached ? '● Ready (Engine cached)' : '● Download engine (~240MB)'}
+                      {!isIsolated ? 'Unavailable (headers not isolated)' : isEngineCached ? '✓ Ready (Engine cached)' : '● Download engine (~240MB)'}
                     </span>
                   </div>
                   <p style={{ margin:0, fontSize:'11.5px', color:'var(--text3)', lineHeight:1.45 }}>
-                    Exact Word layout. First use downloads the engine (~240MB), cached after. Works offline.
+                    {isEngineCached
+                      ? 'Engine cached in browser. Converts directly on-device with exact Word layout.'
+                      : 'Exact Word layout. First use downloads the engine (~240MB), cached after. Works offline.'}
                   </p>
                 </button>
               </div>

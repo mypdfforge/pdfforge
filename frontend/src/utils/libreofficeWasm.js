@@ -25,13 +25,21 @@ export function isCrossOriginIsolated() {
  * @returns {Promise<boolean>}
  */
 export async function isWasmEngineCached() {
+  if (typeof window !== 'undefined' && localStorage.getItem('pdfforge_wasm_engine_cached') === 'true') {
+    return true;
+  }
   if (typeof caches === 'undefined') return false;
   try {
     const keys = await caches.keys();
     for (const key of keys) {
       const cache = await caches.open(key);
       const match = await cache.match('/wasm/soffice.wasm');
-      if (match) return true;
+      if (match) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('pdfforge_wasm_engine_cached', 'true');
+        }
+        return true;
+      }
     }
     return false;
   } catch (err) {
@@ -113,7 +121,10 @@ export async function getConverter(options = {}) {
     onProgress: (progressInfo) => {
       if (progressInfo && typeof progressInfo === 'object') {
         const pct = progressInfo.percent || 30;
-        const msg = progressInfo.message || 'Loading engine files...';
+        let msg = progressInfo.message || 'Loading engine files...';
+        if (msg.includes('Compiling WebAssembly module')) {
+          msg = 'Compiling WebAssembly module into browser memory (first load ~30-60s)...';
+        }
         onProgress?.({ percent: Math.min(Math.max(pct, 25), 90), message: msg });
       }
     },
@@ -121,6 +132,9 @@ export async function getConverter(options = {}) {
 
   await converter.initialize();
   converterSingleton = converter;
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('pdfforge_wasm_engine_cached', 'true');
+  }
 
   onProgress?.({ percent: 100, message: 'Engine ready.' });
   return converterSingleton;
