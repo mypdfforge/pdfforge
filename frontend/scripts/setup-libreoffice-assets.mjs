@@ -39,8 +39,8 @@ const workerSrc = path.join(distSrcDir, 'browser.worker.global.js')
 if (fs.existsSync(workerSrc)) {
   let workerContent = fs.readFileSync(workerSrc, 'utf8')
   
-  const startNeedle = 'self.Module={mainScriptUrlOrBlob:e'
-  const endNeedle = 'self.Module&&self.Module.calledRun?a():h();})'
+  const startNeedle = ',self.Module={mainScriptUrlOrBlob:e'
+  const endNeedle = 'calledRun?a():h();}),'
   
   if (!workerContent.includes(startNeedle) || !workerContent.includes(endNeedle)) {
     throw new Error(`[setup-libreoffice-assets] Assertion failed: target Module initialization pattern not found in ${workerSrc}`)
@@ -49,7 +49,7 @@ if (fs.existsSync(workerSrc)) {
   const startIdx = workerContent.indexOf(startNeedle)
   const endIdx = workerContent.indexOf(endNeedle, startIdx) + endNeedle.length
   
-  const patchedBlock = `/* [PARALLEL BROTLI LOADER START] */
+  const patchedBlock = `;/* [PARALLEL BROTLI LOADER START] */
 let compiledWasmModule = null;
 let dataBlobUrl = null;
 let dataBuffer = null;
@@ -64,14 +64,14 @@ try {
   baseUrl = new URL(e, 'https://pdfforge-kappa.vercel.app');
 }
 const baseDir = baseUrl.href.substring(0, baseUrl.href.lastIndexOf('/') + 1);
-const manifestUrl = new URL(\`engine-manifest.json?v=\${Date.now()}\`, baseDir).href;
+const manifestUrl = new URL('engine-manifest.json?v=' + Date.now(), baseDir).href;
 
 try {
   const mRes = await fetch(manifestUrl, { cache: 'no-store' }).catch(() => null);
   if (mRes && mRes.ok) {
     manifest = await mRes.json();
     version = manifest.version || 'v1';
-    cacheName = \`soffice-\${version}\`;
+    cacheName = 'soffice-' + version;
   }
 } catch (mErr) {
   console.warn('[Worker] Manifest fetch error, fallback to stock loader:', mErr);
@@ -101,7 +101,7 @@ if (manifest && manifest.files && manifest.files['soffice.wasm'] && manifest.fil
       id: l.id,
       progress: {
         percent: pct,
-        message: \`Downloading engine... (\${(totalRead / 1024 / 1024).toFixed(1)} / \${(totalDecodedBytes / 1024 / 1024).toFixed(1)} MB)\`,
+        message: 'Downloading engine... (' + (totalRead / 1024 / 1024).toFixed(1) + ' / ' + (totalDecodedBytes / 1024 / 1024).toFixed(1) + ' MB)',
         phase: 'downloading',
         bytesLoaded: totalRead,
         bytesTotal: totalDecodedBytes,
@@ -111,8 +111,8 @@ if (manifest && manifest.files && manifest.files['soffice.wasm'] && manifest.fil
   };
 
   const cache = (typeof caches !== 'undefined') ? await caches.open(cacheName).catch(() => null) : null;
-  const wasmUrl = new URL(\`soffice.wasm.br?v=\${version}\`, baseDir).href;
-  const dataUrl = new URL(\`soffice.data.br?v=\${version}\`, baseDir).href;
+  const wasmUrl = new URL('soffice.wasm.br?v=' + version, baseDir).href;
+  const dataUrl = new URL('soffice.data.br?v=' + version, baseDir).href;
 
   const fetchWithProgress = async (url, onBytes) => {
     let res = cache ? await cache.match(url).catch(() => null) : null;
@@ -121,7 +121,7 @@ if (manifest && manifest.files && manifest.files['soffice.wasm'] && manifest.fil
       isFromCache = true;
     } else {
       res = await fetch(url);
-      if (!res.ok) throw new Error(\`HTTP \${res.status} fetching \${url}\`);
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' fetching ' + url);
       if (cache) {
         cache.put(url, res.clone()).catch(err => console.warn('[Worker] Cache put failed:', err));
       }
@@ -204,7 +204,7 @@ self.Module = {
     if (a.endsWith('.wasm')) h = t;
     else if (a.endsWith('.data')) h = dataBlobUrl || r;
     else if (a.includes('.worker.')) h = n;
-    else h = \`\${e.substring(0, e.lastIndexOf('/') + 1)}\${a}\`;
+    else h = e.substring(0, e.lastIndexOf('/') + 1) + a;
     console.log('[Worker] locateFile called:', a, 'scriptDir:', d, '-> result:', h);
     return h;
   },
@@ -245,7 +245,7 @@ if (typeof caches !== 'undefined' && cacheName) {
     }
   }).catch(() => {});
 }
-/* [PARALLEL BROTLI LOADER END] */`
+/* [PARALLEL BROTLI LOADER END] */;`
 
   workerContent = workerContent.slice(0, startIdx) + patchedBlock + workerContent.slice(endIdx)
 
