@@ -10,7 +10,22 @@ export const MAX_DOCX_WASM_SIZE = 50 * 1024 * 1024; // 50 MB
 
 let converterSingleton = null;
 let converterLoadedCjk = false;
+let warmEnginePromise = null;
 let conversionLock = Promise.resolve();
+
+/**
+ * Checks whether the device network and hardware conditions allow warming the engine.
+ * Skips warming if user has Data Saver, cellular/slow connection, or device RAM < 4GB.
+ */
+export function canWarmEngine() {
+  if (typeof navigator === 'undefined') return false;
+  if (navigator.connection?.saveData) return false;
+  const effectiveType = navigator.connection?.effectiveType;
+  if (effectiveType === 'slow-2g' || effectiveType === '2g' || effectiveType === '3g') return false;
+  if (navigator.connection?.type === 'cellular') return false;
+  if (typeof navigator.deviceMemory === 'number' && navigator.deviceMemory < 4) return false;
+  return true;
+}
 
 /**
  * Checks whether the browser execution environment meets security requirements
@@ -21,7 +36,7 @@ export function isCrossOriginIsolated() {
 }
 
 /**
- * Checks if the ~240MB LibreOffice WASM engine is already cached in CacheStorage.
+ * Checks if the LibreOffice WASM engine is already cached in CacheStorage.
  * @returns {Promise<boolean>}
  */
 export async function isWasmEngineCached() {
@@ -32,9 +47,7 @@ export async function isWasmEngineCached() {
   try {
     const keys = await caches.keys();
     for (const key of keys) {
-      const cache = await caches.open(key);
-      const match = await cache.match('/wasm/soffice.wasm');
-      if (match) {
+      if (key.startsWith('soffice-')) {
         if (typeof window !== 'undefined') {
           localStorage.setItem('pdfforge_wasm_engine_cached', 'true');
         }
@@ -48,11 +61,27 @@ export async function isWasmEngineCached() {
 }
 
 /**
+ * Singleton engine warmer. Pre-downloads and compiles engine in background
+ * when complex DOCX is selected or Accurate is toggled.
+ */
+export function warmEngine(options = {}) {
+  if (!canWarmEngine()) return Promise.resolve(null);
+  if (!warmEnginePromise) {
+    warmEnginePromise = getConverter(options).catch((err) => {
+      console.warn('[libreofficeWasm] warmEngine failed:', err);
+      warmEnginePromise = null;
+      throw err;
+    });
+  }
+  return warmEnginePromise;
+}
+
+/**
  * Lazy loads and initializes the LibreOffice WASM converter singleton.
  * Engine assets load ONLY when this function is invoked.
  * @param {object} [options]
  * @param {boolean} [options.needsCjk=false] Whether CJK font pack (/assets/fonts-cjk-min.zip) is required
- * @param {(progress: { percent: number, message: string }) => void} [options.onProgress]
+ * @param {(progress: { percent: number, message: string, phase?: string, bytesLoaded?: number, bytesTotal?: number, speedMBs?: number }) => void} [options.onProgress]
  */
 export async function getConverter(options = {}) {
   // Support either getConverter(onProgress) or getConverter({ needsCjk, onProgress })
@@ -62,7 +91,7 @@ export async function getConverter(options = {}) {
   if (converterSingleton) {
     if (needsCjk && !converterLoadedCjk) {
       // Re-initialize converter to inject CJK fonts into LibreOffice WASM virtual filesystem
-      onProgress?.({ percent: 5, message: 'Re-initializing engine with CJK font support...' });
+      onProgress?.({ percent: 5, message: 'Re-initializing engine with CJK font support...', phase: 'starting' });
       try {
         await converterSingleton.destroy?.();
       } catch (err) {
@@ -70,8 +99,21 @@ export async function getConverter(options = {}) {
       }
       converterSingleton = null;
       converterLoadedCjk = false;
+      warmEnginePromise = null;
     } else {
       return converterSingleton;
+    }
+  }
+
+  // If warmEngine is in-flight, await it while forwarding progress
+  if (warmEnginePromise) {
+    try {
+      const activeConverter = await warmEnginePromise;
+      if (activeConverter && (!needsCjk || converterLoadedCjk)) {
+        return activeConverter;
+      }
+    } catch {
+      warmEnginePromise = null;
     }
   }
 
@@ -81,13 +123,22 @@ export async function getConverter(options = {}) {
     );
   }
 
-  onProgress?.({ percent: 5, message: 'Loading LibreOffice WASM engine modules...' });
+  const cached = await isWasmEngineCached();
+  onProgress?.({
+    percent: 5,
+    message: cached ? 'Loading engine from local cache...' : 'Initializing download...',
+    phase: cached ? 'starting' : 'downloading',
+  });
 
   const { WorkerBrowserConverter, createWasmPaths, loadFontsFromUrl } = await import(
     '@matbee/libreoffice-converter/browser'
   );
 
-  onProgress?.({ percent: 12, message: 'Loading core typography fonts...' });
+  onProgress?.({
+    percent: 10,
+    message: 'Loading core typography fonts...',
+    phase: cached ? 'starting' : 'downloading',
+  });
 
   let fonts = [];
   try {
@@ -97,7 +148,11 @@ export async function getConverter(options = {}) {
   }
 
   if (needsCjk) {
-    onProgress?.({ percent: 20, message: 'Downloading font pack (~13 MB, cached for next time)...' });
+    onProgress?.({
+      percent: 15,
+      message: 'Downloading CJK font pack (~13 MB, cached for next time)...',
+      phase: cached ? 'starting' : 'downloading',
+    });
     try {
       const cjkFonts = await loadFontsFromUrl('/assets/fonts-cjk-min.zip');
       if (Array.isArray(cjkFonts)) {
@@ -111,21 +166,33 @@ export async function getConverter(options = {}) {
     converterLoadedCjk = false;
   }
 
-  onProgress?.({ percent: 25, message: 'Initializing LibreOffice WebAssembly worker...' });
+  onProgress?.({
+    percent: 20,
+    message: cached ? 'Loading cached engine into memory...' : 'Connecting to engine worker...',
+    phase: cached ? 'starting' : 'downloading',
+  });
 
-  const wasmPaths = createWasmPaths('/wasm/');
+  const wasmPaths = createWasmPaths('/dist/');
   const converter = new WorkerBrowserConverter({
     ...wasmPaths,
     browserWorkerJs: '/dist/browser.worker.js',
     fonts,
     onProgress: (progressInfo) => {
       if (progressInfo && typeof progressInfo === 'object') {
-        const pct = progressInfo.percent || 30;
+        const pct = progressInfo.percent || 20;
         let msg = progressInfo.message || 'Loading engine files...';
-        if (msg.includes('Compiling WebAssembly module')) {
-          msg = 'Compiling WebAssembly module into browser memory (first load ~30-60s)...';
+        let phase = 'downloading';
+        if (pct >= 80 && pct < 90) {
+          phase = 'starting';
+          msg = 'Starting engine...';
+        } else if (pct >= 90) {
+          phase = 'converting';
         }
-        onProgress?.({ percent: Math.min(Math.max(pct, 25), 90), message: msg });
+        onProgress?.({
+          percent: pct,
+          message: msg,
+          phase,
+        });
       }
     },
   });
@@ -136,7 +203,7 @@ export async function getConverter(options = {}) {
     localStorage.setItem('pdfforge_wasm_engine_cached', 'true');
   }
 
-  onProgress?.({ percent: 100, message: 'Engine ready.' });
+  onProgress?.({ percent: 90, message: 'Engine ready.', phase: 'starting' });
   return converterSingleton;
 }
 
@@ -163,10 +230,9 @@ export async function docxToPdfAccurate(file, onProgress, options = {}) {
 
   // Ensure conversions run serially through a queue to prevent WASM thread collisions
   const runConversion = async () => {
-    onProgress?.({ percent: 10, message: 'Preparing document in memory...' });
     const converter = await getConverter({ needsCjk, onProgress });
 
-    onProgress?.({ percent: 92, message: 'Converting document layout via LibreOffice...' });
+    onProgress?.({ percent: 92, message: 'Converting document layout via LibreOffice...', phase: 'converting' });
     const arrayBuffer = await file.arrayBuffer();
     const uint8Array = new Uint8Array(arrayBuffer);
 
@@ -183,7 +249,7 @@ export async function docxToPdfAccurate(file, onProgress, options = {}) {
       throw new Error('LibreOffice WASM engine produced an empty output.');
     }
 
-    onProgress?.({ percent: 100, message: 'Document converted successfully.' });
+    onProgress?.({ percent: 100, message: 'Document converted successfully.', phase: 'complete' });
     return new Blob([result.data], { type: 'application/pdf' });
   };
 

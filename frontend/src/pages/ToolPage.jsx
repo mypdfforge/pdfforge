@@ -17,7 +17,7 @@ import {
 } from '../utils/convertClient'
 import JSZip from 'jszip'
 import { inspectWordDocument, evaluatePreselection } from '../utils/wordInspection'
-import { docxToPdfAccurate, isWasmEngineCached, isCrossOriginIsolated } from '../utils/libreofficeWasm'
+import { docxToPdfAccurate, isWasmEngineCached, isCrossOriginIsolated, warmEngine, canWarmEngine } from '../utils/libreofficeWasm'
 import axios from 'axios'
 import { clientImagesToPdf, applyPageModifications, clientOrganize, pageSelected } from '../utils/editClient'
 
@@ -436,6 +436,11 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
         })
         setWordMode(routing.recommendedMode)
         setWordRouteReason(routing.reason)
+
+        // Early start warming if user selected a docx file and (toggled Accurate or Quick parser flagged complex content)
+        if (canWarmEngine() && (routing.recommendedMode === 'accurate' || result.blockers.length > 0)) {
+          warmEngine({ needsCjk: !!result.hasCjk })
+        }
       } catch (err) {
         console.warn('[ToolPage] Word docx inspection failed:', err)
       }
@@ -506,9 +511,17 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
           if (p && typeof p === 'object') {
             let label = p.message || 'Converting via LibreOffice WASM…'
             if (isEngineCached && (p.message?.includes('download') || p.message?.includes('Downloading'))) {
-              label = 'You already have the engine. Starting conversion…'
+              label = 'Loading engine from local cache…'
             }
-            setProgress({ current: p.percent || 0, total: 100, label })
+            setProgress({
+              current: p.percent || 0,
+              total: 100,
+              label,
+              phase: p.phase,
+              bytesLoaded: p.bytesLoaded,
+              bytesTotal: p.bytesTotal,
+              speedMBs: p.speedMBs,
+            })
           }
         }
         const blob = await docxToPdfAccurate(files[0], onP, { needsCjk: wordHasCjk })
@@ -960,18 +973,48 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
             </div>
           )}
           {status==='error' && (
-            <div style={{ display:'flex', alignItems:'center', gap:'8px', background:'rgba(229,72,77,0.08)', border:'1px solid rgba(229,72,77,0.25)', borderRadius:'8px', padding:'10px 14px', fontSize:'13px', color:'var(--red)' }}>
-              <AlertCircle size={13}/> {errMsg}
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'8px', background:'rgba(229,72,77,0.08)', border:'1px solid rgba(229,72,77,0.25)', borderRadius:'8px', padding:'10px 14px', fontSize:'13px', color:'var(--red)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                <AlertCircle size={15}/> <span>{errMsg}</span>
+              </div>
+              {toolId === 'word-to-pdf' && (
+                <button
+                  type="button"
+                  onClick={() => runWithMode(wordMode)}
+                  style={{
+                    background:'var(--red)',
+                    color:'#fff',
+                    border:'none',
+                    borderRadius:'6px',
+                    padding:'4px 12px',
+                    fontSize:'12px',
+                    fontWeight:600,
+                    cursor:'pointer',
+                    flexShrink:0
+                  }}
+                >
+                  Retry
+                </button>
+              )}
             </div>
           )}
           {progress && (
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'8px', padding:'12px' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-                <span style={{ fontSize:'12px', color:'var(--text2)', fontWeight:600, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', paddingRight:'8px' }}>{progress.label || 'Processing…'}</span>
-                <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700, flexShrink:0 }}>{progress.total > 1 ? `${progress.current}/${progress.total}` : `${Math.round((progress.current/progress.total)*100)||0}%`}</span>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'6px' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:'8px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', paddingRight:'8px' }}>
+                  <span style={{ fontSize:'12px', color:'var(--text2)', fontWeight:600 }}>{progress.label || 'Processing…'}</span>
+                  {progress.speedMBs > 0 && (
+                    <span style={{ fontSize:'11px', color:'var(--text3)', background:'var(--bg3)', padding:'2px 6px', borderRadius:'4px' }}>
+                      {progress.speedMBs} MB/s
+                    </span>
+                  )}
+                </div>
+                <span style={{ fontSize:'12px', color:'var(--accent2)', fontWeight:700, flexShrink:0 }}>
+                  {progress.total > 1 ? `${progress.current}/${progress.total}` : `${Math.round((progress.current / (progress.total || 100)) * 100) || 0}%`}
+                </span>
               </div>
-              <div style={{ height:'5px', background:'var(--bg3)', borderRadius:'3px', overflow:'hidden' }}>
-                <div style={{ height:'100%', width:`${progress.total ? Math.round((progress.current/progress.total)*100) : 100}%`, background:'var(--accent)', borderRadius:'3px', transition:'width 0.3s ease'}}/>
+              <div style={{ height:'6px', background:'var(--bg3)', borderRadius:'3px', overflow:'hidden' }}>
+                <div style={{ height:'100%', width:`${progress.total ? Math.min(100, Math.round((progress.current / progress.total) * 100)) : 100}%`, background:'var(--accent)', borderRadius:'3px', transition:'width 0.25s ease'}}/>
               </div>
             </div>
           )}
@@ -1023,7 +1066,13 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                 {/* 2. Accurate Convert Button */}
                 <button
                   type="button"
-                  onClick={() => { setWordMode('accurate'); runWithMode('accurate') }}
+                  onClick={() => {
+                    setWordMode('accurate')
+                    if (canWarmEngine()) {
+                      warmEngine({ needsCjk: wordHasCjk })
+                    }
+                    runWithMode('accurate')
+                  }}
                   disabled={!files.length || status === 'loading' || !isIsolated}
                   style={{
                     padding:'16px 14px',
@@ -1050,13 +1099,13 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                   </div>
                   <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                     <span style={{ fontSize:'11px', fontWeight:600, color: !isIsolated ? 'var(--red)' : isEngineCached ? 'var(--green)' : 'var(--accent2)' }}>
-                      {!isIsolated ? 'Unavailable (headers not isolated)' : isEngineCached ? '✓ Ready (Engine cached)' : '● Download engine (~240MB)'}
+                      {!isIsolated ? 'Unavailable (headers not isolated)' : isEngineCached ? '✓ Ready (Engine cached)' : '● Fast download (~54MB Brotli)'}
                     </span>
                   </div>
                   <p style={{ margin:0, fontSize:'11.5px', color:'var(--text3)', lineHeight:1.45 }}>
                     {isEngineCached
                       ? 'Engine cached in browser. Converts directly on-device with exact Word layout.'
-                      : 'Exact Word layout. First use downloads the engine (~240MB), cached after. Works offline.'}
+                      : 'Exact Word layout. First use downloads engine (~54MB compressed), cached permanently. Works offline.'}
                   </p>
                 </button>
               </div>

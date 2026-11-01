@@ -33,15 +33,221 @@ if (fs.existsSync(wasmSrcDir)) {
   console.warn(`  ⚠ ${wasmSrcDir} not found. Is @matbee/libreoffice-converter installed?`)
 }
 
-// 2. Copy browser worker
+// 2. Copy and patch browser worker
 const distSrcDir = path.join(nodeModulesPkg, 'dist')
 const workerSrc = path.join(distSrcDir, 'browser.worker.global.js')
 if (fs.existsSync(workerSrc)) {
+  let workerContent = fs.readFileSync(workerSrc, 'utf8')
+  
+  const startNeedle = 'self.Module={mainScriptUrlOrBlob:e'
+  const endNeedle = 'self.Module&&self.Module.calledRun?a():h();})'
+  
+  if (!workerContent.includes(startNeedle) || !workerContent.includes(endNeedle)) {
+    throw new Error(`[setup-libreoffice-assets] Assertion failed: target Module initialization pattern not found in ${workerSrc}`)
+  }
+  
+  const startIdx = workerContent.indexOf(startNeedle)
+  const endIdx = workerContent.indexOf(endNeedle, startIdx) + endNeedle.length
+  
+  const patchedBlock = `/* [PARALLEL BROTLI LOADER START] */
+let compiledWasmModule = null;
+let dataBlobUrl = null;
+let dataBuffer = null;
+let manifest = null;
+let version = 'default';
+let cacheName = 'soffice-default';
+
+try {
+  const baseDir = e.substring(0, e.lastIndexOf('/') + 1);
+  const manifestUrl = \`\${baseDir}engine-manifest.json?v=\${Date.now()}\`;
+  const mRes = await fetch(manifestUrl, { cache: 'no-store' }).catch(() => null);
+  if (mRes && mRes.ok) {
+    manifest = await mRes.json();
+    version = manifest.version || 'v1';
+    cacheName = \`soffice-\${version}\`;
+  }
+} catch (mErr) {
+  console.warn('[Worker] Manifest fetch error, fallback to stock loader:', mErr);
+}
+
+if (manifest && manifest.files && manifest.files['soffice.wasm'] && manifest.files['soffice.data']) {
+  console.log('[Worker] Fast Brotli loader active. Engine version:', version);
+  const wasmInfo = manifest.files['soffice.wasm'];
+  const dataInfo = manifest.files['soffice.data'];
+  const totalDecodedBytes = wasmInfo.decodedBytes + dataInfo.decodedBytes;
+  
+  let wasmRead = 0;
+  let dataRead = 0;
+  let lastReport = 0;
+  let tStart = Date.now();
+  
+  const reportProgress = () => {
+    const now = Date.now();
+    if (now - lastReport < 75) return;
+    lastReport = now;
+    const totalRead = wasmRead + dataRead;
+    const pct = Math.min(80, Math.round((totalRead / totalDecodedBytes) * 80));
+    const elapsedSec = (now - tStart) / 1000;
+    const speed = elapsedSec > 0.3 ? (totalRead / 1024 / 1024 / elapsedSec).toFixed(2) : '0';
+    y({
+      type: 'progress',
+      id: l.id,
+      progress: {
+        percent: pct,
+        message: \`Downloading engine... (\${(totalRead / 1024 / 1024).toFixed(1)} / \${(totalDecodedBytes / 1024 / 1024).toFixed(1)} MB)\`,
+        phase: 'downloading',
+        bytesLoaded: totalRead,
+        bytesTotal: totalDecodedBytes,
+        speedMBs: parseFloat(speed)
+      }
+    });
+  };
+
+  const cache = (typeof caches !== 'undefined') ? await caches.open(cacheName).catch(() => null) : null;
+  const baseDir = e.substring(0, e.lastIndexOf('/') + 1);
+  const wasmUrl = \`\${baseDir}soffice.wasm.br?v=\${version}\`;
+  const dataUrl = \`\${baseDir}soffice.data.br?v=\${version}\`;
+
+  const fetchWithProgress = async (url, onBytes) => {
+    let res = cache ? await cache.match(url).catch(() => null) : null;
+    let isFromCache = false;
+    if (res) {
+      isFromCache = true;
+    } else {
+      res = await fetch(url);
+      if (!res.ok) throw new Error(\`HTTP \${res.status} fetching \${url}\`);
+      if (cache) {
+        cache.put(url, res.clone()).catch(err => console.warn('[Worker] Cache put failed:', err));
+      }
+    }
+
+    const reader = res.body.getReader();
+    const countedStream = new ReadableStream({
+      async start(controller) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            break;
+          }
+          onBytes(value.byteLength);
+          controller.enqueue(value);
+        }
+      }
+    });
+
+    return { stream: countedStream, isFromCache };
+  };
+
+  const wasmPromise = (async () => {
+    const { stream } = await fetchWithProgress(wasmUrl, (bytes) => {
+      wasmRead += bytes;
+      reportProgress();
+    });
+    return WebAssembly.compileStreaming(new Response(stream, {
+      headers: { 'Content-Type': 'application/wasm' }
+    }));
+  })();
+
+  const dataPromise = (async () => {
+    const { stream } = await fetchWithProgress(dataUrl, (bytes) => {
+      dataRead += bytes;
+      reportProgress();
+    });
+    const buf = await new Response(stream).arrayBuffer();
+    dataBuffer = buf;
+    const blob = new Blob([buf], { type: 'application/octet-stream' });
+    dataBlobUrl = URL.createObjectURL(blob);
+    return buf;
+  })();
+
+  try {
+    [compiledWasmModule] = await Promise.all([wasmPromise, dataPromise]);
+    console.log('[Worker] Fast Brotli download + compile streaming complete');
+    y({
+      type: 'progress',
+      id: l.id,
+      progress: {
+        percent: 80,
+        message: 'Starting engine...',
+        phase: 'starting'
+      }
+    });
+  } catch (dlErr) {
+    console.warn('[Worker] Fast Brotli download failed, falling back:', dlErr);
+  }
+}
+
+self.Module = {
+  mainScriptUrlOrBlob: e,
+  ...(compiledWasmModule ? {
+    instantiateWasm: (info, receiveInstance) => {
+      WebAssembly.instantiate(compiledWasmModule, info).then((instance) => {
+        receiveInstance(instance, compiledWasmModule);
+      }).catch((instErr) => {
+        console.error('[Worker] instantiateWasm error:', instErr);
+      });
+      return {};
+    },
+    getPreloadedPackage: (remotePackageName, remotePackageSize) => {
+      return dataBuffer;
+    }
+  } : {}),
+  locateFile: (a, d) => {
+    let h;
+    if (a.endsWith('.wasm')) h = t;
+    else if (a.endsWith('.data')) h = dataBlobUrl || r;
+    else if (a.includes('.worker.')) h = n;
+    else h = \`\${e.substring(0, e.lastIndexOf('/') + 1)}\${a}\`;
+    console.log('[Worker] locateFile called:', a, 'scriptDir:', d, '-> result:', h);
+    return h;
+  },
+  print: console.log,
+  printErr: console.error
+};
+
+importScripts(e);
+B('compile', 'Compiling WebAssembly module...');
+
+// 90s startup timeout ONLY after download/compile finishes
+await new Promise((a, d) => {
+  const timeoutId = setTimeout(() => d(new Error('Engine startup timed out after 90s')), 90000);
+  let h = () => {
+    if (self.Module && self.Module.calledRun) {
+      clearTimeout(timeoutId);
+      a();
+    } else if (self.Module?.onRuntimeInitialized) {
+      let m = self.Module.onRuntimeInitialized;
+      self.Module.onRuntimeInitialized = () => {
+        clearTimeout(timeoutId);
+        m?.();
+        a();
+      };
+    } else {
+      setTimeout(h, 50);
+    }
+  };
+  self.Module && self.Module.calledRun ? (clearTimeout(timeoutId), a()) : h();
+});
+
+if (typeof caches !== 'undefined' && cacheName) {
+  caches.keys().then((keys) => {
+    for (const key of keys) {
+      if (key.startsWith('soffice-') && key !== cacheName) {
+        caches.delete(key).catch(() => {});
+      }
+    }
+  }).catch(() => {});
+}
+/* [PARALLEL BROTLI LOADER END] */`
+
+  workerContent = workerContent.slice(0, startIdx) + patchedBlock + workerContent.slice(endIdx)
+
   const destWorker = path.join(publicDistDir, 'browser.worker.js')
   const destWorkerGlobal = path.join(publicDistDir, 'browser.worker.global.js')
-  fs.copyFileSync(workerSrc, destWorker)
-  fs.copyFileSync(workerSrc, destWorkerGlobal)
-  console.log('  ✓ /public/dist/browser.worker.js')
+  fs.writeFileSync(destWorker, workerContent)
+  fs.writeFileSync(destWorkerGlobal, workerContent)
+  console.log('  ✓ /public/dist/browser.worker.js (patched with Parallel Brotli Loader & 90s post-download timeout)')
 } else {
   console.warn(`  ⚠ ${workerSrc} not found.`)
 }

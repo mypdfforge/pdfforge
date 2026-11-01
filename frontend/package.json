@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/setup-libreoffice-assets.mjs && node scripts/compress-engine.mjs && vite build",
     "test": "node --test src/editor/__tests__/*.test.ts",
     "typecheck": "tsc -p src/editor/tsconfig.json",
     "postinstall": "node scripts/setup-libreoffice-assets.mjs",
