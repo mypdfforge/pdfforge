@@ -51,7 +51,11 @@ function deduplicateOverlappingText(items) {
 async function extractPage(page, boldFonts) {
   const { OPS, Util } = pdfjs()
   const vp = page.getViewport({ scale: 1 })
-  const [tc, ol] = await Promise.all([page.getTextContent(), page.getOperatorList()])
+  const [tc, ol, annos] = await Promise.all([
+    page.getTextContent(),
+    page.getOperatorList(),
+    page.getAnnotations ? page.getAnnotations({ intent: 'display' }).catch(() => []) : Promise.resolve([])
+  ])
 
   const fontCache = {}
   const fontOf = (name) => {
@@ -83,6 +87,35 @@ async function extractPage(page, boldFonts) {
       top: m[5] - size * 0.8, bot: m[5] + size * 0.2,
       bold: f.bold, italic: f.italic, font: f.name,
     })
+  }
+
+  // Extract interactive form field values (AcroForms) if present
+  if (Array.isArray(annos)) {
+    for (const anno of annos) {
+      const val = anno.fieldValue ?? anno.buttonValue ?? anno.contents
+      if (!val || typeof val !== 'string' || !val.trim()) continue
+      if (!anno.rect || anno.rect.length < 4) continue
+      try {
+        const rect = vp.convertToViewportRectangle(anno.rect)
+        const x = Math.min(rect[0], rect[2])
+        const w = Math.abs(rect[2] - rect[0])
+        const top = Math.min(rect[1], rect[3])
+        const bot = Math.max(rect[1], rect[3])
+        const size = Math.max(bot - top - 4, 10)
+        rawItems.push({
+          str: val.trim(),
+          x,
+          w,
+          base: bot - 2,
+          size,
+          top,
+          bot,
+          bold: false,
+          italic: false,
+          font: 'Calibri',
+        })
+      } catch (_) {}
+    }
   }
 
   const items = deduplicateOverlappingText(rawItems)
@@ -132,8 +165,72 @@ async function extractPage(page, boldFonts) {
       case OPS.restore: if (stack.length) ({ ctm, fill, stroke, lw } = stack.pop()); break
       case OPS.transform: ctm = Util.transform(ctm, a); break
       case OPS.setLineWidth: lw = a[0]; break
-      case OPS.setFillRGBColor: fill = [a[0], a[1], a[2]]; break
-      case OPS.setStrokeRGBColor: stroke = [a[0], a[1], a[2]]; break
+      case OPS.setFillRGBColor: {
+        const sc = a[0] <= 1 && a[1] <= 1 && a[2] <= 1 && (a[0] > 0 || a[1] > 0 || a[2] > 0) ? 255 : 1
+        fill = [Math.round(a[0] * sc), Math.round(a[1] * sc), Math.round(a[2] * sc)]
+        break
+      }
+      case OPS.setStrokeRGBColor: {
+        const sc = a[0] <= 1 && a[1] <= 1 && a[2] <= 1 && (a[0] > 0 || a[1] > 0 || a[2] > 0) ? 255 : 1
+        stroke = [Math.round(a[0] * sc), Math.round(a[1] * sc), Math.round(a[2] * sc)]
+        break
+      }
+      case OPS.setFillGray: {
+        const g = a[0] <= 1 ? Math.round(a[0] * 255) : Math.round(a[0])
+        fill = [g, g, g]
+        break
+      }
+      case OPS.setStrokeGray: {
+        const g = a[0] <= 1 ? Math.round(a[0] * 255) : Math.round(a[0])
+        stroke = [g, g, g]
+        break
+      }
+      case OPS.setFillCMYKColor: {
+        const c = a[0] <= 1 ? a[0] : a[0] / 255
+        const m = a[1] <= 1 ? a[1] : a[1] / 255
+        const y = a[2] <= 1 ? a[2] : a[2] / 255
+        const k = a[3] <= 1 ? a[3] : a[3] / 255
+        fill = [
+          Math.round(255 * (1 - c) * (1 - k)),
+          Math.round(255 * (1 - m) * (1 - k)),
+          Math.round(255 * (1 - y) * (1 - k))
+        ]
+        break
+      }
+      case OPS.setStrokeCMYKColor: {
+        const c = a[0] <= 1 ? a[0] : a[0] / 255
+        const m = a[1] <= 1 ? a[1] : a[1] / 255
+        const y = a[2] <= 1 ? a[2] : a[2] / 255
+        const k = a[3] <= 1 ? a[3] : a[3] / 255
+        stroke = [
+          Math.round(255 * (1 - c) * (1 - k)),
+          Math.round(255 * (1 - m) * (1 - k)),
+          Math.round(255 * (1 - y) * (1 - k))
+        ]
+        break
+      }
+      case OPS.setFillColor:
+      case OPS.setFillColorN: {
+        if (a && a.length >= 3) {
+          const sc = a[0] <= 1 && a[1] <= 1 && a[2] <= 1 && (a[0] > 0 || a[1] > 0 || a[2] > 0) ? 255 : 1
+          fill = [Math.round(a[0] * sc), Math.round(a[1] * sc), Math.round(a[2] * sc)]
+        } else if (a && a.length === 1) {
+          const g = a[0] <= 1 ? Math.round(a[0] * 255) : Math.round(a[0])
+          fill = [g, g, g]
+        }
+        break
+      }
+      case OPS.setStrokeColor:
+      case OPS.setStrokeColorN: {
+        if (a && a.length >= 3) {
+          const sc = a[0] <= 1 && a[1] <= 1 && a[2] <= 1 && (a[0] > 0 || a[1] > 0 || a[2] > 0) ? 255 : 1
+          stroke = [Math.round(a[0] * sc), Math.round(a[1] * sc), Math.round(a[2] * sc)]
+        } else if (a && a.length === 1) {
+          const g = a[0] <= 1 ? Math.round(a[0] * 255) : Math.round(a[0])
+          stroke = [g, g, g]
+        }
+        break
+      }
       case OPS.constructPath: {
         const [ops, pts] = a
         const segs = [], rs = []
@@ -337,8 +434,12 @@ async function pageToBlocks(page, opts, boldFonts) {
     const t = tables.find((t) => cx >= t.left - 1 && cx <= t.right + 1 && cy >= t.top - 1 && cy <= t.bottom + 1)
     if (!t) { free.push(it); continue }
     const k = t.cells.find((k) => cx >= k.l - 1.5 && cx <= k.r + 1.5 && cy >= k.t - 1.5 && cy <= k.b + 1.5) ||
-      t.cells.find((k) => k.r0 === findIdx(t.ys, cy) && k.r1 >= findIdx(t.ys, cy) && k.c0 <= findIdx(t.xs, cx) && k.c1 >= findIdx(t.xs, cx))
-    if (k) (k.items ||= []).push(it)
+      t.cells.find((k) => k.r0 <= findIdx(t.ys, cy) && k.r1 >= findIdx(t.ys, cy) && k.c0 <= findIdx(t.xs, cx) && k.c1 >= findIdx(t.xs, cx))
+    if (k) {
+      (k.items ||= []).push(it)
+    } else {
+      free.push(it)
+    }
   }
   for (const t of tables) for (const k of t.cells) {
     k.fill = null
@@ -362,7 +463,7 @@ async function pageToBlocks(page, opts, boldFonts) {
     blocks.push({ type: 'line', top: l.base - size * 0.8, size, segs })
   }
   blocks.sort((a, b) => a.top - b.top)
-  return { blocks, W: ex.W, H: ex.H, tableCount: tables.length }
+  return { blocks, W: ex.W, H: ex.H, tableCount: tables.length, itemsCount: items.length }
 }
 
 // stream-mode columns (no ruled tables): gaps in the union of segment x-intervals
@@ -540,9 +641,16 @@ export async function pdfToExcel(file, onProgress, options = {}) {
   const wb = new ExcelJS.Workbook()
   const pages = []
 
+  let totalTextItems = 0
   for (let i = 1; i <= pdf.numPages; i++) {
     onProgress?.({ done: i, total: pdf.numPages, label: `Extracting table from page ${i} of ${pdf.numPages}…` })
-    pages.push(await pageToBlocks(await pdf.getPage(i), options, boldFonts))
+    const pageData = await pageToBlocks(await pdf.getPage(i), options, boldFonts)
+    totalTextItems += (pageData.itemsCount || 0)
+    pages.push(pageData)
+  }
+
+  if (totalTextItems === 0) {
+    throw new Error('No selectable text was found in this PDF. It appears to be a scanned document or image. Please use the OCR tool first to make the text selectable.')
   }
 
   const groups = options.singleSheet ? [pages] : pages.map((p) => [p])

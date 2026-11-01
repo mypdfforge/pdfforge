@@ -66,6 +66,9 @@ console.log(`  soffice.data: ${(dataBuf.length / 1024 / 1024).toFixed(2)} MB`);
 const sha256 = crypto.createHash('sha256');
 sha256.update(wasmBuf);
 sha256.update(dataBuf);
+// Include the patched worker: a loader change must bump the version, or browsers keep the old worker (cached by ?v=).
+const workerFile = path.join(publicDistDir, 'browser.worker.js');
+if (fs.existsSync(workerFile)) sha256.update(fs.readFileSync(workerFile));
 const version = sha256.digest('hex').slice(0, 8);
 console.log(`[compress-engine] Engine version: ${version}`);
 
@@ -94,9 +97,11 @@ const dataBrPath = path.join(publicDistDir, 'soffice.data.br');
 fs.writeFileSync(dataBrPath, dataBr);
 console.log(`  ✓ soffice.data.br: ${(dataBr.length / 1024 / 1024).toFixed(2)} MB in ${((Date.now() - t0Data) / 1000).toFixed(1)}s`);
 
-// Also mirror to public/wasm for backwards compatibility
-fs.copyFileSync(wasmBrPath, path.join(publicWasmDir, 'soffice.wasm.br'));
-fs.copyFileSync(dataBrPath, path.join(publicWasmDir, 'soffice.data.br'));
+// Round-trip check: never ship a .br that does not decode back to the original
+if (zlib.brotliDecompressSync(wasmBr).length !== wasmBuf.length || zlib.brotliDecompressSync(dataBr).length !== dataBuf.length) {
+  console.error('[compress-engine] FATAL: Brotli round-trip size mismatch.');
+  process.exit(1);
+}
 
 const manifest = {
   version,
@@ -114,7 +119,6 @@ const manifest = {
 
 const manifestPath = path.join(publicDistDir, 'engine-manifest.json');
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-fs.copyFileSync(manifestPath, path.join(publicWasmDir, 'engine-manifest.json'));
 
 console.log(`  ✓ engine-manifest.json written (version: ${version})`);
 console.log(`[compress-engine] Total compressed payload: ${((wasmBr.length + dataBr.length) / 1024 / 1024).toFixed(2)} MB (down from ${((wasmBuf.length + dataBuf.length) / 1024 / 1024).toFixed(2)} MB)`);
