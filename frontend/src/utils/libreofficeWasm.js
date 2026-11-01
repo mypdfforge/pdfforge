@@ -172,7 +172,8 @@ export async function getConverter(options = {}) {
     phase: cached ? 'starting' : 'downloading',
   });
 
-  const wasmPaths = createWasmPaths('/dist/');
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const wasmPaths = createWasmPaths(`${origin}/dist/`);
   const converter = new WorkerBrowserConverter({
     ...wasmPaths,
     browserWorkerJs: '/dist/browser.worker.js',

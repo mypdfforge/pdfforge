@@ -57,9 +57,16 @@ let manifest = null;
 let version = 'default';
 let cacheName = 'soffice-default';
 
+let baseUrl;
 try {
-  const baseDir = e.substring(0, e.lastIndexOf('/') + 1);
-  const manifestUrl = \`\${baseDir}engine-manifest.json?v=\${Date.now()}\`;
+  baseUrl = new URL(e, (self.location && self.location.origin && self.location.origin !== 'null') ? self.location.origin : 'https://pdfforge-kappa.vercel.app');
+} catch {
+  baseUrl = new URL(e, 'https://pdfforge-kappa.vercel.app');
+}
+const baseDir = baseUrl.href.substring(0, baseUrl.href.lastIndexOf('/') + 1);
+const manifestUrl = new URL(\`engine-manifest.json?v=\${Date.now()}\`, baseDir).href;
+
+try {
   const mRes = await fetch(manifestUrl, { cache: 'no-store' }).catch(() => null);
   if (mRes && mRes.ok) {
     manifest = await mRes.json();
@@ -104,9 +111,8 @@ if (manifest && manifest.files && manifest.files['soffice.wasm'] && manifest.fil
   };
 
   const cache = (typeof caches !== 'undefined') ? await caches.open(cacheName).catch(() => null) : null;
-  const baseDir = e.substring(0, e.lastIndexOf('/') + 1);
-  const wasmUrl = \`\${baseDir}soffice.wasm.br?v=\${version}\`;
-  const dataUrl = \`\${baseDir}soffice.data.br?v=\${version}\`;
+  const wasmUrl = new URL(\`soffice.wasm.br?v=\${version}\`, baseDir).href;
+  const dataUrl = new URL(\`soffice.data.br?v=\${version}\`, baseDir).href;
 
   const fetchWithProgress = async (url, onBytes) => {
     let res = cache ? await cache.match(url).catch(() => null) : null;
