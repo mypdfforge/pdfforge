@@ -19,6 +19,7 @@ const STANDALONE = {
   ocr:       lazy(() => import('./pages/OCRToolPage')),
   translate: lazy(() => import('./pages/TranslateToolPage')),
   redact:    lazy(() => import('./pages/RedactToolPage')),
+  'html-to-pdf': lazy(() => import('./pages/HtmlToPdfPage')),
 }
 const GenericTool = lazy(() => import('./pages/ToolPage'))
 

@@ -1483,31 +1483,90 @@ export async function xlsxToPdf(file, onProgress) {
 //      → no network leakage), capture A4-height slices with html2canvas.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function htmlToPdf(file, onProgress) {
+export async function htmlToPdf(fileOrHtml, onProgress, options = {}) {
+  const {
+    viewportWidth = 794,
+    orientation = 'portrait', // 'portrait' | 'landscape'
+    format = 'a4',            // 'a4' | 'letter' | 'legal' | 'single'
+    margin = 0,               // mm
+    mediaType = 'screen',     // 'screen' | 'print'
+    baseUrl = '',
+  } = options
+
   const [jsPDF, h2c] = await Promise.all([loadJsPDF(), loadHtml2Canvas()])
 
-  const htmlText = await toText(file)
+  const htmlText = typeof fileOrHtml === 'string'
+    ? fileOrHtml
+    : await toText(fileOrHtml)
 
-  // Inject CSS reset + page-width constraint into the HTML
-  const safeHtml = htmlText.replace(
-    /(<head[^>]*>)/i,
-    `$1<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data:; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none';">
-    <style>
-      html,body{margin:0;padding:0;background:#fff;font-family:system-ui,Arial,sans-serif;}
-      *{max-width:100%;box-sizing:border-box;}
-      @media print{body{width:794px;}}
-      img{height:auto;}
-    </style>`
-  )
+  // Paper dimensions in mm
+  const PAPER_SIZES = {
+    a4:     { w: 210, h: 297 },
+    letter: { w: 215.9, h: 279.4 },
+    legal:  { w: 215.9, h: 355.6 },
+  }
+  const paper = PAPER_SIZES[format] || PAPER_SIZES.a4
+  const isLandscape = orientation === 'landscape'
+  const pageW_mm = isLandscape ? paper.h : paper.w
+  const pageH_mm = isLandscape ? paper.w : paper.h
+
+  const VP_W = Number(viewportWidth) || 794
+  // Proportional height in pixels matching paper aspect ratio
+  const VP_H = Math.round(VP_W * (pageH_mm / pageW_mm))
+  const MM_PER_PX = pageW_mm / VP_W
+
+  // Inject CSS reset + table border fix + page-width constraint
+  const resetCss = `
+    html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      background: #ffffff !important;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      width: ${VP_W}px !important;
+    }
+    * {
+      box-sizing: border-box !important;
+    }
+    /* Fix html2canvas table rowspan / border bug: separate + 0 spacing behaves like collapse without squashing cells */
+    table {
+      border-collapse: separate !important;
+      border-spacing: 0 !important;
+    }
+    th, td {
+      box-sizing: border-box !important;
+    }
+    @media print {
+      body { width: ${VP_W}px; }
+      .page:last-child { page-break-after: avoid !important; break-after: avoid !important; }
+    }
+    img {
+      max-width: 100%;
+      height: auto;
+    }
+  `
+
+  const metaCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: blob: https:; img-src 'self' data: blob: https:; font-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; connect-src 'none';">`
+  const baseTag = baseUrl ? `<base href="${baseUrl}">` : ''
+  const styleTag = `<style id="pdfforge-render-reset">${resetCss}</style>`
+
+  let safeHtml = htmlText
+  if (/<head[^>]*>/i.test(safeHtml)) {
+    safeHtml = safeHtml.replace(/(<head[^>]*>)/i, `$1${baseTag}${metaCsp}${styleTag}`)
+  } else if (/<html[^>]*>/i.test(safeHtml)) {
+    safeHtml = safeHtml.replace(/(<html[^>]*>)/i, `$1<head>${baseTag}${metaCsp}${styleTag}</head>`)
+  } else {
+    safeHtml = `<head>${baseTag}${metaCsp}${styleTag}</head>${safeHtml}`
+  }
 
   // Create a blob URL to avoid tainted canvas issues
   const blobUrl = URL.createObjectURL(new Blob([safeHtml], { type: 'text/html' }))
 
   const iframe = document.createElement('iframe')
   iframe.style.cssText = `
-    position:fixed; top:-9999px; left:-9999px;
-    width:794px; height:1123px; border:none;
-    visibility:hidden; pointer-events:none;
+    position: fixed; top: -9999px; left: -9999px;
+    width: ${VP_W}px; height: ${VP_H}px; border: none;
+    visibility: hidden; pointer-events: none;
   `
   // sandbox="allow-same-origin" → JS disabled, but styles and images from data-URIs work
   iframe.sandbox = 'allow-same-origin'
@@ -1518,45 +1577,173 @@ export async function htmlToPdf(file, onProgress) {
     iframe.src = blobUrl
   })
 
+  const iDoc = iframe.contentDocument
+  if (iDoc.fonts && iDoc.fonts.ready) {
+    try {
+      await iDoc.fonts.ready
+    } catch (_) {}
+  }
   // Wait an extra frame for paint
   await new Promise(r => setTimeout(r, 200))
 
-  const iDoc = iframe.contentDocument
-  const A4_PX_W = 794
-  const A4_PX_H = 1123
+  // Detect discrete page containers
+  const pageSelectors = [
+    '.page',
+    '[data-page]',
+    '.sheet',
+    '.pdf-page',
+    '.print-page',
+    'section.page',
+    '.document-page'
+  ]
+  let pageElements = Array.from(iDoc.querySelectorAll(pageSelectors.join(',')))
 
-  const body = iDoc.body || iDoc.documentElement
-  const totalHeight = Math.max(body.scrollHeight, body.offsetHeight)
-  const pageCount   = Math.ceil(totalHeight / A4_PX_H)
+  if (pageElements.length === 0) {
+    const blockCandidates = Array.from(iDoc.querySelectorAll('section, article, div'))
+    const breakBlocks = blockCandidates.filter(el => {
+      const style = iDoc.defaultView?.getComputedStyle(el) || {}
+      return style.pageBreakAfter === 'always' || style.breakAfter === 'page' ||
+             style.pageBreakBefore === 'always' || style.breakBefore === 'page'
+    })
+    if (breakBlocks.length > 1) {
+      pageElements = breakBlocks
+    }
+  }
 
-  const jspdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
-  const MM_PER_PX = 210 / A4_PX_W
+  const marginMm = Number(margin) || 0
+  const printW_mm = Math.max(10, pageW_mm - (marginMm * 2))
+  const printH_mm = Math.max(10, pageH_mm - (marginMm * 2))
 
-  for (let page = 0; page < pageCount; page++) {
+  let jspdf
+
+  // Case A: User selected Single Continuous Page (whole webpage on one long canvas)
+  if (format === 'single') {
+    const body = iDoc.body || iDoc.documentElement
+    const totalHeight = Math.max(body.scrollHeight, body.offsetHeight)
+    iframe.style.height = `${Math.max(VP_H, totalHeight)}px`
     await tick()
 
     const canvas = await h2c(iDoc.documentElement, {
-      scale: 1.5,
+      scale: 2,
       x: 0,
-      y: page * A4_PX_H,
-      width: A4_PX_W,
-      height: Math.min(A4_PX_H, totalHeight - page * A4_PX_H),
-      windowWidth: A4_PX_W,
-      windowHeight: A4_PX_H,
+      y: 0,
+      width: VP_W,
+      height: totalHeight,
+      windowWidth: VP_W,
+      windowHeight: totalHeight,
+      scrollX: 0,
+      scrollY: 0,
       backgroundColor: '#ffffff',
-      useCORS: false,
-      allowTaint: false,
+      useCORS: true,
+      allowTaint: true,
       logging: false,
-      foreignObjectRendering: false,  // more compat across browsers
+      foreignObjectRendering: false,
     })
 
-    if (page > 0) jspdf.addPage()
-    const imgData = canvas.toDataURL('image/jpeg', 0.92)
-    const sliceH  = (canvas.height / 1.5) * MM_PER_PX
-    jspdf.addImage(imgData, 'JPEG', 0, 0, 210, sliceH, undefined, 'FAST')
+    const totalHeightMm = (totalHeight / VP_W) * printW_mm + (marginMm * 2)
+    jspdf = new jsPDF({
+      unit: 'mm',
+      format: [pageW_mm, Math.max(50, totalHeightMm)],
+      orientation: isLandscape ? 'landscape' : 'portrait'
+    })
 
+    const imgData = canvas.toDataURL('image/jpeg', 0.95)
+    jspdf.addImage(imgData, 'JPEG', marginMm, marginMm, printW_mm, (totalHeight / VP_W) * printW_mm, undefined, 'FAST')
     canvas.width = 0; canvas.height = 0
-    onProgress?.({ done: page + 1, total: pageCount })
+    onProgress?.({ done: 1, total: 1 })
+  }
+  // Case B: Discrete page elements detected
+  else if (pageElements.length > 0) {
+    jspdf = new jsPDF({ unit: 'mm', format: [pageW_mm, pageH_mm], orientation: isLandscape ? 'landscape' : 'portrait' })
+    const totalPages = pageElements.length
+    const origDisplays = pageElements.map(el => el.style.display || '')
+
+    // Normalize each page element for exact capture
+    for (let i = 0; i < totalPages; i++) {
+      const el = pageElements[i]
+      el.style.margin = '0'
+      el.style.boxShadow = 'none'
+      el.style.width = `${VP_W}px`
+      el.style.minHeight = `${VP_H}px`
+      el.style.height = `${VP_H}px`
+      el.style.boxSizing = 'border-box'
+      el.style.position = 'relative'
+      el.style.overflow = 'hidden'
+      el.style.pageBreakAfter = 'avoid'
+      el.style.breakAfter = 'avoid'
+      el.style.display = 'none' // Isolate pages one-by-one to prevent offset drift and bleed
+    }
+
+    for (let i = 0; i < totalPages; i++) {
+      await tick()
+      const el = pageElements[i]
+      el.style.display = origDisplays[i] || 'block'
+
+      const canvas = await h2c(el, {
+        scale: 2,
+        width: VP_W,
+        height: VP_H,
+        windowWidth: VP_W,
+        windowHeight: VP_H,
+        scrollX: 0,
+        scrollY: 0,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        foreignObjectRendering: false,
+      })
+
+      el.style.display = 'none'
+
+      if (i > 0) jspdf.addPage([pageW_mm, pageH_mm], isLandscape ? 'landscape' : 'portrait')
+      const imgData = canvas.toDataURL('image/jpeg', 0.95)
+      jspdf.addImage(imgData, 'JPEG', marginMm, marginMm, printW_mm, printH_mm, undefined, 'FAST')
+
+      canvas.width = 0
+      canvas.height = 0
+      onProgress?.({ done: i + 1, total: totalPages })
+    }
+  } else {
+    // Case C: Fallback continuous document slicing
+    jspdf = new jsPDF({ unit: 'mm', format: [pageW_mm, pageH_mm], orientation: isLandscape ? 'landscape' : 'portrait' })
+    const body = iDoc.body || iDoc.documentElement
+    const totalHeight = Math.max(body.scrollHeight, body.offsetHeight)
+    // Subtract buffer to prevent subpixel rounding from spawning an empty trailing page
+    const pageCount = Math.max(1, Math.ceil((totalHeight - 6) / VP_H))
+
+    iframe.style.height = `${Math.max(VP_H, totalHeight)}px`
+
+    for (let page = 0; page < pageCount; page++) {
+      await tick()
+
+      const canvas = await h2c(iDoc.documentElement, {
+        scale: 2,
+        x: 0,
+        y: page * VP_H,
+        width: VP_W,
+        height: Math.min(VP_H, totalHeight - page * VP_H),
+        windowWidth: VP_W,
+        windowHeight: Math.max(VP_H, totalHeight),
+        scrollX: 0,
+        scrollY: 0,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        foreignObjectRendering: false,
+      })
+
+      if (page > 0) jspdf.addPage([pageW_mm, pageH_mm], isLandscape ? 'landscape' : 'portrait')
+      const imgData = canvas.toDataURL('image/jpeg', 0.95)
+      const sliceH_px = canvas.height / 2
+      const sliceH_mm = Math.min(printH_mm, (sliceH_px / VP_W) * printW_mm)
+      jspdf.addImage(imgData, 'JPEG', marginMm, marginMm, printW_mm, sliceH_mm, undefined, 'FAST')
+
+      canvas.width = 0
+      canvas.height = 0
+      onProgress?.({ done: page + 1, total: pageCount })
+    }
   }
 
   document.body.removeChild(iframe)
