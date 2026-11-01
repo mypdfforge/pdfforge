@@ -14,7 +14,19 @@ export default defineConfig({
       process.env.VITE_OCR_SPACE_API_KEY || ''
     )
   },
-  server: { proxy: { '/api': 'http://localhost:8000' } },
+  server: {
+    proxy: { '/api': 'http://localhost:8000' },
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
+  preview: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
   build: {
     chunkSizeWarningLimit: 700,
     rollupOptions: {

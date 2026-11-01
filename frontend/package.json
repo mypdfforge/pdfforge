@@ -7,11 +7,13 @@
     "build": "vite build",
     "test": "node --test src/editor/__tests__/*.test.ts",
     "typecheck": "tsc -p src/editor/tsconfig.json",
+    "postinstall": "node scripts/setup-libreoffice-assets.mjs",
     "test:e2e": "node e2e/build.mjs && node e2e/e2e.mjs",
     "fixtures": "python3 src/editor/__tests__/fixtures/make_fixtures.py"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
+    "@matbee/libreoffice-converter": "^2.7.2",
     "axios": "^1.7.2",
     "docx": "^9.12.0",
     "docx-preview": "^0.4.1",

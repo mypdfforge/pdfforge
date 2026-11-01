@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Loader2, CheckCircle, AlertCircle, Info, X, Download,
-         RotateCw, Trash2, Copy, ZoomIn, Undo2, FileText, ChevronUp, ChevronDown, Check, ChevronLeft, ChevronRight } from 'lucide-react'
+         RotateCw, Trash2, Copy, ZoomIn, Undo2, FileText, ChevronUp, ChevronDown, Check, ChevronLeft, ChevronRight, Zap } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import MergeToolPage from './MergeToolPage'
 import BatchToolPage from './BatchToolPage'
@@ -15,6 +15,9 @@ import {
   batchWordToPdf, batchPptxToPdf, batchXlsxToPdf, batchHtmlToPdf,
   batchPdfToWord, batchPdfToPptx, batchPdfToExcel, batchPdfToPdfa,
 } from '../utils/convertClient'
+import JSZip from 'jszip'
+import { inspectWordDocument, evaluatePreselection } from '../utils/wordInspection'
+import { docxToPdfAccurate, isWasmEngineCached, isCrossOriginIsolated } from '../utils/libreofficeWasm'
 import axios from 'axios'
 import { clientImagesToPdf, applyPageModifications, clientOrganize, pageSelected } from '../utils/editClient'
 
@@ -395,6 +398,52 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
   const [duplicatedAfter,setDuplicatedAfter]= useState({})  // { pageNum: count } — pages duplicated
   const [downloadResult, setDownloadResult] = useState(null) // { blob, name, originalSize }
 
+  // ── Word to PDF dual-mode state ──────────────────────────────────────────
+  const [wordMode, setWordMode] = useState('quick') // 'quick' | 'accurate'
+  const [wordBlockers, setWordBlockers] = useState([])
+  const [wordHasCjk, setWordHasCjk] = useState(false)
+  const [wordRouteReason, setWordRouteReason] = useState('')
+  const [isEngineCached, setIsEngineCached] = useState(false)
+  const [isIsolated, setIsIsolated] = useState(true)
+  const [lastConvertedMode, setLastConvertedMode] = useState(null)
+
+  // Auto-inspect Word documents for complex layout blockers
+  useEffect(() => {
+    if (toolId !== 'word-to-pdf' || !files.length) {
+      setWordBlockers([])
+      setWordHasCjk(false)
+      setWordRouteReason('')
+      return
+    }
+    let cancelled = false
+    const inspectDocx = async () => {
+      try {
+        const jszip = JSZip
+        const cached = await isWasmEngineCached()
+        const isolated = isCrossOriginIsolated()
+        if (cancelled) return
+        setIsEngineCached(cached)
+        setIsIsolated(isolated)
+
+        const result = await inspectWordDocument(files[0], jszip)
+        if (cancelled) return
+        setWordBlockers(result.blockers)
+        setWordHasCjk(!!result.hasCjk)
+        const routing = evaluatePreselection({
+          blockers: result.blockers,
+          isEngineCached: cached,
+          crossOriginIsolated: isolated,
+        })
+        setWordMode(routing.recommendedMode)
+        setWordRouteReason(routing.reason)
+      } catch (err) {
+        console.warn('[ToolPage] Word docx inspection failed:', err)
+      }
+    }
+    inspectDocx()
+    return () => { cancelled = true }
+  }, [toolId, files])
+
   const accept = cfg?.accept || {'application/pdf':['.pdf']}
   const onDrop = useCallback(a => {
     setFiles(prev => cfg?.multi ? [...prev,...a] : a)
@@ -439,8 +488,9 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
     }
   }, [])
 
-  const run = async () => {
+  const runWithMode = async (modeOverride) => {
     if (!files.length) return
+    const activeMode = modeOverride || (toolId === 'word-to-pdf' ? wordMode : 'quick')
     setStatus('loading'); setErrMsg(''); setProgress(null); setDownloadResult(null)
     try {
 
@@ -448,6 +498,32 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
       const resolveOut  = (val) => typeof val === 'function' ? val(files) : val
       const outFilename = resolveOut(cfg.out)
       const outMime     = resolveOut(cfg.mime) || 'application/pdf'
+      const originalSize = files.reduce((s, f) => s + (f?.size || 0), 0)
+
+      // ── Dedicated Accurate Mode via LibreOffice WASM ──
+      if (toolId === 'word-to-pdf' && activeMode === 'accurate') {
+        const onP = (p) => {
+          if (p && typeof p === 'object') {
+            setProgress({ current: p.percent || 0, total: 100, label: p.message || 'Converting via LibreOffice WASM…' })
+          }
+        }
+        const blob = await docxToPdfAccurate(files[0], onP, { needsCjk: wordHasCjk })
+        const url = URL.createObjectURL(blob)
+        const a   = document.createElement('a')
+        a.href = url; a.download = outFilename
+        document.body.appendChild(a); a.click()
+        document.body.removeChild(a)
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+        setIsEngineCached(true)
+        setLastConvertedMode('accurate')
+        setDownloadResult({ blob, name: outFilename, originalSize, fileCount: 1, errorCount: 0 })
+        setProgress(null)
+        setStatus('done')
+        return
+      }
+
+      setLastConvertedMode('quick')
 
       if (cfg.clientSide) {
         // ── Client-side tools (compress, repair, merge, split, convert…) ──
@@ -566,6 +642,8 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
     }
   }
 
+  const run = () => runWithMode()
+
   if (!cfg) return <div style={{ padding:'40px', color:'var(--red)' }}>Unknown tool: {toolId}</div>
 
   // ── Inline success panel shown after download ─────────────────
@@ -637,6 +715,35 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
                 Convert Another
               </button>
             </div>
+
+            {/* Word to PDF: Layout not exact? Try Accurate prompt */}
+            {toolId === 'word-to-pdf' && lastConvertedMode === 'quick' && files.length > 0 && (
+              <div style={{ marginTop:'20px', padding:'16px', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:'12px', textAlign:'center' }}>
+                {wordBlockers.length > 0 && (
+                  <div style={{ fontSize:'12px', color:'var(--amber)', background:'rgba(245,158,11,0.08)', border:'1px solid rgba(245,158,11,0.25)', borderRadius:'6px', padding:'6px 10px', marginBottom:'10px' }}>
+                    ⚠️ Notice: Layout may differ from Word (file contains: {wordBlockers.join(', ')}).
+                  </div>
+                )}
+                <div style={{ fontSize:'13px', fontWeight:700, color:'var(--text)', marginBottom:'3px' }}>
+                  Layout not exact? Try Accurate
+                </div>
+                <div style={{ fontSize:'11.5px', color:'var(--text3)', marginBottom:'12px' }}>
+                  Runs the full LibreOffice WASM engine inside your browser for 100% Word fidelity.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDownloadResult(null)
+                    setWordMode('accurate')
+                    runWithMode('accurate')
+                  }}
+                  disabled={!isIsolated}
+                  style={{ display:'inline-flex', alignItems:'center', gap:'6px', fontSize:'12.5px', fontWeight:600, color:'#fff', background:'var(--accent)', border:'none', borderRadius:'8px', padding:'8px 16px', cursor:isIsolated?'pointer':'not-allowed', opacity:isIsolated?1:0.5 }}
+                >
+                  <Zap size={14}/> Run Accurate Convert Now
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -864,14 +971,104 @@ function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCate
               </div>
             </div>
           )}
-          <button onClick={run} disabled={!files.length||status==='loading'}
-            style={{ width:'100%', padding:'11px', fontSize:'14px', fontWeight:600, borderRadius:'9px', border:'none',
-              cursor:!files.length?'not-allowed':'pointer', opacity:!files.length?0.45:1,
-              display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
-              background:status==='done'?'var(--green)':'var(--accent)', color:'#fff',
-              boxShadow:files.length?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
-            {status==='loading'?<><Loader2 size={14} className="spin"/>Processing…</>:status==='done'?<><CheckCircle size={14}/>Downloaded!</>:<><Upload size={14}/>{cfg.multi && files.length > 1 ? `Convert ${files.length} files` : cfg.title}</>}
-          </button>
+          {toolId === 'word-to-pdf' ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:'12px', marginTop:'6px' }}>
+              {wordRouteReason && (
+                <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'10px', padding:'10px 14px', fontSize:'12.5px', color:'var(--text2)', display:'flex', alignItems:'center', gap:'8px' }}>
+                  <Info size={15} color="var(--accent2)" style={{ flexShrink:0 }}/>
+                  <span>{wordRouteReason}</span>
+                </div>
+              )}
+
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+                {/* 1. Quick Convert Button */}
+                <button
+                  type="button"
+                  onClick={() => { setWordMode('quick'); runWithMode('quick') }}
+                  disabled={!files.length || status === 'loading'}
+                  style={{
+                    padding:'16px 14px',
+                    borderRadius:'12px',
+                    border: wordMode === 'quick' ? '2px solid var(--accent)' : '1px solid var(--border)',
+                    background: wordMode === 'quick' ? 'var(--bg2)' : 'var(--bg)',
+                    cursor: !files.length || status === 'loading' ? 'not-allowed' : 'pointer',
+                    opacity: !files.length ? 0.45 : 1,
+                    textAlign:'left',
+                    display:'flex',
+                    flexDirection:'column',
+                    gap:'6px',
+                    boxShadow: wordMode === 'quick' ? '0 2px 10px rgba(91,91,214,0.18)' : 'none',
+                    transition:'all 0.15s ease',
+                  }}
+                >
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%' }}>
+                    <span style={{ fontSize:'14.5px', fontWeight:700, color:'var(--text)' }}>
+                      ⚡ Quick convert
+                    </span>
+                    {wordMode === 'quick' && (
+                      <span style={{ fontSize:'10px', fontWeight:700, color:'var(--green)', background:'rgba(34,197,94,0.12)', border:'1px solid rgba(34,197,94,0.3)', borderRadius:'12px', padding:'2px 8px' }}>
+                        Selected
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ margin:0, fontSize:'11.5px', color:'var(--text3)', lineHeight:1.45 }}>
+                    Instant. Best for simple documents (resumes, letters, basic tables). Layout may differ on complex files.
+                  </p>
+                </button>
+
+                {/* 2. Accurate Convert Button */}
+                <button
+                  type="button"
+                  onClick={() => { setWordMode('accurate'); runWithMode('accurate') }}
+                  disabled={!files.length || status === 'loading' || !isIsolated}
+                  style={{
+                    padding:'16px 14px',
+                    borderRadius:'12px',
+                    border: wordMode === 'accurate' ? '2px solid var(--accent)' : '1px solid var(--border)',
+                    background: wordMode === 'accurate' ? 'var(--bg2)' : 'var(--bg)',
+                    cursor: !files.length || status === 'loading' || !isIsolated ? 'not-allowed' : 'pointer',
+                    opacity: !files.length || !isIsolated ? 0.45 : 1,
+                    textAlign:'left',
+                    display:'flex',
+                    flexDirection:'column',
+                    gap:'6px',
+                    boxShadow: wordMode === 'accurate' ? '0 2px 10px rgba(91,91,214,0.18)' : 'none',
+                    transition:'all 0.15s ease',
+                  }}
+                >
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%', gap:'6px' }}>
+                    <span style={{ fontSize:'14.5px', fontWeight:700, color:'var(--text)' }}>
+                      🎯 Accurate convert
+                    </span>
+                    <span style={{ fontSize:'10px', fontWeight:700, color:'var(--accent)', background:'rgba(91,91,214,0.12)', border:'1px solid rgba(91,91,214,0.3)', borderRadius:'12px', padding:'2px 8px', whiteSpace:'nowrap' }}>
+                      Recommended
+                    </span>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                    <span style={{ fontSize:'11px', fontWeight:600, color: !isIsolated ? 'var(--red)' : isEngineCached ? 'var(--green)' : 'var(--accent2)' }}>
+                      {!isIsolated ? 'Unavailable (headers not isolated)' : isEngineCached ? '● Ready (Engine cached)' : '● Download engine (~240MB)'}
+                    </span>
+                  </div>
+                  <p style={{ margin:0, fontSize:'11.5px', color:'var(--text3)', lineHeight:1.45 }}>
+                    Exact Word layout. First use downloads the engine (~240MB), cached after. Works offline.
+                  </p>
+                </button>
+              </div>
+
+              <div style={{ textAlign:'center', marginTop:'4px', fontSize:'11.5px', color:'var(--text3)' }}>
+                🔒 Files never leave your device. Works offline after first load.
+              </div>
+            </div>
+          ) : (
+            <button onClick={run} disabled={!files.length||status==='loading'}
+              style={{ width:'100%', padding:'11px', fontSize:'14px', fontWeight:600, borderRadius:'9px', border:'none',
+                cursor:!files.length?'not-allowed':'pointer', opacity:!files.length?0.45:1,
+                display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
+                background:status==='done'?'var(--green)':'var(--accent)', color:'#fff',
+                boxShadow:files.length?'0 2px 12px rgba(91,91,214,0.3)':'none' }}>
+              {status==='loading'?<><Loader2 size={14} className="spin"/>Processing…</>:status==='done'?<><CheckCircle size={14}/>Downloaded!</>:<><Upload size={14}/>{cfg.multi && files.length > 1 ? `Convert ${files.length} files` : cfg.title}</>}
+            </button>
+          )}
         </div>
       )}
     </div>
