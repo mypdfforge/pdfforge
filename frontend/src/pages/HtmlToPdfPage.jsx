@@ -28,6 +28,58 @@ const MARGINS = [
   { id: 15, label: 'Normal', val: 15 },
 ]
 
+// ── Baseline Security Rules ──────────────────────────────────────────────────
+// URL-to-PDF feature stays behind URL_FEATURE = false. Works on localhost only.
+const URL_FEATURE = false
+const URL_PROXY_ENDPOINT = ''
+
+/**
+ * Single centralized function for URL fetching (standing rule).
+ */
+async function fetchWebpageHtml(rawUrl) {
+  if (!URL_FEATURE) {
+    throw new Error('URL conversion is disabled for security.')
+  }
+  if (!/^https?:\/\//i.test(rawUrl)) {
+    throw new Error('URL must start with http:// or https://')
+  }
+  const endpoint = URL_PROXY_ENDPOINT
+    ? `${URL_PROXY_ENDPOINT}?url=${encodeURIComponent(rawUrl)}`
+    : rawUrl
+  const res = await fetch(endpoint)
+  if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load webpage`)
+  const text = await res.text()
+  if (!text || text.length < 50) throw new Error('Webpage returned empty content.')
+  return text
+}
+
+/**
+ * Single centralized function for HTML preview preparation (standing rule).
+ */
+function buildPreviewHtml(content, targetWidth, mediaMode, loadedUrl = '') {
+  if (!content) return ''
+  const baseTag = loadedUrl ? `<base href="${loadedUrl}">` : ''
+  const mediaCss = mediaMode === 'print'
+    ? `@media screen { body { background: #fff !important; } }`
+    : ''
+  const previewResetCss = `
+    <style id="pdfforge-preview-style">
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #ffffff !important;
+        width: ${targetWidth}px !important;
+        overflow-x: hidden !important;
+      }
+      ${mediaCss}
+    </style>
+  `
+  if (/<head[^>]*>/i.test(content)) {
+    return content.replace(/(<head[^>]*>)/i, `$1${baseTag}${previewResetCss}`)
+  }
+  return `<head>${baseTag}${previewResetCss}</head>${content}`
+}
+
 function Section({ title, children }) {
   return (
     <div style={{
@@ -159,9 +211,13 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
     }
   }
 
-  // Fetch URL and transition to Studio View (Path B)
+  // Fetch URL and transition to Studio View (Path B, localhost only)
   const handleConvertUrl = async (e) => {
     e?.preventDefault()
+    if (!URL_FEATURE) {
+      setUrlError('URL conversion is disabled for security.')
+      return
+    }
     let raw = urlInput.trim()
     if (!raw) {
       setUrlError('Please enter a valid URL.')
@@ -179,48 +235,12 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
     setUserZoom(null) // Reset to auto-fit for newly loaded webpage
 
     try {
-      let fetchedHtml = ''
-      let finalUrl = raw
-
-      // Direct fetch
-      try {
-        const res = await fetch(raw, { mode: 'cors' })
-        if (res.ok) {
-          const t = await res.text()
-          if (t && t.length > 100) fetchedHtml = t
-        }
-      } catch (_) {}
-
-      // CORS Proxies
-      if (!fetchedHtml) {
-        const proxies = [
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(raw)}`,
-          `https://corsproxy.io/?url=${encodeURIComponent(raw)}`,
-        ]
-
-        for (const proxy of proxies) {
-          try {
-            const res = await fetch(proxy)
-            if (res.ok) {
-              const t = await res.text()
-              if (t && t.length > 100) {
-                fetchedHtml = t
-                break
-              }
-            }
-          } catch (_) {}
-        }
-      }
-
-      if (!fetchedHtml) {
-        throw new Error('Unable to retrieve webpage HTML directly due to remote host restrictions. You can save the webpage as an HTML file and use "Upload a file".')
-      }
-
+      const fetchedHtml = await fetchWebpageHtml(raw)
       setHtmlContent(fetchedHtml)
-      setLoadedUrl(finalUrl)
+      setLoadedUrl(raw)
 
       try {
-        const u = new URL(finalUrl)
+        const u = new URL(raw)
         setStudioUrlName(`${u.hostname.replace(/[^a-z0-9]/gi, '_')}.pdf`)
       } catch (_) {
         setStudioUrlName('webpage.pdf')
@@ -249,29 +269,7 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
 
   // Generate safe HTML for the preview iframe using srcDoc (avoids doc.write wiping iframe)
   const previewSrcDoc = useMemo(() => {
-    if (!htmlContent) return ''
-    const baseTag = loadedUrl ? `<base href="${loadedUrl}">` : ''
-    const mediaCss = mediaMode === 'print'
-      ? `@media screen { body { background: #fff !important; } }`
-      : ''
-    const previewResetCss = `
-      <style id="pdfforge-preview-style">
-        html, body {
-          margin: 0 !important;
-          padding: 0 !important;
-          background: #ffffff !important;
-          width: ${targetWidth}px !important;
-          overflow-x: hidden !important;
-        }
-        ${mediaCss}
-      </style>
-    `
-
-    let renderHtml = htmlContent
-    if (/<head[^>]*>/i.test(renderHtml)) {
-      return renderHtml.replace(/(<head[^>]*>)/i, `$1${baseTag}${previewResetCss}`)
-    }
-    return `<head>${baseTag}${previewResetCss}</head>${renderHtml}`
+    return buildPreviewHtml(htmlContent, targetWidth, mediaMode, loadedUrl)
   }, [htmlContent, loadedUrl, targetWidth, mediaMode])
 
   // Convert from Studio view
@@ -805,7 +803,7 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
                       key={`${viewport}-${previewKey}`}
                       srcDoc={previewSrcDoc}
                       title="Live Web Preview"
-                      sandbox="allow-same-origin allow-scripts"
+                      sandbox=""
                       style={{
                         width: `${targetWidth}px`,
                         height: '840px',
@@ -973,81 +971,85 @@ export default function HtmlToPdfPage({ tool, onBack, pendingFiles }) {
           )}
         </div>
 
-        {/* ── Visual Divider ── */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', margin: '2px 0' }}>
-          <div style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
-          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text3)', letterSpacing: '.06em', textTransform: 'uppercase' }}>
-            or
-          </span>
-          <div style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
-        </div>
-
-        {/* ── 2. Paste a URL Section (Opens Studio View) ── */}
-        <div style={{
-          background: 'var(--bg2)',
-          border: '1px solid var(--border)',
-          borderRadius: '14px',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '12px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Globe size={18} color="var(--accent)" />
-            <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)' }}>
-              Paste a Webpage URL
-            </span>
-          </div>
-
-          <p style={{ margin: 0, fontSize: '12px', color: 'var(--text3)', lineHeight: 1.45 }}>
-            Convert any live webpage with interactive preview, viewport switching, margins, and paper sizing.
-          </p>
-
-          <form onSubmit={handleConvertUrl} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input
-                type="text"
-                value={urlInput}
-                onChange={e => setUrlInput(e.target.value)}
-                placeholder="https://example.com/article"
-                style={{
-                  flex: 1,
-                  background: 'var(--bg3)',
-                  color: 'var(--text)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '9px',
-                  padding: '11px 12px',
-                  fontSize: '13px',
-                  outline: 'none',
-                }}
-              />
-              <button
-                type="submit"
-                style={{
-                  background: 'var(--accent)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '9px',
-                  padding: '0 18px',
-                  fontSize: '13px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  boxShadow: '0 4px 14px rgba(234,88,12,0.25)',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                Convert URL <ArrowRight size={14} />
-              </button>
+        {/* ── 2. Paste a URL Section (Gated: localhost only behind URL_FEATURE) ── */}
+        {URL_FEATURE && (
+          <>
+            {/* ── Visual Divider ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', margin: '2px 0' }}>
+              <div style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text3)', letterSpacing: '.06em', textTransform: 'uppercase' }}>
+                or
+              </span>
+              <div style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
             </div>
-            {urlError && (
-              <span style={{ fontSize: '11px', color: '#ef4444' }}>{urlError}</span>
-            )}
-          </form>
-        </div>
+
+            <div style={{
+              background: 'var(--bg2)',
+              border: '1px solid var(--border)',
+              borderRadius: '14px',
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Globe size={18} color="var(--accent)" />
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)' }}>
+                  Paste a Webpage URL
+                </span>
+              </div>
+
+              <p style={{ margin: 0, fontSize: '12px', color: 'var(--text3)', lineHeight: 1.45 }}>
+                Convert any live webpage with interactive preview, viewport switching, margins, and paper sizing.
+              </p>
+
+              <form onSubmit={handleConvertUrl} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    value={urlInput}
+                    onChange={e => setUrlInput(e.target.value)}
+                    placeholder="https://example.com/article"
+                    style={{
+                      flex: 1,
+                      background: 'var(--bg3)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '9px',
+                      padding: '11px 12px',
+                      fontSize: '13px',
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    style={{
+                      background: 'var(--accent)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '9px',
+                      padding: '0 18px',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      boxShadow: '0 4px 14px rgba(234,88,12,0.25)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Convert URL <ArrowRight size={14} />
+                  </button>
+                </div>
+                {urlError && (
+                  <span style={{ fontSize: '11px', color: '#ef4444' }}>{urlError}</span>
+                )}
+              </form>
+            </div>
+          </>
+        )}
 
       </div>
     </div>
