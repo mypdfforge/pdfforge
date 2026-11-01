@@ -60,15 +60,24 @@ const toText = (file) =>
 
 const load = async (f) => window.pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise
 
+/**
+ * Sanitize text for XML 1.0 compatibility.
+ * Removes forbidden ASCII control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F)
+ * and lone surrogates / non-characters while preserving valid UTF-8, whitespace, and emojis.
+ */
+const sanitizeXml = (str) =>
+  str ? str.replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, '') : ''
+
 async function pageRows(page) {
   const { items } = await page.getTextContent()
   const rows = []
   for (const it of items) {
-    if (!it.str.trim()) continue
+    const cleanStr = sanitizeXml(it.str)
+    if (!cleanStr.trim()) continue
     const [x, y] = [it.transform[4], it.transform[5]]
     let r = rows.find((r) => Math.abs(r.y - y) < 3)
     if (!r) rows.push((r = { y, cells: [] }))
-    r.cells.push({ x, end: x + it.width, s: it.str })
+    r.cells.push({ x, end: x + it.width, s: cleanStr })
   }
   rows.sort((a, b) => b.y - a.y)
   rows.forEach((r) => r.cells.sort((a, b) => a.x - b.x))
@@ -79,8 +88,10 @@ export async function pdfToWord(file) {
   const pdf = await load(file), sections = []
   for (let i = 1; i <= pdf.numPages; i++) {
     const rows = await pageRows(await pdf.getPage(i))
-    sections.push({ children: rows.map((r) =>
-      new Paragraph({ children: [new TextRun(r.cells.map((c) => c.s).join(' '))] })) })
+    const children = rows.length > 0
+      ? rows.map((r) => new Paragraph({ children: [new TextRun(r.cells.map((c) => c.s).join(' '))] }))
+      : [new Paragraph({})]
+    sections.push({ children })
   }
   return { data: await Packer.toBlob(new Document({ sections })) }
 }

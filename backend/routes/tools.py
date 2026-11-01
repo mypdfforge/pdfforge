@@ -609,6 +609,7 @@ async def pdf_to_word(file: UploadFile = File(...)):
 
     # bullet prefixes pattern
     BULLET_RE = _re.compile(r"^[\u2022\u2023\u25E6\u2043\u2219\u25AA\u25CF\-\*]\s+(.+)$")
+    XML_ILLEGAL_RE = _re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
 
     first_page = True
     for pg in doc_pdf:
@@ -629,6 +630,7 @@ async def pdf_to_word(file: UploadFile = File(...)):
 
                 # Build full line text and dominant span
                 line_text = "".join(s.get("text", "") for s in spans).strip()
+                line_text = XML_ILLEGAL_RE.sub("", line_text).strip()
                 if not line_text:
                     continue
 
