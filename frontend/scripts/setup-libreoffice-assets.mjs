@@ -224,8 +224,32 @@ async function buildFontsCoreZip() {
     }
   }
 
+  // The engine ships NO fonts (verified: soffice.data has none). Vercel's Linux build box has none of
+  // the Windows names above, so without this the zip is empty and LibreOffice can crash ("null function").
+  // 1) any .ttf/.otf you drop into scripts/fonts/ (e.g. Liberation Sans/Serif for Arial/Times look-alikes)
+  const localFontsDir = path.join(__dirname, 'fonts')
+  if (fs.existsSync(localFontsDir)) {
+    for (const f of fs.readdirSync(localFontsDir)) {
+      if (/\.(ttf|otf)$/i.test(f)) { zip.file(f, fs.readFileSync(path.join(localFontsDir, f))); addedCount++ }
+    }
+  }
+  // 2) still nothing: fetch Carlito (open-licence, metric-compatible with Calibri)
   if (addedCount === 0) {
-    console.warn('  ⚠ No system fonts found in default paths. Attempting fallback download of core fonts...')
+    console.warn('  ⚠ No fonts found locally. Fetching Carlito (Calibri look-alike)...')
+    const base = 'https://raw.githubusercontent.com/googlefonts/carlito/main/fonts/ttf/'
+    for (const n of ['Carlito-Regular.ttf', 'Carlito-Bold.ttf', 'Carlito-Italic.ttf', 'Carlito-BoldItalic.ttf']) {
+      try {
+        const res = await fetch(base + n)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        zip.file(n, Buffer.from(await res.arrayBuffer()))
+        addedCount++
+      } catch (err) {
+        console.warn(`  ⚠ Could not fetch ${n}: ${err.message}`)
+      }
+    }
+  }
+  if (addedCount === 0) {
+    throw new Error('[setup-libreoffice-assets] No core fonts available: Accurate convert would crash. Add .ttf files to scripts/fonts/.')
   }
 
   const zipContent = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
