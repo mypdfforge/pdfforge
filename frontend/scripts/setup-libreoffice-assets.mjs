@@ -110,11 +110,18 @@ try{
   };
   const wasmP=(async()=>{
     const{res,drop}=await open("soffice.wasm");
-    const body=res.body.pipeThrough(new TransformStream({transform(c,ctl){wRead+=c.byteLength;report();ctl.enqueue(c)}}));
+    const buf=new Uint8Array(W.decodedBytes);
+    let off=0;
+    const rd=res.body.getReader();
     try{
-      const m=await WebAssembly.compileStreaming(new Response(body,{headers:{"Content-Type":"application/wasm"}}));
+      for(;;){
+        const{done,value}=await rd.read();
+        if(done)break;
+        if(off+value.byteLength>buf.byteLength)throw new Error("wasm larger than manifest");
+        buf.set(value,off);off+=value.byteLength;wRead=off;report();
+      }
       if(wRead!==W.decodedBytes)throw new Error("wasm size mismatch");
-      return m;
+      return await WebAssembly.compile(buf.buffer);
     }catch(er){drop();throw er}
   })();
   const dataP=(async()=>{
