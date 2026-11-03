@@ -17,6 +17,7 @@ import {
 } from '../utils/convertClient'
 import JSZip from 'jszip'
 import { inspectWordDocument, evaluatePreselection } from '../utils/wordInspection'
+import WordToPdfTool from '../features/word-to-pdf/ui/WordToPdfTool'
 import { docxToPdfAccurate, isWasmEngineCached, isCrossOriginIsolated, warmEngine, canWarmEngine } from '../utils/libreofficeWasm'
 import axios from 'axios'
 import { clientImagesToPdf, applyPageModifications, clientOrganize, pageSelected } from '../utils/editClient'
@@ -380,7 +381,13 @@ function ActionIcon({ title, color, border, icon, onClick }) {
 }
 
 // ── Main ToolPage ──────────────────────────────────────────────────────
-function ToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
+// Word to PDF now lives in features/word-to-pdf. Everything else uses the old page.
+function ToolPageInner(props) {
+  if (props.toolId === 'word-to-pdf') return <WordToPdfTool {...props} />
+  return <LegacyToolPageInner {...props} />
+}
+
+function LegacyToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, showCategories, activeCategory, onCategoryChange, search, onSearch }) {
   const cfg = CONFIGS[toolId]
 
   const [files,         setFiles]         = useState([])
