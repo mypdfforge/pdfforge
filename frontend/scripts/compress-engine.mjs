@@ -32,6 +32,7 @@ function findFile(filename) {
 const wasmPath = findFile('soffice.wasm');
 const dataPath = findFile('soffice.data');
 const jsPath = findFile('soffice.js');
+const workerPath = findFile('soffice.worker.js');
 
 if (!wasmPath || !dataPath) {
   console.error('[compress-engine] FATAL: Missing soffice.wasm or soffice.data.');
@@ -44,6 +45,7 @@ if (!wasmPath || !dataPath) {
 const destWasm = path.join(publicDistDir, 'soffice.wasm');
 const destData = path.join(publicDistDir, 'soffice.data');
 const destJs = path.join(publicDistDir, 'soffice.js');
+const destWorker = path.join(publicDistDir, 'soffice.worker.js');
 
 if (!fs.existsSync(destWasm) || fs.statSync(destWasm).size !== fs.statSync(wasmPath).size) {
   fs.copyFileSync(wasmPath, destWasm);
@@ -53,6 +55,9 @@ if (!fs.existsSync(destData) || fs.statSync(destData).size !== fs.statSync(dataP
 }
 if (jsPath && (!fs.existsSync(destJs) || fs.statSync(destJs).size !== fs.statSync(jsPath).size)) {
   fs.copyFileSync(jsPath, destJs);
+}
+if (workerPath && (!fs.existsSync(destWorker) || fs.statSync(destWorker).size !== fs.statSync(workerPath).size)) {
+  fs.copyFileSync(workerPath, destWorker);
 }
 
 console.log('[compress-engine] Reading uncompressed engine assets...');

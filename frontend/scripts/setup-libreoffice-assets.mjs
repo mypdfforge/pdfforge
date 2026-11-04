@@ -18,16 +18,18 @@ fs.mkdirSync(publicWasmDir, { recursive: true })
 fs.mkdirSync(publicDistDir, { recursive: true })
 fs.mkdirSync(publicAssetsDir, { recursive: true })
 
-// 1. Copy WASM assets
+// 1. Copy WASM assets to both /public/wasm and /public/dist
 const wasmSrcDir = path.join(nodeModulesPkg, 'wasm')
 if (fs.existsSync(wasmSrcDir)) {
   const wasmFiles = fs.readdirSync(wasmSrcDir)
   for (const file of wasmFiles) {
     const srcPath = path.join(wasmSrcDir, file)
-    const destPath = path.join(publicWasmDir, file)
-    fs.copyFileSync(srcPath, destPath)
-    const stats = fs.statSync(destPath)
-    console.log(`  ✓ /public/wasm/${file} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`)
+    const destWasmPath = path.join(publicWasmDir, file)
+    const destDistPath = path.join(publicDistDir, file)
+    fs.copyFileSync(srcPath, destWasmPath)
+    fs.copyFileSync(srcPath, destDistPath)
+    const stats = fs.statSync(destDistPath)
+    console.log(`  ✓ /public/dist/${file} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`)
   }
 } else {
   console.warn(`  ⚠ ${wasmSrcDir} not found. Is @matbee/libreoffice-converter installed?`)
