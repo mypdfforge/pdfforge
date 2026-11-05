@@ -1,0 +1,16 @@
+<!doctype html><meta charset=utf-8><title>docx2pdf</title>
+<h3>DOCX to PDF (client side)</h3>
+<p>1. Pick a .ttf font <input type=file id=f accept=.ttf></p>
+<p>2. Pick a .docx <input type=file id=d accept=.docx></p>
+<script type=module>
+import init, { Converter } from './pkg/docx2pdf.js';
+await init();
+const c = new Converter();
+f.onchange = async () => c.registerFont('main', new Uint8Array(await f.files[0].arrayBuffer()));
+d.onchange = async () => {
+  const pdf = c.convert(new Uint8Array(await d.files[0].arrayBuffer()));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([pdf], {type:'application/pdf'}));
+  a.download = 'out.pdf'; a.click();
+};
+</script>

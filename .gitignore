@@ -12,7 +12,12 @@ backend/services/NotoSans-*.ttf
 # Node
 frontend/node_modules/
 frontend/dist/
+frontend/.env
 frontend/.env.local
+
+# Rust
+target/
+docx2pdf/target/
 
 # OS
 .DS_Store

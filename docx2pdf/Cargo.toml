@@ -1,0 +1,25 @@
+[package]
+name = "docx2pdf"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+quick-xml = "0.31"
+ttf-parser = "0.20"
+pdf-writer = "0.9"
+miniz_oxide = "0.7"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
