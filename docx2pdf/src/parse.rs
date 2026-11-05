@@ -186,6 +186,14 @@ fn parse_styles(xml: &str) -> Styles {
                             s.size_pt = sz;
                         }
                     }
+                    b"color" if in_rpr => {
+                        let c = attr(&e, b"val").and_then(|v| parse_hex_color(&v));
+                        if in_doc_defaults {
+                            styles.default_style.color = c;
+                        } else if let Some(s) = cur_style.as_mut() {
+                            s.color = c;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -352,6 +360,7 @@ fn parse_header_footer(xml: &str, styles: &Styles) -> HeaderFooter {
     let mut current_r_bold: Option<bool> = None;
     let mut current_r_italic: Option<bool> = None;
     let mut current_r_size: Option<f32> = None;
+    let mut current_r_color: Option<[u8; 3]> = None;
 
     let (mut para, mut run) = (Para::default(), Run::default());
     let (mut in_t, mut in_ppr, mut in_rpr, mut in_instr) = (false, false, false, false);
@@ -394,12 +403,14 @@ fn parse_header_footer(xml: &str, styles: &Styles) -> HeaderFooter {
                     current_r_bold = None;
                     current_r_italic = None;
                     current_r_size = None;
+                    current_r_color = None;
                 }
                 b"rPr" => in_rpr = true,
                 b"rStyle" if in_rpr => current_r_style_id = attr(&e, b"val"),
                 b"b" if in_rpr => current_r_bold = Some(attr(&e, b"val").as_deref() != Some("0")),
                 b"i" if in_rpr => current_r_italic = Some(attr(&e, b"val").as_deref() != Some("0")),
                 b"sz" if in_rpr => current_r_size = attr(&e, b"val").and_then(|v| v.parse::<f32>().ok()).map(|h| h / 2.0),
+                b"color" if in_rpr => current_r_color = attr(&e, b"val").and_then(|v| parse_hex_color(&v)),
                 b"t" => in_t = true,
                 b"instrText" => in_instr = true,
                 _ => {}
@@ -437,6 +448,7 @@ fn parse_header_footer(xml: &str, styles: &Styles) -> HeaderFooter {
                                 bold: false,
                                 italic: false,
                                 size_pt: Some(9.0),
+                                color: None,
                                 field: Some(field),
                             });
                         }
@@ -448,6 +460,7 @@ fn parse_header_footer(xml: &str, styles: &Styles) -> HeaderFooter {
                     run.bold = current_r_bold.or(resolved_run.bold).unwrap_or(false);
                     run.italic = current_r_italic.or(resolved_run.italic).unwrap_or(false);
                     run.size_pt = current_r_size.or(resolved_run.size_pt).or(Some(9.0));
+                    run.color = current_r_color.or(resolved_run.color);
                     if let Some(field) = active_field {
                         run.field = Some(field);
                     }
@@ -584,6 +597,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
     let mut current_r_bold: Option<bool> = None;
     let mut current_r_italic: Option<bool> = None;
     let mut current_r_size: Option<f32> = None;
+    let mut current_r_color: Option<[u8; 3]> = None;
 
     let mut header_rel_id: Option<String> = None;
     let mut footer_rel_id: Option<String> = None;
@@ -681,12 +695,14 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                         current_r_bold = None;
                         current_r_italic = None;
                         current_r_size = None;
+                        current_r_color = None;
                     }
                     b"rPr" => in_rpr = true,
                     b"rStyle" if in_rpr => current_r_style_id = attr(&e, b"val"),
                     b"b" if in_rpr => current_r_bold = Some(attr(&e, b"val").as_deref() != Some("0")),
                     b"i" if in_rpr => current_r_italic = Some(attr(&e, b"val").as_deref() != Some("0")),
                     b"sz" if in_rpr => current_r_size = attr(&e, b"val").and_then(|v| v.parse::<f32>().ok()).map(|h| h / 2.0),
+                    b"color" if in_rpr => current_r_color = attr(&e, b"val").and_then(|v| parse_hex_color(&v)),
                     b"t" => in_t = true,
                     b"pgSz" => {
                         if let Some(w) = attr(&e, b"w").and_then(|v| v.parse::<f32>().ok()) { doc.page.w_pt = w / 20.0; }
@@ -765,6 +781,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                     run.bold = current_r_bold.or(resolved_run.bold).unwrap_or(false);
                     run.italic = current_r_italic.or(resolved_run.italic).unwrap_or(false);
                     run.size_pt = current_r_size.or(resolved_run.size_pt);
+                    run.color = current_r_color.or(resolved_run.color);
                     para.runs.push(std::mem::take(&mut run));
                 }
                 b"p" => {

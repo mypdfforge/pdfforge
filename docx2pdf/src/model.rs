@@ -13,6 +13,7 @@ pub struct Run {
     pub bold: bool,
     pub italic: bool,
     pub size_pt: Option<f32>,
+    pub color: Option<[u8; 3]>,
     pub field: Option<FieldType>,
 }
 
@@ -186,6 +187,7 @@ pub struct Style {
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub size_pt: Option<f32>,
+    pub color: Option<[u8; 3]>,
 }
 
 impl Style {
@@ -197,6 +199,7 @@ impl Style {
         if let Some(b) = other.bold { self.bold = Some(b); }
         if let Some(i) = other.italic { self.italic = Some(i); }
         if let Some(sz) = other.size_pt { self.size_pt = Some(sz); }
+        if let Some(c) = other.color { self.color = Some(c); }
     }
 }
 

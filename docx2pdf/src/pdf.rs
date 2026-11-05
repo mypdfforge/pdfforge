@@ -268,18 +268,22 @@ pub fn write(
         let mut c = Content::new();
 
         // Draw vector rectangles (table cell shading and borders)
-        for r in &lp.rects {
-            if let Some([cr, cg, cb]) = r.fill_color {
-                c.set_fill_rgb(cr as f32 / 255.0, cg as f32 / 255.0, cb as f32 / 255.0);
-                c.rect(r.x, r.y, r.w, r.h);
-                c.fill_nonzero();
+        if !lp.rects.is_empty() {
+            c.save_state();
+            for r in &lp.rects {
+                if let Some([cr, cg, cb]) = r.fill_color {
+                    c.set_fill_rgb(cr as f32 / 255.0, cg as f32 / 255.0, cb as f32 / 255.0);
+                    c.rect(r.x, r.y, r.w, r.h);
+                    c.fill_nonzero();
+                }
+                if let Some([sr, sg, sb]) = r.stroke_color {
+                    c.set_stroke_rgb(sr as f32 / 255.0, sg as f32 / 255.0, sb as f32 / 255.0);
+                    c.set_line_width(r.stroke_width);
+                    c.rect(r.x, r.y, r.w, r.h);
+                    c.stroke();
+                }
             }
-            if let Some([sr, sg, sb]) = r.stroke_color {
-                c.set_stroke_rgb(sr as f32 / 255.0, sg as f32 / 255.0, sb as f32 / 255.0);
-                c.set_line_width(r.stroke_width);
-                c.rect(r.x, r.y, r.w, r.h);
-                c.stroke();
-            }
+            c.restore_state();
         }
 
         // Draw images
@@ -292,8 +296,17 @@ pub fn write(
             }
         }
 
+        let mut cur_color: Option<[u8; 3]> = None;
         for l in &lp.lines {
             for span in &l.spans {
+                if cur_color != Some(span.color) {
+                    c.set_fill_rgb(
+                        span.color[0] as f32 / 255.0,
+                        span.color[1] as f32 / 255.0,
+                        span.color[2] as f32 / 255.0,
+                    );
+                    cur_color = Some(span.color);
+                }
                 let idx = font_variant_index(span.bold, span.italic, font_bytes, faces);
                 let face = match idx {
                     1 => faces.bold.unwrap_or(faces.regular),

@@ -9,6 +9,7 @@ pub struct Span {
     pub bold: bool,
     pub italic: bool,
     pub width: f32,
+    pub color: [u8; 3],
 }
 
 pub struct Line {
@@ -77,6 +78,7 @@ struct Token {
     bold: bool,
     italic: bool,
     size: f32,
+    color: [u8; 3],
     width: f32,
     is_space: bool,
 }
@@ -97,6 +99,7 @@ fn break_para_into_lines(
         };
         if text_to_use.is_empty() { continue; }
         let size = r.size_pt.unwrap_or(11.0);
+        let color = r.color.unwrap_or([0, 0, 0]);
         let face = faces.select(r.bold, r.italic);
         let mut cur_token = String::new();
         let mut in_space = false;
@@ -110,6 +113,7 @@ fn break_para_into_lines(
                     bold: r.bold,
                     italic: r.italic,
                     size,
+                    color,
                     width: w,
                     is_space: in_space,
                 });
@@ -124,6 +128,7 @@ fn break_para_into_lines(
                 bold: r.bold,
                 italic: r.italic,
                 size,
+                color,
                 width: w,
                 is_space: in_space,
             });
@@ -178,7 +183,7 @@ fn break_para_into_lines(
         let mut spans: Vec<Span> = Vec::new();
         for t in line_tokens {
             if let Some(last) = spans.last_mut() {
-                if last.bold == t.bold && last.italic == t.italic && (last.size - t.size).abs() < 0.001 {
+                if last.bold == t.bold && last.italic == t.italic && (last.size - t.size).abs() < 0.001 && last.color == t.color {
                     last.text.push_str(&t.text);
                     last.width += t.width;
                     continue;
@@ -191,6 +196,7 @@ fn break_para_into_lines(
                 bold: t.bold,
                 italic: t.italic,
                 width: t.width,
+                color: t.color,
             });
         }
 
@@ -266,6 +272,7 @@ fn layout_single_para(
                     bold: false,
                     italic: false,
                     width: marker_w,
+                    color: [0, 0, 0],
                 });
             }
         }
