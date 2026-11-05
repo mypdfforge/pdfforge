@@ -329,22 +329,10 @@ function convertWithLibreOffice(file, needsCjk, signal, onProgress) {
 /**
  * Start loading the engine in background. Never throws.
  */
-export function warmEngine({ needsCjk = false } = {}) {
+export function warmEngine() {
   initDocx2Pdf().catch(() => {})
   loadStandardFonts().catch(() => {})
-  if (!canWarmEngine()) return Promise.resolve(false)
-  clearIdle()
-  return enqueue(async () => {
-    try {
-      await ensureEngine(needsCjk)
-      return true
-    } finally {
-      scheduleIdle()
-    }
-  }).catch((err) => {
-    console.warn('[engineHost] warm-up failed:', err)
-    return false
-  })
+  return Promise.resolve(true)
 }
 
 /** Free the engine now (after any running job). */
