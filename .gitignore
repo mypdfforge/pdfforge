@@ -40,7 +40,8 @@ e2e/lucide-stub.js
 e2e/dbg.mjs
 
 # LibreOffice WASM binary assets (installed via postinstall)
-frontend/public/wasm/
+frontend/public/wasm/*
+!frontend/public/wasm/docx2pdf/
 frontend/public/assets/
 frontend/public/dist/
 graphify-out/

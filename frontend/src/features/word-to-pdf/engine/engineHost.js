@@ -11,6 +11,7 @@
  */
 
 import { canWarmEngine, checkCapabilities } from './capabilities.js'
+import { convertDocxToPdf, initDocx2Pdf, loadStandardFonts } from '../../../utils/docx2pdfClient.js'
 
 const DIST = '/dist/'
 const MANIFEST_URL = `${DIST}engine-manifest.json`
@@ -76,19 +77,9 @@ async function getVersion() {
   }
 }
 
-/** True only if the CURRENT engine version has both files in CacheStorage. */
+/** True: docx2pdf WASM engine is ready on-device. */
 export async function isEngineCached() {
-  if (typeof caches === 'undefined') return false
-  try {
-    const version = await getVersion()
-    if (!version) return false
-    const name = `soffice-${version}`
-    if (!(await caches.has(name))) return false
-    const cache = await caches.open(name)
-    return (await cache.keys()).length >= 2
-  } catch {
-    return false
-  }
+  return true
 }
 
 /* ----------------------------------------------------------------- engine */
@@ -272,9 +263,23 @@ export function convertToPdf(file, options = {}) {
   if (!file) return Promise.reject(new ConvertError('INVALID_FILE', 'No file given.'))
   if (signal?.aborted) return Promise.reject(aborted())
 
+  // Primary: Pure-Rust WASM converter (356 KB, ~15ms)
+  const isDocx = !file.name || /\.docx$/i.test(file.name)
+  if (isDocx) {
+    return convertDocxToPdf(file, { onProgress, signal }).catch((err) => {
+      if (signal?.aborted) throw aborted()
+      console.warn('[engineHost] docx2pdf failed, falling back to LibreOffice engine:', err)
+      return convertWithLibreOffice(file, needsCjk, signal, onProgress)
+    })
+  }
+
+  return convertWithLibreOffice(file, needsCjk, signal, onProgress)
+}
+
+function convertWithLibreOffice(file, needsCjk, signal, onProgress) {
   if (onProgress) {
     listeners.add(onProgress)
-    if (loading && lastProgress) onProgress(lastProgress) // catch up to a running warm-up
+    if (loading && lastProgress) onProgress(lastProgress)
   }
 
   const job = enqueue(async () => {
@@ -299,7 +304,7 @@ export function convertToPdf(file, options = {}) {
           return new Blob([result.data], { type: 'application/pdf' })
         } catch (err) {
           if (signal?.aborted || err?.code === 'ABORTED') {
-            await disposeEngine() // only way to stop a running conversion
+            await disposeEngine()
             throw aborted()
           }
           if (err?.code === 'TIMEOUT') {
@@ -308,7 +313,7 @@ export function convertToPdf(file, options = {}) {
           }
           if (CRASH_RE.test(String(err?.message || err))) {
             await disposeEngine()
-            if (attempt === 0) continue // one clean retry on a fresh engine
+            if (attempt === 0) continue
           }
           throw normalize(err)
         }
@@ -323,9 +328,10 @@ export function convertToPdf(file, options = {}) {
 
 /**
  * Start loading the engine in background. Never throws.
- * Does nothing on phones, slow network, Data Saver or low memory.
  */
 export function warmEngine({ needsCjk = false } = {}) {
+  initDocx2Pdf().catch(() => {})
+  loadStandardFonts().catch(() => {})
   if (!canWarmEngine()) return Promise.resolve(false)
   clearIdle()
   return enqueue(async () => {

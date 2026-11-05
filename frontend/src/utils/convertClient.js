@@ -123,6 +123,17 @@ export async function pdfToPptx(file, scale = 2) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function wordToPdf(file, onProgress) {
+  // ── Primary Engine: Lightweight pure-Rust docx2pdf WASM ──
+  try {
+    const { convertDocxToPdf } = await import('./docx2pdfClient.js')
+    const pdfBlob = await convertDocxToPdf(file, {
+      onProgress: (p) => onProgress?.(p.percent / 100),
+    })
+    return { data: pdfBlob }
+  } catch (wasmErr) {
+    console.warn('[convertClient] docx2pdf WASM failed, falling back to legacy renderer:', wasmErr)
+  }
+
   const [jsPDF, h2c, JSZip] = await Promise.all([loadJsPDF(), loadHtml2Canvas(), loadJSZip()])
   const arrayBuf = await toArrayBuffer(file)
 
