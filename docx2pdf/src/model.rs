@@ -27,6 +27,7 @@ pub struct Para {
     pub list_marker: Option<String>,
     pub indent_left_pt: f32,
     pub hanging_pt: f32,
+    pub page_break_before: bool,
 }
 
 impl Default for Para {
@@ -40,6 +41,7 @@ impl Default for Para {
             list_marker: None,
             indent_left_pt: 0.0,
             hanging_pt: 0.0,
+            page_break_before: false,
         }
     }
 }
@@ -355,6 +357,7 @@ pub enum Block {
     Para(Para),
     Table(Table),
     Image(ImageBlock),
+    PageBreak,
 }
 
 pub struct Doc {

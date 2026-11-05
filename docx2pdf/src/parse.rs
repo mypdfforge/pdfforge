@@ -592,6 +592,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
     let mut current_p_ilvl: usize = 0;
     let mut current_p_ind_left: Option<f32> = None;
     let mut current_p_ind_hanging: Option<f32> = None;
+    let mut current_p_page_break_before = false;
 
     let mut current_r_style_id: Option<String> = None;
     let mut current_r_bold: Option<bool> = None;
@@ -664,8 +665,10 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                         current_p_ilvl = 0;
                         current_p_ind_left = None;
                         current_p_ind_hanging = None;
+                        current_p_page_break_before = false;
                     }
                     b"pPr" => in_ppr = true,
+                    b"pageBreakBefore" if in_ppr => current_p_page_break_before = true,
                     b"pStyle" if in_ppr => current_p_style_id = attr(&e, b"val"),
                     b"numPr" if in_ppr => in_numpr = true,
                     b"numId" if in_numpr => current_p_num_id = attr(&e, b"val"),
@@ -731,7 +734,36 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                             footer_rel_id = r_id;
                         }
                     }
-                    b"br" | b"tab" if in_run => run.text.push(' '),
+                    b"br" if in_run => {
+                        let btype = attr(&e, b"type");
+                        if btype.as_deref() == Some("page") {
+                            if !run.text.is_empty() {
+                                let resolved_para = styles.resolve_para(current_p_style_id.as_deref());
+                                let resolved_run = styles.resolve_run(current_r_style_id.as_deref(), &resolved_para);
+                                run.bold = current_r_bold.or(resolved_run.bold).unwrap_or(false);
+                                run.italic = current_r_italic.or(resolved_run.italic).unwrap_or(false);
+                                run.size_pt = current_r_size.or(resolved_run.size_pt);
+                                run.color = current_r_color.or(resolved_run.color);
+                                para.runs.push(std::mem::take(&mut run));
+                            }
+                            if in_tc {
+                                run.text.push(' ');
+                            } else {
+                                if !para.runs.is_empty() {
+                                    let resolved_para = styles.resolve_para(current_p_style_id.as_deref());
+                                    para.align = current_p_align.or(resolved_para.align).unwrap_or(Align::Left);
+                                    para.space_before_pt = current_p_space_before.or(resolved_para.space_before_pt).unwrap_or(0.0);
+                                    para.space_after_pt = current_p_space_after.or(resolved_para.space_after_pt).unwrap_or(8.0);
+                                    para.line_spacing_mult = current_p_line_mult.or(resolved_para.line_spacing_mult).unwrap_or(1.2);
+                                    doc.blocks.push(Block::Para(std::mem::take(&mut para)));
+                                }
+                                doc.blocks.push(Block::PageBreak);
+                            }
+                        } else {
+                            run.text.push(' ');
+                        }
+                    }
+                    b"tab" if in_run => run.text.push(' '),
                     b"drawing" | b"pict" => {
                         in_drawing = true;
                         cur_drawing_rel_id = None;
@@ -790,6 +822,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                     para.space_before_pt = current_p_space_before.or(resolved_para.space_before_pt).unwrap_or(0.0);
                     para.space_after_pt = current_p_space_after.or(resolved_para.space_after_pt).unwrap_or(8.0);
                     para.line_spacing_mult = current_p_line_mult.or(resolved_para.line_spacing_mult).unwrap_or(1.2);
+                    para.page_break_before = current_p_page_break_before;
                     if let Some(ref num_id) = current_p_num_id {
                         if let Some((marker, ind, hang)) = numbering.next_marker(num_id, current_p_ilvl) {
                             para.list_marker = Some(marker);
@@ -799,7 +832,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                     }
                     if in_tc {
                         cur_tc.paras.push(std::mem::take(&mut para));
-                    } else if !para.runs.is_empty() || cur_drawing_rel_id.is_none() {
+                    } else if !para.runs.is_empty() {
                         doc.blocks.push(Block::Para(std::mem::take(&mut para)));
                     }
                 }

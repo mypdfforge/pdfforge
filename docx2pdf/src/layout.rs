@@ -227,13 +227,16 @@ fn layout_single_para(
     let lines = break_para_into_lines(para, faces, max_w, None, None);
 
     if lines.is_empty() {
-        let empty_size = 11.0;
-        let lh = empty_size * para.line_spacing_mult;
-        if *y + lh > p.h_pt - p.mb {
-            pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
-            *y = p.mt;
+        if *y > p.mt {
+            let empty_size = 11.0;
+            let lh = empty_size * para.line_spacing_mult;
+            if *y + lh > p.h_pt - p.mb {
+                pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+                *y = p.mt;
+            } else {
+                *y += lh + para.space_after_pt;
+            }
         }
-        *y += lh + para.space_after_pt;
         return;
     }
 
@@ -494,7 +497,25 @@ pub fn layout(doc: &Doc, faces: &FaceSet) -> Vec<LPage> {
 
     for block in &doc.blocks {
         match block {
+            Block::PageBreak => {
+                let is_empty = pages.last().map_or(true, |pg| {
+                    pg.lines.is_empty() && pg.rects.is_empty() && pg.images.is_empty()
+                });
+                if !is_empty {
+                    pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+                    y = p.mt;
+                }
+            }
             Block::Para(para) => {
+                if para.page_break_before {
+                    let is_empty = pages.last().map_or(true, |pg| {
+                        pg.lines.is_empty() && pg.rects.is_empty() && pg.images.is_empty()
+                    });
+                    if !is_empty {
+                        pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+                        y = p.mt;
+                    }
+                }
                 layout_single_para(para, p, faces, &mut pages, &mut y);
             }
             Block::Table(table) => {
