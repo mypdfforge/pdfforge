@@ -321,6 +321,7 @@ pub struct HeaderFooter {
 pub struct TableCell {
     pub paras: Vec<Para>,
     pub width_pt: f32,
+    pub grid_span: usize,
     pub bg_color: Option<[u8; 3]>,
     pub border_left: BorderEdge,
     pub border_right: BorderEdge,
@@ -337,6 +338,7 @@ impl Default for TableCell {
         TableCell {
             paras: vec![],
             width_pt: 0.0,
+            grid_span: 1,
             bg_color: None,
             border_left: BorderEdge::default(),
             border_right: BorderEdge::default(),

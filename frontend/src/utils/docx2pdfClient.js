@@ -50,11 +50,19 @@ export async function loadStandardFonts() {
       return new Uint8Array(buf)
     }
 
+    const fetchFontWithFallback = async (primaryName, fallbackName) => {
+      try {
+        return await fetchFont(primaryName)
+      } catch {
+        return await fetchFont(fallbackName)
+      }
+    }
+
     const [regular, bold, italic, boldItalic] = await Promise.all([
-      fetchFont('LiberationSans-Regular.ttf'),
-      fetchFont('LiberationSans-Bold.ttf'),
-      fetchFont('LiberationSans-Italic.ttf'),
-      fetchFont('LiberationSans-BoldItalic.ttf'),
+      fetchFontWithFallback('Arial-Regular.ttf', 'LiberationSans-Regular.ttf'),
+      fetchFontWithFallback('Arial-Bold.ttf', 'LiberationSans-Bold.ttf'),
+      fetchFontWithFallback('Arial-Italic.ttf', 'LiberationSans-Italic.ttf'),
+      fetchFontWithFallback('Arial-BoldItalic.ttf', 'LiberationSans-BoldItalic.ttf'),
     ])
 
     cachedFonts = { regular, bold, italic, boldItalic }

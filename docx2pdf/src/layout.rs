@@ -249,7 +249,7 @@ fn break_para_into_lines(
 
         if current_line.is_empty() {
             if token.is_space { continue; }
-            if token.width <= max_w {
+            if token.width <= max_w || token.text.len() <= 12 {
                 current_line_w = token.width;
                 current_line.push(token);
             } else {
@@ -290,7 +290,7 @@ fn break_para_into_lines(
             }
             current_line_w = 0.0;
             if !token.is_space {
-                if token.width <= max_w {
+                if token.width <= max_w || token.text.len() <= 12 {
                     current_line_w = token.width;
                     current_line.push(token);
                 } else {
@@ -384,7 +384,7 @@ fn layout_single_para(
     }
 
     let is_list = para.list_marker.is_some();
-    let indent_left = if is_list { para.indent_left_pt } else { 0.0 };
+    let indent_left = para.indent_left_pt;
     let hanging = if is_list { para.hanging_pt } else { 0.0 };
     let max_w = (p.w_pt - p.ml - p.mr - indent_left).max(50.0);
 
@@ -416,9 +416,9 @@ fn layout_single_para(
             p.ml + indent_left
         } else {
             match para.align {
-                Align::Left => p.ml,
-                Align::Center => p.ml + (max_w - text_total_w).max(0.0) / 2.0,
-                Align::Right => p.ml + (max_w - text_total_w).max(0.0),
+                Align::Left => p.ml + indent_left,
+                Align::Center => p.ml + indent_left + (max_w - text_total_w).max(0.0) / 2.0,
+                Align::Right => p.ml + indent_left + (max_w - text_total_w).max(0.0),
             }
         };
 
@@ -492,12 +492,65 @@ fn layout_table(
         }
     }
 
-    // Scale col_widths if total width exceeds max_page_w
-    let total_w: f32 = col_widths.iter().sum();
-    if total_w > max_page_w && total_w > 0.0 {
-        let factor = max_page_w / total_w;
-        for w in &mut col_widths {
-            *w *= factor;
+    // Content-aware column width budgeting
+    let mut min_col_widths = vec![25.0f32; num_cols];
+    for row in &table.rows {
+        let mut c_idx = 0;
+        for cell in &row.cells {
+            let span = cell.grid_span.max(1);
+            if span == 1 && c_idx < num_cols {
+                let pad = cell.pad_left_pt + cell.pad_right_pt;
+                for para in &cell.paras {
+                    for run in &para.runs {
+                        let sz = run.size_pt.unwrap_or(11.0);
+                        let face = faces.select(run.bold, run.italic);
+                        for word in run.text.split_whitespace() {
+                            let w = token_width(face, word, sz) + pad + 4.0;
+                            if w > min_col_widths[c_idx] {
+                                min_col_widths[c_idx] = w;
+                            }
+                        }
+                    }
+                }
+            }
+            c_idx += span;
+        }
+    }
+
+    // Distribute width from columns that have extra slack to columns that need more width
+    let total_min: f32 = min_col_widths.iter().sum();
+    if total_min <= max_page_w {
+        for i in 0..num_cols {
+            if i < col_widths.len() && col_widths[i] < min_col_widths[i] {
+                col_widths[i] = min_col_widths[i];
+            }
+        }
+        let cur_total: f32 = col_widths.iter().sum();
+        if cur_total > max_page_w {
+            let mut excess_total: f32 = 0.0;
+            for i in 0..num_cols {
+                if col_widths[i] > min_col_widths[i] {
+                    excess_total += col_widths[i] - min_col_widths[i];
+                }
+            }
+            if excess_total > 0.0 {
+                let need_reduction = cur_total - max_page_w;
+                let shrink_ratio = (need_reduction / excess_total).min(1.0);
+                for i in 0..num_cols {
+                    if col_widths[i] > min_col_widths[i] {
+                        let excess = col_widths[i] - min_col_widths[i];
+                        col_widths[i] -= excess * shrink_ratio;
+                    }
+                }
+            }
+        }
+    } else {
+        let total_w: f32 = col_widths.iter().sum();
+        if total_w > max_page_w && total_w > 0.0 {
+            let factor = max_page_w / total_w;
+            for w in &mut col_widths {
+                *w *= factor;
+            }
         }
     }
     let table_w: f32 = col_widths.iter().sum();
@@ -514,8 +567,13 @@ fn layout_table(
         }
 
         let mut cell_layouts: Vec<CellLayout> = Vec::new();
-        for (i, cell) in row.cells.iter().enumerate() {
-            let cw = col_widths.get(i).copied().unwrap_or(100.0);
+        let mut col_idx = 0;
+        for cell in &row.cells {
+            let span = cell.grid_span.max(1);
+            let cw: f32 = (0..span)
+                .map(|offset| col_widths.get(col_idx + offset).copied().unwrap_or(0.0))
+                .sum::<f32>()
+                .max(20.0);
             let content_w = (cw - cell.pad_left_pt - cell.pad_right_pt).max(10.0);
             let mut paras_lines = Vec::new();
             let mut cell_content_h = 0.0;
@@ -533,6 +591,7 @@ fn layout_table(
                 paras_lines,
                 height: total_cell_h,
             });
+            col_idx += span;
         }
 
         let max_cell_h = cell_layouts.iter().map(|cl| cl.height).fold(0.0f32, f32::max);
@@ -544,8 +603,13 @@ fn layout_table(
         }
 
         let mut cell_x = start_x;
+        let mut col_idx = 0;
         for (i, cell) in row.cells.iter().enumerate() {
-            let cw = col_widths.get(i).copied().unwrap_or(100.0);
+            let span = cell.grid_span.max(1);
+            let cw: f32 = (0..span)
+                .map(|offset| col_widths.get(col_idx + offset).copied().unwrap_or(0.0))
+                .sum::<f32>()
+                .max(20.0);
             let cell_y_bottom = p.h_pt - *y - row_h;
             let cell_y_top = p.h_pt - *y;
 
@@ -622,6 +686,7 @@ fn layout_table(
             }
 
             cell_x += cw;
+            col_idx += span;
         }
 
         *y += row_h;

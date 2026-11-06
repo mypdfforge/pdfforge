@@ -663,7 +663,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
     let (mut para, mut run) = (Para::default(), Run::default());
     let (mut cur_tbl, mut cur_tr, mut cur_tc) = (Table::default(), TableRow::default(), TableCell::default());
     let (mut in_t, mut in_run, mut in_ppr, mut in_rpr, mut in_numpr) = (false, false, false, false, false);
-    let (mut in_tbl, mut in_tblpr, mut in_tr, mut in_tc, mut in_tcpr, mut in_tcborders) = (false, false, false, false, false, false);
+    let (mut in_tbl, mut in_tblpr, mut in_tr, mut in_tc, mut in_tcpr, mut in_tcborders, mut in_tcmar) = (false, false, false, false, false, false, false);
     let (mut in_drawing, mut cur_drawing_rel_id, mut cur_drawing_cx, mut cur_drawing_cy) = (false, None, None, None);
 
     loop {
@@ -701,6 +701,32 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                         cur_tc = TableCell::default();
                     }
                     b"tcPr" if in_tc => in_tcpr = true,
+                    b"gridSpan" if in_tcpr => {
+                        if let Some(span) = attr(&e, b"val").and_then(|v| v.parse::<usize>().ok()) {
+                            cur_tc.grid_span = span;
+                        }
+                    }
+                    b"tcMar" if in_tcpr => in_tcmar = true,
+                    b"top" if in_tcmar => {
+                        if let Some(w) = attr(&e, b"w").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_tc.pad_top_pt = w / 20.0;
+                        }
+                    }
+                    b"bottom" if in_tcmar => {
+                        if let Some(w) = attr(&e, b"w").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_tc.pad_bottom_pt = w / 20.0;
+                        }
+                    }
+                    b"left" if in_tcmar => {
+                        if let Some(w) = attr(&e, b"w").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_tc.pad_left_pt = w / 20.0;
+                        }
+                    }
+                    b"right" if in_tcmar => {
+                        if let Some(w) = attr(&e, b"w").and_then(|v| v.parse::<f32>().ok()) {
+                            cur_tc.pad_right_pt = w / 20.0;
+                        }
+                    }
                     b"tcBorders" if in_tcpr => in_tcborders = true,
                     b"left" | b"start" if in_tcborders => cur_tc.border_left = parse_border_edge(&e),
                     b"right" | b"end" if in_tcborders => cur_tc.border_right = parse_border_edge(&e),
@@ -872,6 +898,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                 b"tblPr" => in_tblpr = false,
                 b"tcPr" => in_tcpr = false,
                 b"tcBorders" => in_tcborders = false,
+                b"tcMar" => in_tcmar = false,
                 b"drawing" | b"pict" => {
                     in_drawing = false;
                     if let Some(rid) = cur_drawing_rel_id.take() {
@@ -911,11 +938,24 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                     para.space_after_pt = current_p_space_after.or(resolved_para.space_after_pt).unwrap_or(8.0);
                     para.line_spacing_mult = current_p_line_mult.or(resolved_para.line_spacing_mult).unwrap_or(1.2);
                     para.page_break_before = current_p_page_break_before;
+                    para.indent_left_pt = current_p_ind_left.unwrap_or(0.0);
+                    para.hanging_pt = current_p_ind_hanging.unwrap_or(0.0);
                     if let Some(ref num_id) = current_p_num_id {
                         if let Some((marker, ind, hang)) = numbering.next_marker(num_id, current_p_ilvl) {
                             para.list_marker = Some(marker);
-                            para.indent_left_pt = current_p_ind_left.unwrap_or(ind);
-                            para.hanging_pt = current_p_ind_hanging.unwrap_or(hang);
+                            if current_p_ind_left.is_none() { para.indent_left_pt = ind; }
+                            if current_p_ind_hanging.is_none() { para.hanging_pt = hang; }
+                        }
+                    } else if let Some(ref style) = current_p_style_id {
+                        let s_lower = style.to_lowercase();
+                        if s_lower.contains("bullet") || s_lower.contains("list") {
+                            para.list_marker = Some("• ".to_string());
+                            if para.indent_left_pt == 0.0 {
+                                para.indent_left_pt = 18.0;
+                            }
+                            if para.hanging_pt == 0.0 {
+                                para.hanging_pt = 14.0;
+                            }
                         }
                     }
                     if in_tc {
