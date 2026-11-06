@@ -4,12 +4,16 @@ use crate::model::*;
 #[derive(Clone, Debug)]
 pub struct Span {
     pub x: f32,
+    pub y_offset: f32,
     pub text: String,
     pub size: f32,
     pub bold: bool,
     pub italic: bool,
     pub width: f32,
     pub color: [u8; 3],
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub monospace: bool,
 }
 
 pub struct Line {
@@ -30,6 +34,16 @@ pub struct DrawRect {
 }
 
 #[derive(Clone, Debug)]
+pub struct DrawLine {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+    pub color: [u8; 3],
+    pub width: f32,
+}
+
+#[derive(Clone, Debug)]
 pub struct DrawImage {
     pub rel_id: String,
     pub x: f32,
@@ -40,8 +54,20 @@ pub struct DrawImage {
 
 pub struct LPage {
     pub rects: Vec<DrawRect>,
+    pub lines_vector: Vec<DrawLine>,
     pub images: Vec<DrawImage>,
     pub lines: Vec<Line>,
+}
+
+impl LPage {
+    pub fn new() -> Self {
+        LPage {
+            rects: vec![],
+            lines_vector: vec![],
+            images: vec![],
+            lines: vec![],
+        }
+    }
 }
 
 pub struct FaceSet<'a> {
@@ -65,11 +91,27 @@ impl<'a> FaceSet<'a> {
     }
 }
 
+pub fn is_symbol(c: char) -> bool {
+    matches!(c, '✔' | '✓' | '✗' | '✕' | '☑' | '☐')
+}
+
+pub fn char_width(c: char, face: &ttf_parser::Face, size: f32) -> f32 {
+    if is_symbol(c) {
+        size * 0.75
+    } else {
+        let upm = face.units_per_em() as f32;
+        face.glyph_index(c)
+            .and_then(|g| face.glyph_hor_advance(g))
+            .unwrap_or(0) as f32 * size / upm
+    }
+}
+
 pub fn width(face: &ttf_parser::Face, s: &str, size: f32) -> f32 {
-    let upm = face.units_per_em() as f32;
-    s.chars().map(|c| {
-        face.glyph_index(c).and_then(|g| face.glyph_hor_advance(g)).unwrap_or(0) as f32 * size / upm
-    }).sum()
+    token_width(face, s, size)
+}
+
+pub fn token_width(face: &ttf_parser::Face, s: &str, size: f32) -> f32 {
+    s.chars().map(|c| char_width(c, face, size)).sum()
 }
 
 #[derive(Clone)]
@@ -78,9 +120,14 @@ struct Token {
     bold: bool,
     italic: bool,
     size: f32,
+    y_offset: f32,
     color: [u8; 3],
     width: f32,
     is_space: bool,
+    is_newline: bool,
+    underline: bool,
+    strikethrough: bool,
+    monospace: bool,
 }
 
 fn break_para_into_lines(
@@ -98,39 +145,90 @@ fn break_para_into_lines(
             None => r.text.clone(),
         };
         if text_to_use.is_empty() { continue; }
-        let size = r.size_pt.unwrap_or(11.0);
+        let raw_size = r.size_pt.unwrap_or(11.0);
+        let (size, y_offset) = match r.vert_align {
+            Some(VertAlign::Superscript) => ((raw_size * 0.65).max(6.0), raw_size * 0.35),
+            Some(VertAlign::Subscript) => ((raw_size * 0.65).max(6.0), -raw_size * 0.15),
+            _ => (raw_size, 0.0),
+        };
         let color = r.color.unwrap_or([0, 0, 0]);
         let face = faces.select(r.bold, r.italic);
         let mut cur_token = String::new();
         let mut in_space = false;
 
         for ch in text_to_use.chars() {
+            if ch == '\n' {
+                if !cur_token.is_empty() {
+                    let w = token_width(face, &cur_token, size);
+                    tokens.push(Token {
+                        text: std::mem::take(&mut cur_token),
+                        bold: r.bold,
+                        italic: r.italic,
+                        size,
+                        y_offset,
+                        color,
+                        width: w,
+                        is_space: in_space,
+                        is_newline: false,
+                        underline: r.underline,
+                        strikethrough: r.strikethrough,
+                        monospace: r.monospace,
+                    });
+                }
+                tokens.push(Token {
+                    text: String::new(),
+                    bold: r.bold,
+                    italic: r.italic,
+                    size,
+                    y_offset,
+                    color,
+                    width: 0.0,
+                    is_space: false,
+                    is_newline: true,
+                    underline: r.underline,
+                    strikethrough: r.strikethrough,
+                    monospace: r.monospace,
+                });
+                in_space = false;
+                continue;
+            }
+
             let ch_is_space = ch == ' ';
             if !cur_token.is_empty() && ch_is_space != in_space {
-                let w = width(face, &cur_token, size);
+                let w = token_width(face, &cur_token, size);
                 tokens.push(Token {
                     text: std::mem::take(&mut cur_token),
                     bold: r.bold,
                     italic: r.italic,
                     size,
+                    y_offset,
                     color,
                     width: w,
                     is_space: in_space,
+                    is_newline: false,
+                    underline: r.underline,
+                    strikethrough: r.strikethrough,
+                    monospace: r.monospace,
                 });
             }
             in_space = ch_is_space;
             cur_token.push(ch);
         }
         if !cur_token.is_empty() {
-            let w = width(face, &cur_token, size);
+            let w = token_width(face, &cur_token, size);
             tokens.push(Token {
                 text: cur_token,
                 bold: r.bold,
                 italic: r.italic,
                 size,
+                y_offset,
                 color,
                 width: w,
                 is_space: in_space,
+                is_newline: false,
+                underline: r.underline,
+                strikethrough: r.strikethrough,
+                monospace: r.monospace,
             });
         }
     }
@@ -140,39 +238,93 @@ fn break_para_into_lines(
     let mut current_line_w: f32 = 0.0;
 
     for token in tokens {
+        if token.is_newline {
+            while let Some(last) = current_line.last() {
+                if last.is_space { current_line.pop(); } else { break; }
+            }
+            lines.push(std::mem::take(&mut current_line));
+            current_line_w = 0.0;
+            continue;
+        }
+
         if current_line.is_empty() {
             if token.is_space { continue; }
-            current_line_w = token.width;
-            current_line.push(token);
+            if token.width <= max_w {
+                current_line_w = token.width;
+                current_line.push(token);
+            } else {
+                let face = faces.select(token.bold, token.italic);
+                let mut chunk = String::new();
+                let mut chunk_w = 0.0;
+                for ch in token.text.chars() {
+                    let cw = char_width(ch, face, token.size);
+                    if chunk_w + cw > max_w && !chunk.is_empty() {
+                        lines.push(vec![Token {
+                            text: std::mem::take(&mut chunk),
+                            width: chunk_w,
+                            ..token.clone()
+                        }]);
+                        chunk_w = 0.0;
+                    }
+                    chunk.push(ch);
+                    chunk_w += cw;
+                }
+                if !chunk.is_empty() {
+                    current_line.push(Token {
+                        text: chunk,
+                        width: chunk_w,
+                        ..token
+                    });
+                    current_line_w = chunk_w;
+                }
+            }
         } else if current_line_w + token.width <= max_w {
             current_line_w += token.width;
             current_line.push(token);
         } else {
             while let Some(last) = current_line.last() {
-                if last.is_space {
-                    current_line.pop();
-                } else {
-                    break;
-                }
+                if last.is_space { current_line.pop(); } else { break; }
             }
             if !current_line.is_empty() {
                 lines.push(std::mem::take(&mut current_line));
             }
+            current_line_w = 0.0;
             if !token.is_space {
-                current_line_w = token.width;
-                current_line.push(token);
-            } else {
-                current_line_w = 0.0;
+                if token.width <= max_w {
+                    current_line_w = token.width;
+                    current_line.push(token);
+                } else {
+                    let face = faces.select(token.bold, token.italic);
+                    let mut chunk = String::new();
+                    let mut chunk_w = 0.0;
+                    for ch in token.text.chars() {
+                        let cw = char_width(ch, face, token.size);
+                        if chunk_w + cw > max_w && !chunk.is_empty() {
+                            lines.push(vec![Token {
+                                text: std::mem::take(&mut chunk),
+                                width: chunk_w,
+                                ..token.clone()
+                            }]);
+                            chunk_w = 0.0;
+                        }
+                        chunk.push(ch);
+                        chunk_w += cw;
+                    }
+                    if !chunk.is_empty() {
+                        current_line.push(Token {
+                            text: chunk,
+                            width: chunk_w,
+                            ..token
+                        });
+                        current_line_w = chunk_w;
+                    }
+                }
             }
         }
     }
 
     while let Some(last) = current_line.last() {
-        if last.is_space {
-            current_line.pop();
-        } else {
-            break;
-        }
+        if last.is_space { current_line.pop(); } else { break; }
     }
     if !current_line.is_empty() {
         lines.push(current_line);
@@ -183,7 +335,15 @@ fn break_para_into_lines(
         let mut spans: Vec<Span> = Vec::new();
         for t in line_tokens {
             if let Some(last) = spans.last_mut() {
-                if last.bold == t.bold && last.italic == t.italic && (last.size - t.size).abs() < 0.001 && last.color == t.color {
+                if last.bold == t.bold
+                    && last.italic == t.italic
+                    && (last.size - t.size).abs() < 0.001
+                    && (last.y_offset - t.y_offset).abs() < 0.001
+                    && last.color == t.color
+                    && last.underline == t.underline
+                    && last.strikethrough == t.strikethrough
+                    && last.monospace == t.monospace
+                {
                     last.text.push_str(&t.text);
                     last.width += t.width;
                     continue;
@@ -191,12 +351,16 @@ fn break_para_into_lines(
             }
             spans.push(Span {
                 x: 0.0,
+                y_offset: t.y_offset,
                 text: t.text,
                 size: t.size,
                 bold: t.bold,
                 italic: t.italic,
                 width: t.width,
                 color: t.color,
+                underline: t.underline,
+                strikethrough: t.strikethrough,
+                monospace: t.monospace,
             });
         }
 
@@ -231,7 +395,7 @@ fn layout_single_para(
             let empty_size = 11.0;
             let lh = empty_size * para.line_spacing_mult;
             if *y + lh > p.h_pt - p.mb {
-                pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+                pages.push(LPage::new());
                 *y = p.mt;
             } else {
                 *y += lh + para.space_after_pt;
@@ -244,7 +408,7 @@ fn layout_single_para(
         let text_total_w: f32 = spans.iter().map(|s| s.width).sum();
 
         if *y + lh > p.h_pt - p.mb {
-            pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+            pages.push(LPage::new());
             *y = p.mt;
         }
 
@@ -270,12 +434,16 @@ fn layout_single_para(
                 let marker_x = (p.ml + indent_left - hanging).max(p.ml);
                 spans.insert(0, Span {
                     x: marker_x,
+                    y_offset: 0.0,
                     text: marker_str.clone(),
                     size: max_size,
                     bold: false,
                     italic: false,
                     width: marker_w,
                     color: [0, 0, 0],
+                    underline: false,
+                    strikethrough: false,
+                    monospace: false,
                 });
             }
         }
@@ -308,11 +476,16 @@ fn layout_table(
     // Determine column widths
     let mut col_widths = table.col_widths_pt.clone();
     if col_widths.len() < num_cols {
-        let first_row_widths: Vec<f32> = table.rows.first()
-            .map(|r| r.cells.iter().map(|c| c.width_pt).collect())
-            .unwrap_or_default();
-        if first_row_widths.len() >= num_cols && first_row_widths.iter().all(|&w| w > 0.0) {
-            col_widths = first_row_widths;
+        let mut max_cell_widths = vec![0.0f32; num_cols];
+        for row in &table.rows {
+            for (i, cell) in row.cells.iter().enumerate() {
+                if i < num_cols && cell.width_pt > max_cell_widths[i] {
+                    max_cell_widths[i] = cell.width_pt;
+                }
+            }
+        }
+        if max_cell_widths.iter().all(|&w| w > 0.0) {
+            col_widths = max_cell_widths;
         } else {
             let default_w = max_page_w / (num_cols as f32);
             col_widths = vec![default_w; num_cols];
@@ -366,7 +539,7 @@ fn layout_table(
         let row_h = row.height_pt.unwrap_or(0.0).max(max_cell_h).max(18.0);
 
         if *y + row_h > p.h_pt - p.mb {
-            pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+            pages.push(LPage::new());
             *y = p.mt;
         }
 
@@ -374,6 +547,7 @@ fn layout_table(
         for (i, cell) in row.cells.iter().enumerate() {
             let cw = col_widths.get(i).copied().unwrap_or(100.0);
             let cell_y_bottom = p.h_pt - *y - row_h;
+            let cell_y_top = p.h_pt - *y;
 
             // 1. Shading (background)
             if let Some(bg) = cell.bg_color {
@@ -388,16 +562,36 @@ fn layout_table(
                 });
             }
 
-            // 2. Borders
-            pages.last_mut().unwrap().rects.push(DrawRect {
-                x: cell_x,
-                y: cell_y_bottom,
-                w: cw,
-                h: row_h,
-                fill_color: None,
-                stroke_color: Some(cell.border_color),
-                stroke_width: cell.border_width_pt,
-            });
+            // 2. Borders per edge (allows callouts with left accent only!)
+            let x_left = cell_x;
+            let x_right = cell_x + cw;
+            let y_top = cell_y_top;
+            let y_bottom = cell_y_bottom;
+
+            if cell.border_left.enabled && cell.border_left.width_pt > 0.0 {
+                pages.last_mut().unwrap().lines_vector.push(DrawLine {
+                    x1: x_left, y1: y_bottom, x2: x_left, y2: y_top,
+                    color: cell.border_left.color, width: cell.border_left.width_pt,
+                });
+            }
+            if cell.border_right.enabled && cell.border_right.width_pt > 0.0 {
+                pages.last_mut().unwrap().lines_vector.push(DrawLine {
+                    x1: x_right, y1: y_bottom, x2: x_right, y2: y_top,
+                    color: cell.border_right.color, width: cell.border_right.width_pt,
+                });
+            }
+            if cell.border_top.enabled && cell.border_top.width_pt > 0.0 {
+                pages.last_mut().unwrap().lines_vector.push(DrawLine {
+                    x1: x_left, y1: y_top, x2: x_right, y2: y_top,
+                    color: cell.border_top.color, width: cell.border_top.width_pt,
+                });
+            }
+            if cell.border_bottom.enabled && cell.border_bottom.width_pt > 0.0 {
+                pages.last_mut().unwrap().lines_vector.push(DrawLine {
+                    x1: x_left, y1: y_bottom, x2: x_right, y2: y_bottom,
+                    color: cell.border_bottom.color, width: cell.border_bottom.width_pt,
+                });
+            }
 
             // 3. Text lines
             if let Some(cl) = cell_layouts.get(i) {
@@ -461,7 +655,6 @@ fn layout_image(
         }
     }
 
-    // Scale down if wider than page
     if w > max_page_w && w > 0.0 {
         let factor = max_page_w / w;
         w = max_page_w;
@@ -475,7 +668,7 @@ fn layout_image(
     };
 
     if *y + h > p.h_pt - p.mb {
-        pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+        pages.push(LPage::new());
         *y = p.mt;
     }
 
@@ -492,27 +685,27 @@ fn layout_image(
 
 pub fn layout(doc: &Doc, faces: &FaceSet) -> Vec<LPage> {
     let p = &doc.page;
-    let mut pages = vec![LPage { rects: vec![], images: vec![], lines: vec![] }];
+    let mut pages = vec![LPage::new()];
     let mut y = p.mt;
 
     for block in &doc.blocks {
         match block {
             Block::PageBreak => {
                 let is_empty = pages.last().map_or(true, |pg| {
-                    pg.lines.is_empty() && pg.rects.is_empty() && pg.images.is_empty()
+                    pg.lines.is_empty() && pg.rects.is_empty() && pg.lines_vector.is_empty() && pg.images.is_empty()
                 });
                 if !is_empty {
-                    pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+                    pages.push(LPage::new());
                     y = p.mt;
                 }
             }
             Block::Para(para) => {
                 if para.page_break_before {
                     let is_empty = pages.last().map_or(true, |pg| {
-                        pg.lines.is_empty() && pg.rects.is_empty() && pg.images.is_empty()
+                        pg.lines.is_empty() && pg.rects.is_empty() && pg.lines_vector.is_empty() && pg.images.is_empty()
                     });
                     if !is_empty {
-                        pages.push(LPage { rects: vec![], images: vec![], lines: vec![] });
+                        pages.push(LPage::new());
                         y = p.mt;
                     }
                 }

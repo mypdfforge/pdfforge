@@ -70,8 +70,10 @@ pub fn write(
                     _ => faces.regular,
                 };
                 for c in s.text.chars() {
-                    if let Some(g) = face.glyph_index(c) {
-                        used[idx].insert(g.0, c);
+                    if !crate::layout::is_symbol(c) {
+                        if let Some(g) = face.glyph_index(c) {
+                            used[idx].insert(g.0, c);
+                        }
                     }
                 }
             }
@@ -267,7 +269,7 @@ pub fn write(
         kids.push(pid);
         let mut c = Content::new();
 
-        // Draw vector rectangles (table cell shading and borders)
+        // Draw vector rectangles (table cell shading)
         if !lp.rects.is_empty() {
             c.save_state();
             for r in &lp.rects {
@@ -286,6 +288,23 @@ pub fn write(
             c.restore_state();
         }
 
+        // Draw vector border lines (per-edge borders & callout accents)
+        if !lp.lines_vector.is_empty() {
+            c.save_state();
+            for line in &lp.lines_vector {
+                c.set_stroke_rgb(
+                    line.color[0] as f32 / 255.0,
+                    line.color[1] as f32 / 255.0,
+                    line.color[2] as f32 / 255.0,
+                );
+                c.set_line_width(line.width);
+                c.move_to(line.x1, line.y1);
+                c.line_to(line.x2, line.y2);
+                c.stroke();
+            }
+            c.restore_state();
+        }
+
         // Draw images
         for img in &lp.images {
             if let Some(tag) = rel_to_tag.get(&img.rel_id) {
@@ -299,14 +318,40 @@ pub fn write(
         let mut cur_color: Option<[u8; 3]> = None;
         for l in &lp.lines {
             for span in &l.spans {
+                let base_y = l.y + span.y_offset;
+                let cr = span.color[0] as f32 / 255.0;
+                let cg = span.color[1] as f32 / 255.0;
+                let cb = span.color[2] as f32 / 255.0;
+
+                // Underline
+                if span.underline {
+                    c.save_state();
+                    c.set_stroke_rgb(cr, cg, cb);
+                    c.set_line_width((span.size * 0.06).max(0.75));
+                    let uy = base_y - (span.size * 0.12).max(1.5);
+                    c.move_to(span.x, uy);
+                    c.line_to(span.x + span.width, uy);
+                    c.stroke();
+                    c.restore_state();
+                }
+
+                // Strikethrough
+                if span.strikethrough {
+                    c.save_state();
+                    c.set_stroke_rgb(cr, cg, cb);
+                    c.set_line_width((span.size * 0.06).max(0.75));
+                    let sy = base_y + span.size * 0.3;
+                    c.move_to(span.x, sy);
+                    c.line_to(span.x + span.width, sy);
+                    c.stroke();
+                    c.restore_state();
+                }
+
                 if cur_color != Some(span.color) {
-                    c.set_fill_rgb(
-                        span.color[0] as f32 / 255.0,
-                        span.color[1] as f32 / 255.0,
-                        span.color[2] as f32 / 255.0,
-                    );
+                    c.set_fill_rgb(cr, cg, cb);
                     cur_color = Some(span.color);
                 }
+
                 let idx = font_variant_index(span.bold, span.italic, font_bytes, faces);
                 let face = match idx {
                     1 => faces.bold.unwrap_or(faces.regular),
@@ -316,17 +361,80 @@ pub fn write(
                 };
                 let font_tag = metas[idx].tag;
 
-                let mut bytes = Vec::new();
+                let mut cur_x = span.x;
+                let mut regular_bytes = Vec::new();
+                let mut regular_start_x = cur_x;
+
                 for ch in span.text.chars() {
-                    let g = face.glyph_index(ch).map(|g| g.0).unwrap_or(0);
-                    bytes.extend_from_slice(&g.to_be_bytes());
+                    if crate::layout::is_symbol(ch) {
+                        if !regular_bytes.is_empty() {
+                            c.begin_text()
+                                .set_font(Name(font_tag), span.size)
+                                .next_line(regular_start_x, base_y)
+                                .show(Str(&regular_bytes))
+                                .end_text();
+                            regular_bytes.clear();
+                        }
+
+                        let sym_w = span.size * 0.75;
+                        c.save_state();
+                        c.set_stroke_rgb(cr, cg, cb);
+                        match ch {
+                            '✔' | '✓' => {
+                                c.set_line_width((span.size * 0.12).max(1.0));
+                                c.move_to(cur_x + sym_w * 0.15, base_y + span.size * 0.35);
+                                c.line_to(cur_x + sym_w * 0.38, base_y + span.size * 0.12);
+                                c.line_to(cur_x + sym_w * 0.85, base_y + span.size * 0.72);
+                                c.stroke();
+                            }
+                            '✗' | '✕' => {
+                                c.set_line_width((span.size * 0.12).max(1.0));
+                                c.move_to(cur_x + sym_w * 0.2, base_y + span.size * 0.2);
+                                c.line_to(cur_x + sym_w * 0.8, base_y + span.size * 0.75);
+                                c.move_to(cur_x + sym_w * 0.8, base_y + span.size * 0.2);
+                                c.line_to(cur_x + sym_w * 0.2, base_y + span.size * 0.75);
+                                c.stroke();
+                            }
+                            '☐' => {
+                                c.set_line_width((span.size * 0.08).max(0.75));
+                                let box_sz = span.size * 0.65;
+                                c.rect(cur_x + sym_w * 0.1, base_y + span.size * 0.12, box_sz, box_sz);
+                                c.stroke();
+                            }
+                            '☑' => {
+                                c.set_line_width((span.size * 0.08).max(0.75));
+                                let box_sz = span.size * 0.65;
+                                c.rect(cur_x + sym_w * 0.1, base_y + span.size * 0.12, box_sz, box_sz);
+                                c.stroke();
+                                c.set_line_width((span.size * 0.10).max(0.8));
+                                c.move_to(cur_x + sym_w * 0.22, base_y + span.size * 0.40);
+                                c.line_to(cur_x + sym_w * 0.38, base_y + span.size * 0.22);
+                                c.line_to(cur_x + sym_w * 0.68, base_y + span.size * 0.62);
+                                c.stroke();
+                            }
+                            _ => {}
+                        }
+                        c.restore_state();
+                        cur_x += sym_w;
+                        regular_start_x = cur_x;
+                    } else {
+                        let g = face.glyph_index(ch).map(|g| g.0).unwrap_or(0);
+                        if regular_bytes.is_empty() {
+                            regular_start_x = cur_x;
+                        }
+                        regular_bytes.extend_from_slice(&g.to_be_bytes());
+                        let cw = crate::layout::char_width(ch, face, span.size);
+                        cur_x += cw;
+                    }
                 }
 
-                c.begin_text()
-                    .set_font(Name(font_tag), span.size)
-                    .next_line(span.x, l.y)
-                    .show(Str(&bytes))
-                    .end_text();
+                if !regular_bytes.is_empty() {
+                    c.begin_text()
+                        .set_font(Name(font_tag), span.size)
+                        .next_line(regular_start_x, base_y)
+                        .show(Str(&regular_bytes))
+                        .end_text();
+                }
             }
         }
 

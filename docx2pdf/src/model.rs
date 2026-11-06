@@ -7,11 +7,39 @@ pub enum FieldType {
     NumPages,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VertAlign {
+    Baseline,
+    Superscript,
+    Subscript,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BorderEdge {
+    pub enabled: bool,
+    pub width_pt: f32,
+    pub color: [u8; 3],
+}
+
+impl Default for BorderEdge {
+    fn default() -> Self {
+        BorderEdge {
+            enabled: true,
+            width_pt: 0.75,
+            color: [200, 200, 200],
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Run {
     pub text: String,
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub monospace: bool,
+    pub vert_align: Option<VertAlign>,
     pub size_pt: Option<f32>,
     pub color: Option<[u8; 3]>,
     pub field: Option<FieldType>,
@@ -188,6 +216,10 @@ pub struct Style {
     pub line_spacing_mult: Option<f32>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub monospace: Option<bool>,
+    pub vert_align: Option<VertAlign>,
     pub size_pt: Option<f32>,
     pub color: Option<[u8; 3]>,
 }
@@ -200,6 +232,10 @@ impl Style {
         if let Some(ls) = other.line_spacing_mult { self.line_spacing_mult = Some(ls); }
         if let Some(b) = other.bold { self.bold = Some(b); }
         if let Some(i) = other.italic { self.italic = Some(i); }
+        if let Some(u) = other.underline { self.underline = Some(u); }
+        if let Some(s) = other.strikethrough { self.strikethrough = Some(s); }
+        if let Some(m) = other.monospace { self.monospace = Some(m); }
+        if let Some(v) = other.vert_align { self.vert_align = Some(v); }
         if let Some(sz) = other.size_pt { self.size_pt = Some(sz); }
         if let Some(c) = other.color { self.color = Some(c); }
     }
@@ -286,12 +322,10 @@ pub struct TableCell {
     pub paras: Vec<Para>,
     pub width_pt: f32,
     pub bg_color: Option<[u8; 3]>,
-    pub border_left: bool,
-    pub border_right: bool,
-    pub border_top: bool,
-    pub border_bottom: bool,
-    pub border_color: [u8; 3],
-    pub border_width_pt: f32,
+    pub border_left: BorderEdge,
+    pub border_right: BorderEdge,
+    pub border_top: BorderEdge,
+    pub border_bottom: BorderEdge,
     pub pad_left_pt: f32,
     pub pad_right_pt: f32,
     pub pad_top_pt: f32,
@@ -304,12 +338,10 @@ impl Default for TableCell {
             paras: vec![],
             width_pt: 0.0,
             bg_color: None,
-            border_left: true,
-            border_right: true,
-            border_top: true,
-            border_bottom: true,
-            border_color: [200, 200, 200],
-            border_width_pt: 0.75,
+            border_left: BorderEdge::default(),
+            border_right: BorderEdge::default(),
+            border_top: BorderEdge::default(),
+            border_bottom: BorderEdge::default(),
             pad_left_pt: 5.4,
             pad_right_pt: 5.4,
             pad_top_pt: 3.0,

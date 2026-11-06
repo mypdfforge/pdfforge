@@ -194,6 +194,45 @@ fn parse_styles(xml: &str) -> Styles {
                             s.color = c;
                         }
                     }
+                    b"u" if in_rpr => {
+                        let u = attr(&e, b"val").as_deref() != Some("none");
+                        if in_doc_defaults {
+                            styles.default_style.underline = Some(u);
+                        } else if let Some(s) = cur_style.as_mut() {
+                            s.underline = Some(u);
+                        }
+                    }
+                    b"strike" if in_rpr => {
+                        let st = attr(&e, b"val").as_deref() != Some("0");
+                        if in_doc_defaults {
+                            styles.default_style.strikethrough = Some(st);
+                        } else if let Some(s) = cur_style.as_mut() {
+                            s.strikethrough = Some(st);
+                        }
+                    }
+                    b"vertAlign" if in_rpr => {
+                        let v = match attr(&e, b"val").as_deref() {
+                            Some("superscript") => Some(VertAlign::Superscript),
+                            Some("subscript") => Some(VertAlign::Subscript),
+                            _ => Some(VertAlign::Baseline),
+                        };
+                        if in_doc_defaults {
+                            styles.default_style.vert_align = v;
+                        } else if let Some(s) = cur_style.as_mut() {
+                            s.vert_align = v;
+                        }
+                    }
+                    b"rFonts" if in_rpr => {
+                        if let Some(font_name) = attr(&e, b"ascii").or_else(|| attr(&e, b"hAnsi")) {
+                            let lower = font_name.to_lowercase();
+                            let is_mono = lower.contains("courier") || lower.contains("mono") || lower.contains("consolas");
+                            if in_doc_defaults {
+                                styles.default_style.monospace = Some(is_mono);
+                            } else if let Some(s) = cur_style.as_mut() {
+                                s.monospace = Some(is_mono);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -227,6 +266,19 @@ fn parse_hex_color(hex: &str) -> Option<[u8; 3]> {
     } else {
         None
     }
+}
+
+fn parse_border_edge(e: &quick_xml::events::BytesStart) -> BorderEdge {
+    let val = attr(e, b"val");
+    let enabled = !matches!(val.as_deref(), Some("none") | Some("nil"));
+    let width_pt = attr(e, b"sz")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|sz| (sz / 8.0).max(0.5))
+        .unwrap_or(0.75);
+    let color = attr(e, b"color")
+        .and_then(|v| parse_hex_color(&v))
+        .unwrap_or([200, 200, 200]);
+    BorderEdge { enabled, width_pt, color }
 }
 
 fn parse_jpeg(data: &[u8]) -> Option<(u32, u32)> {
@@ -450,6 +502,7 @@ fn parse_header_footer(xml: &str, styles: &Styles) -> HeaderFooter {
                                 size_pt: Some(9.0),
                                 color: None,
                                 field: Some(field),
+                                ..Default::default()
                             });
                         }
                     }
@@ -599,6 +652,10 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
     let mut current_r_italic: Option<bool> = None;
     let mut current_r_size: Option<f32> = None;
     let mut current_r_color: Option<[u8; 3]> = None;
+    let mut current_r_underline: Option<bool> = None;
+    let mut current_r_strikethrough: Option<bool> = None;
+    let mut current_r_vert_align: Option<VertAlign> = None;
+    let mut current_r_monospace: Option<bool> = None;
 
     let mut header_rel_id: Option<String> = None;
     let mut footer_rel_id: Option<String> = None;
@@ -606,7 +663,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
     let (mut para, mut run) = (Para::default(), Run::default());
     let (mut cur_tbl, mut cur_tr, mut cur_tc) = (Table::default(), TableRow::default(), TableCell::default());
     let (mut in_t, mut in_run, mut in_ppr, mut in_rpr, mut in_numpr) = (false, false, false, false, false);
-    let (mut in_tbl, mut in_tblpr, mut in_tr, mut in_tc, mut in_tcpr) = (false, false, false, false, false);
+    let (mut in_tbl, mut in_tblpr, mut in_tr, mut in_tc, mut in_tcpr, mut in_tcborders) = (false, false, false, false, false, false);
     let (mut in_drawing, mut cur_drawing_rel_id, mut cur_drawing_cx, mut cur_drawing_cy) = (false, None, None, None);
 
     loop {
@@ -644,6 +701,11 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                         cur_tc = TableCell::default();
                     }
                     b"tcPr" if in_tc => in_tcpr = true,
+                    b"tcBorders" if in_tcpr => in_tcborders = true,
+                    b"left" | b"start" if in_tcborders => cur_tc.border_left = parse_border_edge(&e),
+                    b"right" | b"end" if in_tcborders => cur_tc.border_right = parse_border_edge(&e),
+                    b"top" if in_tcborders => cur_tc.border_top = parse_border_edge(&e),
+                    b"bottom" if in_tcborders => cur_tc.border_bottom = parse_border_edge(&e),
                     b"tcW" if in_tcpr => {
                         if let Some(w) = attr(&e, b"w").and_then(|v| v.parse::<f32>().ok()) {
                             cur_tc.width_pt = w / 20.0;
@@ -699,6 +761,10 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                         current_r_italic = None;
                         current_r_size = None;
                         current_r_color = None;
+                        current_r_underline = None;
+                        current_r_strikethrough = None;
+                        current_r_vert_align = None;
+                        current_r_monospace = None;
                     }
                     b"rPr" => in_rpr = true,
                     b"rStyle" if in_rpr => current_r_style_id = attr(&e, b"val"),
@@ -706,6 +772,19 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                     b"i" if in_rpr => current_r_italic = Some(attr(&e, b"val").as_deref() != Some("0")),
                     b"sz" if in_rpr => current_r_size = attr(&e, b"val").and_then(|v| v.parse::<f32>().ok()).map(|h| h / 2.0),
                     b"color" if in_rpr => current_r_color = attr(&e, b"val").and_then(|v| parse_hex_color(&v)),
+                    b"u" if in_rpr => current_r_underline = Some(attr(&e, b"val").as_deref() != Some("none")),
+                    b"strike" if in_rpr => current_r_strikethrough = Some(attr(&e, b"val").as_deref() != Some("0")),
+                    b"vertAlign" if in_rpr => current_r_vert_align = match attr(&e, b"val").as_deref() {
+                        Some("superscript") => Some(VertAlign::Superscript),
+                        Some("subscript") => Some(VertAlign::Subscript),
+                        _ => Some(VertAlign::Baseline),
+                    },
+                    b"rFonts" if in_rpr => {
+                        if let Some(font_name) = attr(&e, b"ascii").or_else(|| attr(&e, b"hAnsi")) {
+                            let lower = font_name.to_lowercase();
+                            current_r_monospace = Some(lower.contains("courier") || lower.contains("mono") || lower.contains("consolas"));
+                        }
+                    }
                     b"t" => in_t = true,
                     b"pgSz" => {
                         if let Some(w) = attr(&e, b"w").and_then(|v| v.parse::<f32>().ok()) { doc.page.w_pt = w / 20.0; }
@@ -744,10 +823,14 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                                 run.italic = current_r_italic.or(resolved_run.italic).unwrap_or(false);
                                 run.size_pt = current_r_size.or(resolved_run.size_pt);
                                 run.color = current_r_color.or(resolved_run.color);
+                                run.underline = current_r_underline.or(resolved_run.underline).unwrap_or(false);
+                                run.strikethrough = current_r_strikethrough.or(resolved_run.strikethrough).unwrap_or(false);
+                                run.vert_align = current_r_vert_align.or(resolved_run.vert_align);
+                                run.monospace = current_r_monospace.or(resolved_run.monospace).unwrap_or(false);
                                 para.runs.push(std::mem::take(&mut run));
                             }
                             if in_tc {
-                                run.text.push(' ');
+                                run.text.push('\n');
                             } else {
                                 if !para.runs.is_empty() {
                                     let resolved_para = styles.resolve_para(current_p_style_id.as_deref());
@@ -760,7 +843,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                                 doc.blocks.push(Block::PageBreak);
                             }
                         } else {
-                            run.text.push(' ');
+                            run.text.push('\n');
                         }
                     }
                     b"tab" if in_run => run.text.push(' '),
@@ -788,6 +871,7 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                 b"rPr" => in_rpr = false,
                 b"tblPr" => in_tblpr = false,
                 b"tcPr" => in_tcpr = false,
+                b"tcBorders" => in_tcborders = false,
                 b"drawing" | b"pict" => {
                     in_drawing = false;
                     if let Some(rid) = cur_drawing_rel_id.take() {
@@ -814,6 +898,10 @@ pub fn parse(bytes: &[u8]) -> Result<Doc, String> {
                     run.italic = current_r_italic.or(resolved_run.italic).unwrap_or(false);
                     run.size_pt = current_r_size.or(resolved_run.size_pt);
                     run.color = current_r_color.or(resolved_run.color);
+                    run.underline = current_r_underline.or(resolved_run.underline).unwrap_or(false);
+                    run.strikethrough = current_r_strikethrough.or(resolved_run.strikethrough).unwrap_or(false);
+                    run.vert_align = current_r_vert_align.or(resolved_run.vert_align);
+                    run.monospace = current_r_monospace.or(resolved_run.monospace).unwrap_or(false);
                     para.runs.push(std::mem::take(&mut run));
                 }
                 b"p" => {
