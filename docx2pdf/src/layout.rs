@@ -75,6 +75,7 @@ pub struct FaceSet<'a> {
     pub bold: Option<&'a ttf_parser::Face<'a>>,
     pub italic: Option<&'a ttf_parser::Face<'a>>,
     pub bold_italic: Option<&'a ttf_parser::Face<'a>>,
+    pub fallbacks: &'a [ttf_parser::Face<'a>],
 }
 
 impl<'a> FaceSet<'a> {
@@ -89,29 +90,163 @@ impl<'a> FaceSet<'a> {
             (false, false) => self.regular,
         }
     }
+
+    pub fn find_glyph(&self, ch: char, bold: bool, italic: bool) -> (&ttf_parser::Face<'a>, ttf_parser::GlyphId, usize) {
+        let primary = self.select(bold, italic);
+        if let Some(gid) = primary.glyph_index(ch) {
+            return (primary, gid, 0);
+        }
+        for (i, fb) in self.fallbacks.iter().enumerate() {
+            if let Some(gid) = fb.glyph_index(ch) {
+                return (fb, gid, i + 1);
+            }
+        }
+        (primary, ttf_parser::GlyphId(0), 0)
+    }
 }
 
 pub fn is_symbol(c: char) -> bool {
     matches!(c, '✔' | '✓' | '✗' | '✕' | '☑' | '☐')
 }
 
-pub fn char_width(c: char, face: &ttf_parser::Face, size: f32) -> f32 {
-    if is_symbol(c) {
-        size * 0.75
-    } else {
-        let upm = face.units_per_em() as f32;
-        face.glyph_index(c)
-            .and_then(|g| face.glyph_hor_advance(g))
-            .unwrap_or(0) as f32 * size / upm
+pub fn is_arabic(c: char) -> bool {
+    matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFC}')
+}
+
+pub fn is_hebrew(c: char) -> bool {
+    matches!(c, '\u{0590}'..='\u{05FF}')
+}
+
+pub fn is_rtl_char(c: char) -> bool {
+    is_arabic(c) || is_hebrew(c)
+}
+
+fn arabic_forms(c: char) -> Option<[u16; 4]> {
+    match c {
+        '\u{0621}' => Some([0xFE80, 0xFE80, 0xFE80, 0xFE80]),
+        '\u{0622}' => Some([0xFE81, 0xFE82, 0xFE81, 0xFE82]),
+        '\u{0623}' => Some([0xFE83, 0xFE84, 0xFE83, 0xFE84]),
+        '\u{0624}' => Some([0xFE85, 0xFE86, 0xFE85, 0xFE86]),
+        '\u{0625}' => Some([0xFE87, 0xFE88, 0xFE87, 0xFE88]),
+        '\u{0626}' => Some([0xFE89, 0xFE8A, 0xFE8B, 0xFE8C]),
+        '\u{0627}' => Some([0xFE8D, 0xFE8E, 0xFE8D, 0xFE8E]),
+        '\u{0628}' => Some([0xFE8F, 0xFE90, 0xFE91, 0xFE92]),
+        '\u{0629}' => Some([0xFE93, 0xFE94, 0xFE93, 0xFE94]),
+        '\u{062A}' => Some([0xFE95, 0xFE96, 0xFE97, 0xFE98]),
+        '\u{062B}' => Some([0xFE99, 0xFE9A, 0xFE9B, 0xFE9C]),
+        '\u{062C}' => Some([0xFE9D, 0xFE9E, 0xFE9F, 0xFEA0]),
+        '\u{062D}' => Some([0xFEA1, 0xFEA2, 0xFEA3, 0xFEA4]),
+        '\u{062E}' => Some([0xFEA5, 0xFEA6, 0xFEA7, 0xFEA8]),
+        '\u{062F}' => Some([0xFEA9, 0xFEAA, 0xFEA9, 0xFEAA]),
+        '\u{0630}' => Some([0xFEAB, 0xFEAC, 0xFEAB, 0xFEAC]),
+        '\u{0631}' => Some([0xFEAD, 0xFEAE, 0xFEAD, 0xFEAE]),
+        '\u{0632}' => Some([0xFEAF, 0xFEB0, 0xFEAF, 0xFEB0]),
+        '\u{0633}' => Some([0xFEB1, 0xFEB2, 0xFEB3, 0xFEB4]),
+        '\u{0634}' => Some([0xFEB5, 0xFEB6, 0xFEB7, 0xFEB8]),
+        '\u{0635}' => Some([0xFEB9, 0xFEBA, 0xFEBB, 0xFEBC]),
+        '\u{0636}' => Some([0xFEBD, 0xFEBE, 0xFEBF, 0xFEC0]),
+        '\u{0637}' => Some([0xFEC1, 0xFEC2, 0xFEC3, 0xFEC4]),
+        '\u{0638}' => Some([0xFEC5, 0xFEC6, 0xFEC7, 0xFEC8]),
+        '\u{0639}' => Some([0xFEC9, 0xFECA, 0xFECB, 0xFECC]),
+        '\u{063A}' => Some([0xFECD, 0xFECE, 0xFECF, 0xFED0]),
+        '\u{0641}' => Some([0xFED1, 0xFED2, 0xFED3, 0xFED4]),
+        '\u{0642}' => Some([0xFED5, 0xFED6, 0xFED7, 0xFED8]),
+        '\u{0643}' => Some([0xFED9, 0xFEDA, 0xFEDB, 0xFEDC]),
+        '\u{0644}' => Some([0xFEDD, 0xFEDE, 0xFEDF, 0xFEE0]),
+        '\u{0645}' => Some([0xFEE1, 0xFEE2, 0xFEE3, 0xFEE4]),
+        '\u{0646}' => Some([0xFEE5, 0xFEE6, 0xFEE7, 0xFEE8]),
+        '\u{0647}' => Some([0xFEE9, 0xFEEA, 0xFEEB, 0xFEEC]),
+        '\u{0648}' => Some([0xFEED, 0xFEEE, 0xFEED, 0xFEEE]),
+        '\u{0649}' => Some([0xFEEF, 0xFEF0, 0xFEEF, 0xFEF0]),
+        '\u{064A}' => Some([0xFEF1, 0xFEF2, 0xFEF3, 0xFEF4]),
+        _ => None,
     }
 }
 
-pub fn width(face: &ttf_parser::Face, s: &str, size: f32) -> f32 {
-    token_width(face, s, size)
+fn is_right_only(c: char) -> bool {
+    matches!(c, '\u{0622}' | '\u{0623}' | '\u{0624}' | '\u{0625}' | '\u{0627}'
+             | '\u{062F}' | '\u{0630}' | '\u{0631}' | '\u{0632}' | '\u{0648}'
+             | '\u{0649}' | '\u{0629}')
 }
 
-pub fn token_width(face: &ttf_parser::Face, s: &str, size: f32) -> f32 {
-    s.chars().map(|c| char_width(c, face, size)).sum()
+pub fn shape_arabic(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '\u{0644}' && i + 1 < chars.len() {
+            let next = chars[i + 1];
+            let lam_alef = match next {
+                '\u{0627}' => Some([0xFEFBu16, 0xFEFCu16]),
+                '\u{0623}' => Some([0xFEF7, 0xFEF8]),
+                '\u{0625}' => Some([0xFEF9, 0xFEFA]),
+                '\u{0622}' => Some([0xFEF5, 0xFEF6]),
+                _ => None,
+            };
+            if let Some(la) = lam_alef {
+                let prev = if i > 0 { Some(chars[i - 1]) } else { None };
+                let prev_connects = prev.map(|p| arabic_forms(p).is_some() && !is_right_only(p)).unwrap_or(false);
+                let code = if prev_connects { la[1] } else { la[0] };
+                if let Some(c) = char::from_u32(code as u32) {
+                    out.push(c);
+                }
+                i += 2;
+                continue;
+            }
+        }
+
+        if let Some(forms) = arabic_forms(ch) {
+            let prev = if i > 0 { Some(chars[i - 1]) } else { None };
+            let next = if i + 1 < chars.len() { Some(chars[i + 1]) } else { None };
+
+            let prev_connects = prev.map(|p| arabic_forms(p).is_some() && !is_right_only(p)).unwrap_or(false);
+            let next_connects = next.map(|n| arabic_forms(n).is_some() && !is_right_only(ch)).unwrap_or(false);
+
+            let form_idx = if prev_connects && next_connects {
+                3
+            } else if prev_connects {
+                1
+            } else if next_connects {
+                2
+            } else {
+                0
+            };
+
+            if let Some(c) = char::from_u32(forms[form_idx] as u32) {
+                out.push(c);
+            } else {
+                out.push(ch);
+            }
+        } else {
+            out.push(ch);
+        }
+        i += 1;
+    }
+    out
+}
+
+pub fn char_width(c: char, faces: &FaceSet, bold: bool, italic: bool, size: f32) -> f32 {
+    if is_symbol(c) {
+        size * 0.75
+    } else {
+        let (face, gid, _) = faces.find_glyph(c, bold, italic);
+        if gid.0 != 0 {
+            let upm = face.units_per_em() as f32;
+            let adv = face.glyph_hor_advance(gid).unwrap_or(upm as u16) as f32;
+            (adv / upm) * size
+        } else {
+            size * 0.55
+        }
+    }
+}
+
+pub fn width(faces: &FaceSet, bold: bool, italic: bool, s: &str, size: f32) -> f32 {
+    token_width(faces, bold, italic, s, size)
+}
+
+pub fn token_width(faces: &FaceSet, bold: bool, italic: bool, s: &str, size: f32) -> f32 {
+    s.chars().map(|c| char_width(c, faces, bold, italic, size)).sum()
 }
 
 #[derive(Clone)]
@@ -145,6 +280,11 @@ fn break_para_into_lines(
             None => r.text.clone(),
         };
         if text_to_use.is_empty() { continue; }
+        let text_to_use = if text_to_use.chars().any(is_arabic) {
+            shape_arabic(&text_to_use)
+        } else {
+            text_to_use
+        };
         let raw_size = r.size_pt.unwrap_or(11.0);
         let (size, y_offset) = match r.vert_align {
             Some(VertAlign::Superscript) => ((raw_size * 0.65).max(6.0), raw_size * 0.35),
@@ -152,16 +292,20 @@ fn break_para_into_lines(
             _ => (raw_size, 0.0),
         };
         let color = r.color.unwrap_or([0, 0, 0]);
-        let face = faces.select(r.bold, r.italic);
         let mut cur_token = String::new();
         let mut in_space = false;
 
         for ch in text_to_use.chars() {
             if ch == '\n' {
                 if !cur_token.is_empty() {
-                    let w = token_width(face, &cur_token, size);
+                    let w = token_width(faces, r.bold, r.italic, &cur_token, size);
+                    let display_text = if cur_token.chars().any(is_rtl_char) {
+                        cur_token.chars().rev().collect()
+                    } else {
+                        cur_token
+                    };
                     tokens.push(Token {
-                        text: std::mem::take(&mut cur_token),
+                        text: display_text,
                         bold: r.bold,
                         italic: r.italic,
                         size,
@@ -174,6 +318,7 @@ fn break_para_into_lines(
                         strikethrough: r.strikethrough,
                         monospace: r.monospace,
                     });
+                    cur_token = String::new();
                 }
                 tokens.push(Token {
                     text: String::new(),
@@ -195,9 +340,14 @@ fn break_para_into_lines(
 
             let ch_is_space = ch == ' ';
             if !cur_token.is_empty() && ch_is_space != in_space {
-                let w = token_width(face, &cur_token, size);
+                let w = token_width(faces, r.bold, r.italic, &cur_token, size);
+                let display_text = if cur_token.chars().any(is_rtl_char) {
+                    cur_token.chars().rev().collect()
+                } else {
+                    cur_token
+                };
                 tokens.push(Token {
-                    text: std::mem::take(&mut cur_token),
+                    text: display_text,
                     bold: r.bold,
                     italic: r.italic,
                     size,
@@ -210,14 +360,20 @@ fn break_para_into_lines(
                     strikethrough: r.strikethrough,
                     monospace: r.monospace,
                 });
+                cur_token = String::new();
             }
             in_space = ch_is_space;
             cur_token.push(ch);
         }
         if !cur_token.is_empty() {
-            let w = token_width(face, &cur_token, size);
+            let w = token_width(faces, r.bold, r.italic, &cur_token, size);
+            let display_text = if cur_token.chars().any(is_rtl_char) {
+                cur_token.chars().rev().collect()
+            } else {
+                cur_token
+            };
             tokens.push(Token {
-                text: cur_token,
+                text: display_text,
                 bold: r.bold,
                 italic: r.italic,
                 size,
@@ -253,11 +409,10 @@ fn break_para_into_lines(
                 current_line_w = token.width;
                 current_line.push(token);
             } else {
-                let face = faces.select(token.bold, token.italic);
                 let mut chunk = String::new();
                 let mut chunk_w = 0.0;
                 for ch in token.text.chars() {
-                    let cw = char_width(ch, face, token.size);
+                    let cw = char_width(ch, faces, token.bold, token.italic, token.size);
                     if chunk_w + cw > max_w && !chunk.is_empty() {
                         lines.push(vec![Token {
                             text: std::mem::take(&mut chunk),
@@ -294,11 +449,10 @@ fn break_para_into_lines(
                     current_line_w = token.width;
                     current_line.push(token);
                 } else {
-                    let face = faces.select(token.bold, token.italic);
                     let mut chunk = String::new();
                     let mut chunk_w = 0.0;
                     for ch in token.text.chars() {
-                        let cw = char_width(ch, face, token.size);
+                        let cw = char_width(ch, faces, token.bold, token.italic, token.size);
                         if chunk_w + cw > max_w && !chunk.is_empty() {
                             lines.push(vec![Token {
                                 text: std::mem::take(&mut chunk),
@@ -331,7 +485,11 @@ fn break_para_into_lines(
     }
 
     let mut result = Vec::new();
-    for line_tokens in lines {
+    for mut line_tokens in lines {
+        let is_rtl_line = line_tokens.iter().any(|t| t.text.chars().any(is_rtl_char));
+        if is_rtl_line {
+            line_tokens.reverse();
+        }
         let mut spans: Vec<Span> = Vec::new();
         for t in line_tokens {
             if let Some(last) = spans.last_mut() {
@@ -430,7 +588,7 @@ fn layout_single_para(
 
         if line_idx == 0 && is_list {
             if let Some(marker_str) = &para.list_marker {
-                let marker_w = width(faces.regular, marker_str, max_size);
+                let marker_w = width(faces, false, false, marker_str, max_size);
                 let marker_x = (p.ml + indent_left - hanging).max(p.ml);
                 spans.insert(0, Span {
                     x: marker_x,
@@ -503,9 +661,8 @@ fn layout_table(
                 for para in &cell.paras {
                     for run in &para.runs {
                         let sz = run.size_pt.unwrap_or(11.0);
-                        let face = faces.select(run.bold, run.italic);
                         for word in run.text.split_whitespace() {
-                            let w = token_width(face, word, sz) + pad + 4.0;
+                            let w = token_width(faces, run.bold, run.italic, word, sz) + pad + 4.0;
                             if w > min_col_widths[c_idx] {
                                 min_col_widths[c_idx] = w;
                             }

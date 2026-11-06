@@ -34,6 +34,15 @@ export class Converter {
         return this;
     }
     /**
+     * Register fallback font data for multi-lingual and non-Latin scripts
+     * @param {Uint8Array | number[]} data
+     */
+    registerFallbackFont(data) {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.converter_registerFallbackFont(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * Register font variants: 'regular' (or default), 'bold', 'italic', 'bold-italic'
      * @param {string} variant
      * @param {Uint8Array | number[]} data

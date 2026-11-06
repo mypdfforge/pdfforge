@@ -10,6 +10,10 @@ export class Converter {
     convert(docx: Uint8Array | number[]): Uint8Array;
     constructor();
     /**
+     * Register fallback font data for multi-lingual and non-Latin scripts
+     */
+    registerFallbackFont(data: Uint8Array | number[]): void;
+    /**
      * Register font variants: 'regular' (or default), 'bold', 'italic', 'bold-italic'
      */
     registerFont(variant: string, data: Uint8Array | number[]): void;
@@ -22,6 +26,7 @@ export interface InitOutput {
     readonly __wbg_converter_free: (a: number, b: number) => void;
     readonly converter_convert: (a: number, b: number, c: number) => [number, number, number, number];
     readonly converter_new: () => number;
+    readonly converter_registerFallbackFont: (a: number, b: number, c: number) => void;
     readonly converter_registerFont: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

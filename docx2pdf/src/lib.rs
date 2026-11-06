@@ -12,6 +12,7 @@ pub struct FontData {
     pub bold: Option<Vec<u8>>,
     pub italic: Option<Vec<u8>>,
     pub bold_italic: Option<Vec<u8>>,
+    pub fallbacks: Vec<Vec<u8>>,
 }
 
 #[wasm_bindgen]
@@ -43,6 +44,12 @@ impl Converter {
         }
     }
 
+    /// Register fallback font data for multi-lingual and non-Latin scripts
+    #[wasm_bindgen(js_name = registerFallbackFont)]
+    pub fn register_fallback_font(&mut self, data: Vec<u8>) {
+        self.fonts.fallbacks.push(data);
+    }
+
     /// Returns PDF bytes. Warnings via lastWarnings-style: joined by \n in the error-free path.
     pub fn convert(&self, docx: &[u8]) -> Result<Vec<u8>, JsValue> {
         let reg_bytes = self
@@ -69,11 +76,19 @@ impl Converter {
             .as_ref()
             .and_then(|b| ttf_parser::Face::parse(b, 0).ok());
 
+        let mut fb_faces = Vec::new();
+        for b in &self.fonts.fallbacks {
+            if let Ok(f) = ttf_parser::Face::parse(b, 0) {
+                fb_faces.push(f);
+            }
+        }
+
         let faces = layout::FaceSet {
             regular: &reg_face,
             bold: bold_face.as_ref(),
             italic: italic_face.as_ref(),
             bold_italic: bi_face.as_ref(),
+            fallbacks: &fb_faces,
         };
 
         let doc = parse::parse(docx).map_err(|e| JsValue::from_str(&e))?;
@@ -84,6 +99,7 @@ impl Converter {
             bold: self.fonts.bold.as_deref(),
             italic: self.fonts.italic.as_deref(),
             bold_italic: self.fonts.bold_italic.as_deref(),
+            fallbacks: &self.fonts.fallbacks,
         };
 
         Ok(pdf::write(&pages, &doc.page, &doc, &font_bytes_set, &faces))

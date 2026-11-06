@@ -13,6 +13,7 @@ pub struct FontBytesSet<'a> {
     pub bold: Option<&'a [u8]>,
     pub italic: Option<&'a [u8]>,
     pub bold_italic: Option<&'a [u8]>,
+    pub fallbacks: &'a [Vec<u8>],
 }
 
 fn font_variant_index(bold: bool, italic: bool, fonts: &FontBytesSet, faces: &FaceSet) -> usize {
@@ -51,28 +52,28 @@ pub fn write(
 
     pdf.catalog(cat).pages(tree);
 
-    // Collect used glyphs for each variant: [regular, bold, italic, bold_italic]
+    // Collect used glyphs for primary variants and fallbacks
     let mut used: [BTreeMap<u16, char>; 4] = [
         BTreeMap::new(),
         BTreeMap::new(),
         BTreeMap::new(),
         BTreeMap::new(),
     ];
+    let mut fb_used: Vec<BTreeMap<u16, char>> = vec![BTreeMap::new(); faces.fallbacks.len()];
 
     for p in pages {
         for l in &p.lines {
             for s in &l.spans {
-                let idx = font_variant_index(s.bold, s.italic, font_bytes, faces);
-                let face = match idx {
-                    1 => faces.bold.unwrap_or(faces.regular),
-                    2 => faces.italic.unwrap_or(faces.regular),
-                    3 => faces.bold_italic.or(faces.bold).or(faces.italic).unwrap_or(faces.regular),
-                    _ => faces.regular,
-                };
                 for c in s.text.chars() {
                     if !crate::layout::is_symbol(c) {
-                        if let Some(g) = face.glyph_index(c) {
-                            used[idx].insert(g.0, c);
+                        let (_, gid, font_idx) = faces.find_glyph(c, s.bold, s.italic);
+                        if gid.0 != 0 {
+                            if font_idx == 0 {
+                                let idx = font_variant_index(s.bold, s.italic, font_bytes, faces);
+                                used[idx].insert(gid.0, c);
+                            } else if font_idx - 1 < fb_used.len() {
+                                fb_used[font_idx - 1].insert(gid.0, c);
+                            }
                         }
                     }
                 }
@@ -97,7 +98,6 @@ pub fn write(
     let mut active_font_pairs: Vec<(&'static [u8], Ref)> = Vec::new();
 
     for idx in 0..4 {
-        // Embed regular always; other variants only if used and provided
         let bytes_opt = match idx {
             0 => Some(font_bytes.regular),
             1 => font_bytes.bold,
@@ -132,7 +132,6 @@ pub fn write(
             let upm = face.units_per_em() as f32;
             let scale = 1000.0 / upm;
 
-            // Font file stream (subsetted to only used glyphs)
             let subsetted = crate::subset::subset_ttf(bytes, &used[idx]);
             let comp = deflate(&subsetted);
             pdf.stream(file_id, &comp)
@@ -181,7 +180,6 @@ pub fn write(
                 }
             }
 
-            // ToUnicode CMap
             let mut cmap = String::from(
                 "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange <0000> <FFFF> endcodespacerange\n",
             );
@@ -208,6 +206,96 @@ pub fn write(
                 .descendant_font(cid_id)
                 .to_unicode(tou_id);
         }
+    }
+
+    // Embed fallback fonts
+    let mut fb_active_font_pairs: Vec<(String, Ref)> = Vec::new();
+    for (i, fb_face) in faces.fallbacks.iter().enumerate() {
+        if i >= fb_used.len() || fb_used[i].is_empty() {
+            continue;
+        }
+        let tag = format!("FB{}", i + 1);
+        let fb_bytes = &font_bytes.fallbacks[i];
+        let font_id = alloc();
+        let cid_id = alloc();
+        let desc_id = alloc();
+        let file_id = alloc();
+        let tou_id = alloc();
+
+        fb_active_font_pairs.push((tag.clone(), font_id));
+
+        let font_name = format!("CustomFallback-{}", i + 1);
+        let name = Name(font_name.as_bytes());
+        let upm = fb_face.units_per_em() as f32;
+        let scale = 1000.0 / upm;
+
+        let subsetted = crate::subset::subset_ttf(fb_bytes, &fb_used[i]);
+        let comp = deflate(&subsetted);
+        pdf.stream(file_id, &comp)
+            .filter(Filter::FlateDecode)
+            .pair(Name(b"Length1"), subsetted.len() as i32);
+
+        let bb = fb_face.global_bounding_box();
+        pdf.font_descriptor(desc_id)
+            .name(name)
+            .flags(FontFlags::NON_SYMBOLIC)
+            .bbox(Rect::new(
+                bb.x_min as f32 * scale,
+                bb.y_min as f32 * scale,
+                bb.x_max as f32 * scale,
+                bb.y_max as f32 * scale,
+            ))
+            .ascent(fb_face.ascender() as f32 * scale)
+            .descent(fb_face.descender() as f32 * scale)
+            .cap_height(700.0)
+            .stem_v(80.0)
+            .font_file2(file_id);
+
+        {
+            let mut cid = pdf.cid_font(cid_id);
+            cid.subtype(CidFontType::Type2)
+                .base_font(name)
+                .system_info(SystemInfo {
+                    registry: Str(b"Adobe"),
+                    ordering: Str(b"Identity"),
+                    supplement: 0,
+                })
+                .font_descriptor(desc_id)
+                .default_width(0.0)
+                .cid_to_gid_map_predefined(Name(b"Identity"));
+
+            let mut w = cid.widths();
+            for (&g, _) in &fb_used[i] {
+                let adv = fb_face.glyph_hor_advance(ttf_parser::GlyphId(g)).unwrap_or(0) as f32 * scale;
+                w.consecutive(g, [adv]);
+            }
+        }
+
+        let mut cmap = String::from(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange <0000> <FFFF> endcodespacerange\n",
+        );
+        let items: Vec<_> = fb_used[i].iter().collect();
+        for chunk in items.chunks(100) {
+            cmap += &format!("{} beginbfchar\n", chunk.len());
+            for (g, c) in chunk {
+                let mut buf = [0u16; 2];
+                let hex: String = c
+                    .encode_utf16(&mut buf)
+                    .iter()
+                    .map(|u| format!("{:04X}", u))
+                    .collect();
+                cmap += &format!("<{:04X}> <{}>\n", g, hex);
+            }
+            cmap += "endbfchar\n";
+        }
+        cmap += "endcmap CMapName currentdict /CMap defineresource pop end end\n";
+        pdf.stream(tou_id, cmap.as_bytes());
+
+        pdf.type0_font(font_id)
+            .base_font(name)
+            .encoding_predefined(Name(b"Identity-H"))
+            .descendant_font(cid_id)
+            .to_unicode(tou_id);
     }
 
     // Embed Images as XObjects
@@ -353,13 +441,14 @@ pub fn write(
                 }
 
                 let idx = font_variant_index(span.bold, span.italic, font_bytes, faces);
-                let face = match idx {
+                let _face = match idx {
                     1 => faces.bold.unwrap_or(faces.regular),
                     2 => faces.italic.unwrap_or(faces.regular),
                     3 => faces.bold_italic.or(faces.bold).or(faces.italic).unwrap_or(faces.regular),
                     _ => faces.regular,
                 };
                 let font_tag = metas[idx].tag;
+                let mut cur_font_tag = font_tag.to_vec();
 
                 let mut cur_x = span.x;
                 let mut regular_bytes = Vec::new();
@@ -369,7 +458,7 @@ pub fn write(
                     if crate::layout::is_symbol(ch) {
                         if !regular_bytes.is_empty() {
                             c.begin_text()
-                                .set_font(Name(font_tag), span.size)
+                                .set_font(Name(&cur_font_tag), span.size)
                                 .next_line(regular_start_x, base_y)
                                 .show(Str(&regular_bytes))
                                 .end_text();
@@ -418,19 +507,38 @@ pub fn write(
                         cur_x += sym_w;
                         regular_start_x = cur_x;
                     } else {
-                        let g = face.glyph_index(ch).map(|g| g.0).unwrap_or(0);
+                        let (_, gid, font_idx) = faces.find_glyph(ch, span.bold, span.italic);
+                        let tag = if font_idx == 0 {
+                            font_tag.to_vec()
+                        } else {
+                            format!("FB{}", font_idx).into_bytes()
+                        };
+
+                        if tag != cur_font_tag {
+                            if !regular_bytes.is_empty() {
+                                c.begin_text()
+                                    .set_font(Name(&cur_font_tag), span.size)
+                                    .next_line(regular_start_x, base_y)
+                                    .show(Str(&regular_bytes))
+                                    .end_text();
+                                regular_bytes.clear();
+                            }
+                            cur_font_tag = tag;
+                            regular_start_x = cur_x;
+                        }
+
                         if regular_bytes.is_empty() {
                             regular_start_x = cur_x;
                         }
-                        regular_bytes.extend_from_slice(&g.to_be_bytes());
-                        let cw = crate::layout::char_width(ch, face, span.size);
+                        regular_bytes.extend_from_slice(&gid.0.to_be_bytes());
+                        let cw = crate::layout::char_width(ch, faces, span.bold, span.italic, span.size);
                         cur_x += cw;
                     }
                 }
 
                 if !regular_bytes.is_empty() {
                     c.begin_text()
-                        .set_font(Name(font_tag), span.size)
+                        .set_font(Name(&cur_font_tag), span.size)
                         .next_line(regular_start_x, base_y)
                         .show(Str(&regular_bytes))
                         .end_text();
@@ -450,6 +558,9 @@ pub fn write(
         let mut fonts_res = res.fonts();
         for (tag, fid) in &active_font_pairs {
             fonts_res.pair(Name(tag), *fid);
+        }
+        for (tag, fid) in &fb_active_font_pairs {
+            fonts_res.pair(Name(tag.as_bytes()), *fid);
         }
         drop(fonts_res);
 
