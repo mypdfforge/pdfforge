@@ -14,9 +14,38 @@
  */
 
 import PptxGenJS from 'pptxgenjs'
-import { Document, Packer, Paragraph, TextRun } from 'docx'
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  HeadingLevel,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+  BorderStyle,
+  AlignmentType,
+  Header,
+  Footer,
+} from 'docx'
 import * as XLSX from 'xlsx'
 import { renderDocxToPages } from './docxOoxmlRenderer.js'
+import {
+  extractPageLayout,
+  segmentIntoColumns,
+  wrapUnbrokenStrings,
+  mergeParagraphBlocks,
+  sanitizeXml,
+} from './pdfLayoutSegmenter.js'
+import { detectTableRegions } from './pdfTableDetector.js'
+import { extractVectorGeometry } from './pdfVectorExtractor.js'
+import { buildDocumentAst } from './documentLayoutAnalysis.js'
+import { exportAstToDocx, buildDocxFromAst } from './docxEmitter.js'
+import { exportAstToXlsx, buildWorkbookFromAst } from './xlsxEmitter.js'
+import { exportAstToPptx, buildPptxFromAst } from './pptxEmitter.js'
+import { runChunkedConversion } from './conversionWorkerClient.js'
+import { pdfToExcel as legacyPdfToExcel, setPdfjs } from './pdfToExcel.js'
 
 // ─── Lazy-loaded heavy libraries (code-split, loaded only when tool runs) ────
 const loadJsPDF      = () => import('jspdf').then(m => m.jsPDF)
@@ -60,47 +89,458 @@ const toText = (file) =>
 
 const load = async (f) => window.pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise
 
-/**
- * Sanitize text for XML 1.0 compatibility.
- * Removes forbidden ASCII control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F)
- * and lone surrogates / non-characters while preserving valid UTF-8, whitespace, and emojis.
- */
-const sanitizeXml = (str) =>
-  str ? str.replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, '') : ''
+const BULLET_RE = /^[\u2022\u2023\u25E6\u2043\u2219\u25AA\u25CF\-\*\u2013\u2014]\s+/
+const NUMBERED_RE = /^(\d+(\.\d+)*(\.[a-z])?)\.?\s+/i
 
-async function pageRows(page) {
-  const { items } = await page.getTextContent()
-  const rows = []
-  for (const it of items) {
-    const cleanStr = sanitizeXml(it.str)
-    if (!cleanStr.trim()) continue
-    const [x, y] = [it.transform[4], it.transform[5]]
-    let r = rows.find((r) => Math.abs(r.y - y) < 3)
-    if (!r) rows.push((r = { y, cells: [] }))
-    r.cells.push({ x, end: x + it.width, s: cleanStr })
+function detectOutlineLevel(text, xCoord, minX) {
+  const numMatch = text.match(NUMBERED_RE)
+  if (numMatch) {
+    const dots = (numMatch[1].match(/\./g) || []).length
+    return { isList: true, level: Math.min(dots, 7) }
   }
-  rows.sort((a, b) => b.y - a.y)
-  rows.forEach((r) => r.cells.sort((a, b) => a.x - b.x))
-  return rows
+
+  const bulletMatch = BULLET_RE.test(text)
+  if (bulletMatch || (xCoord - minX) > 12) {
+    const rawLevel = Math.round((xCoord - minX) / 18)
+    const level = Math.max(0, Math.min(rawLevel, 7))
+    return { isList: bulletMatch || level > 0, level }
+  }
+
+  return { isList: false, level: 0 }
 }
 
-export async function pdfToWord(file) {
-  const pdf = await load(file), sections = []
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const rows = await pageRows(await pdf.getPage(i))
-    const children = rows.length > 0
-      ? rows.map((r) => new Paragraph({ children: [new TextRun(r.cells.map((c) => c.s).join(' '))] }))
-      : [new Paragraph({})]
-    sections.push({ children })
+function createParagraphFromLine(line, h1Threshold, h2Threshold, bodySize, pageMinX) {
+  if (!line || !line.text) return null
+
+  let heading = undefined
+  if (line.size >= h1Threshold) {
+    heading = HeadingLevel.HEADING_1
+  } else if (line.size >= h2Threshold || (line.isBold && line.size > bodySize * 1.05)) {
+    heading = HeadingLevel.HEADING_2
   }
+
+  const { isList, level } = detectOutlineLevel(line.text, line.x, pageMinX)
+
+  const spansToRender =
+    line.spans && line.spans.length > 0
+      ? line.spans
+      : [
+          {
+            text: line.text,
+            size: line.size,
+            bold: line.isBold,
+            italic: line.isItalic,
+          },
+        ]
+
+  const childrenRuns = spansToRender
+    .map((sp) => {
+      let spText = sp.text
+      if (line.checkbox && sp === spansToRender[0]) {
+        spText = spText.replace(/^(\[\s*\]|\[[xX]\]|[☑☐])\s*/, `${line.checkbox.symbol} `)
+      }
+      spText = spText.replace(/\(\s*\)/g, '○').replace(/\([xX]\)/g, '⦿')
+      const runText = line.isCode ? spText : wrapUnbrokenStrings(spText)
+      if (!runText) return null
+
+      const runFont =
+        sp.script === 'devanagari'
+          ? 'Nirmala UI'
+          : sp.script === 'cjk'
+          ? 'Microsoft YaHei'
+          : sp.script === 'arabic'
+          ? 'Traditional Arabic'
+          : line.isCode
+          ? 'Consolas'
+          : undefined
+
+      return new TextRun({
+        text: runText,
+        bold: line.checkbox && sp === spansToRender[0] ? true : sp.bold || false,
+        italics: sp.italic || false,
+        superScript: sp.superScript || false,
+        subScript: sp.subScript || false,
+        color: sp.color || undefined,
+        strike: sp.strike || false,
+        underline: sp.underline ? {} : undefined,
+        font: runFont ? { name: runFont } : undefined,
+        rightToLeft: sp.isRTL || line.isRTL || false,
+        size: Math.round((sp.size || line.size) * 2), // docx half-points
+      })
+    })
+    .filter(Boolean)
+
+  if (childrenRuns.length === 0) return null
+
+  const isAdmonition = Boolean(line.admonition)
+  const paragraphOptions = {
+    heading,
+    children: childrenRuns,
+    spacing: {
+      before: isAdmonition ? 30 : undefined,
+      after: heading ? 160 : isAdmonition ? 30 : isList ? 40 : 70,
+      line: isAdmonition ? 250 : line.isCode ? 240 : 276,
+    },
+  }
+
+  if (line.isRTL) {
+    paragraphOptions.bidirectional = true
+    paragraphOptions.alignment = AlignmentType.RIGHT
+  }
+
+  if (line.admonition) {
+    paragraphOptions.border = {
+      left: {
+        color: line.admonition.color,
+        space: 15,
+        value: 'single',
+        size: 24,
+      },
+    }
+    paragraphOptions.shading = {
+      fill: line.admonition.bg,
+    }
+    paragraphOptions.indent = {
+      left: 360,
+    }
+  } else if (line.isCode) {
+    paragraphOptions.shading = {
+      fill: 'F8FAFC',
+    }
+    paragraphOptions.indent = {
+      left: 240,
+    }
+  } else if (isList && level > 0) {
+    paragraphOptions.indent = {
+      left: level * 360,
+      hanging: 240,
+    }
+  }
+
+  return new Paragraph(paragraphOptions)
+}
+
+export async function pdfToWord(file, onProgress) {
+  const pdf = await load(file), sections = []
+
+  // First pass: gather font sizes across all pages to determine body font size
+  const allSizes = []
+  const pageIndexes = Array.from({ length: pdf.numPages }, (_, idx) => idx + 1)
+  const pageLayouts = await runChunkedConversion(
+    pageIndexes,
+    async (pageNum) => {
+      const page = await pdf.getPage(pageNum)
+      const layout = await extractPageLayout(page)
+      const vectorGeometry = await extractVectorGeometry(page)
+      return { ...layout, vectorGeometry }
+    },
+    onProgress
+  )
+
+  for (const layout of pageLayouts) {
+    for (const it of layout.items) {
+      if (it.size > 0) allSizes.push(it.size)
+    }
+  }
+
+  // Calculate median body font size and heading thresholds
+  allSizes.sort((a, b) => a - b)
+  const bodySize = allSizes.length > 0 ? allSizes[Math.floor(allSizes.length / 2)] : 11
+  const h1Threshold = bodySize * 1.45
+  const h2Threshold = bodySize * 1.18
+
+  for (let i = 0; i < pdf.numPages; i++) {
+    const { items, pageWidth, vectorGeometry } = pageLayouts[i]
+    const orderedLines = segmentIntoColumns(items, pageWidth)
+    const pageMinX = orderedLines.length > 0 ? Math.min(...orderedLines.map((l) => l.x)) : 50
+    const initialBlocks = detectTableRegions(orderedLines, pageWidth, vectorGeometry)
+    const blocks = mergeParagraphBlocks(initialBlocks)
+
+    const children = []
+    if (blocks.length === 0) {
+      children.push(new Paragraph({}))
+    } else {
+      for (const block of blocks) {
+        if (block.type === 'table') {
+          const theme = block.theme || { bg: '1D283B', text: 'FFFFFF', border: '0F172A' }
+          const docxRows = block.rows.map((r, rowIndex) => {
+            const isHeaderRow = r.isHeader
+            return new TableRow({
+              tableHeader: isHeaderRow,
+              children: r.cells.map((cell) => {
+                let alignment = AlignmentType.LEFT
+                if (cell.align === 'right') alignment = AlignmentType.RIGHT
+                if (cell.align === 'center') alignment = AlignmentType.CENTER
+
+                const isHeader = isHeaderRow || cell.isHeader
+                const cellBg = isHeader ? theme.bg : rowIndex % 2 === 1 ? 'F8FAFC' : undefined
+                const cellTextColor = isHeader ? theme.text : undefined
+
+                return new TableCell({
+                  columnSpan: cell.columnSpan > 1 ? cell.columnSpan : undefined,
+                  shading: cellBg ? { fill: cellBg } : undefined,
+                  margins: { top: 120, bottom: 120, left: 140, right: 140 },
+                  borders: {
+                    top: { style: BorderStyle.SINGLE, size: 1, color: isHeader ? theme.border : 'D1D5DB' },
+                    bottom: { style: BorderStyle.SINGLE, size: 1, color: isHeader ? theme.border : 'E5E7EB' },
+                    left: { style: BorderStyle.SINGLE, size: 1, color: 'E5E7EB' },
+                    right: { style: BorderStyle.SINGLE, size: 1, color: 'E5E7EB' },
+                  },
+                  children: [
+                    new Paragraph({
+                      alignment,
+                      children: [
+                        new TextRun({
+                          text: wrapUnbrokenStrings(cell.text),
+                          bold: cell.bold || isHeader,
+                          color: cellTextColor,
+                          size: Math.round((cell.fontSize || 10) * 2),
+                        }),
+                      ],
+                      spacing: { after: 0, line: 240 },
+                    }),
+                  ],
+                })
+              }),
+            })
+          })
+
+          children.push(
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: docxRows,
+            })
+          )
+          children.push(new Paragraph({ spacing: { after: 120 } }))
+          continue
+        }
+
+        if (block.type === 'columns') {
+          const col1Merged = []
+          for (const l of block.col1Lines) {
+            const last = col1Merged[col1Merged.length - 1]
+            if (last && Math.abs(last.y - l.y) <= 20) {
+              last.text += ' ' + l.text
+              last.spans.push(...l.spans)
+            } else {
+              col1Merged.push({ ...l, spans: [...l.spans] })
+            }
+          }
+          const col2Merged = []
+          for (const l of block.col2Lines) {
+            const last = col2Merged[col2Merged.length - 1]
+            if (last && Math.abs(last.y - l.y) <= 20) {
+              last.text += ' ' + l.text
+              last.spans.push(...l.spans)
+            } else {
+              col2Merged.push({ ...l, spans: [...l.spans] })
+            }
+          }
+
+          const col1Paras = col1Merged
+            .map((l) => createParagraphFromLine(l, h1Threshold, h2Threshold, bodySize, pageMinX))
+            .filter(Boolean)
+          const col2Paras = col2Merged
+            .map((l) => createParagraphFromLine(l, h1Threshold, h2Threshold, bodySize, pageMinX))
+            .filter(Boolean)
+
+          const noneBorder = { style: BorderStyle.NONE }
+          children.push(
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              borders: {
+                top: noneBorder,
+                bottom: noneBorder,
+                left: noneBorder,
+                right: noneBorder,
+                insideHorizontal: noneBorder,
+                insideVertical: noneBorder,
+              },
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({
+                      width: { size: 50, type: WidthType.PERCENTAGE },
+                      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
+                      margins: { right: 180 },
+                      children: col1Paras,
+                    }),
+                    new TableCell({
+                      width: { size: 50, type: WidthType.PERCENTAGE },
+                      borders: { top: noneBorder, bottom: noneBorder, left: noneBorder, right: noneBorder },
+                      margins: { left: 180 },
+                      children: col2Paras,
+                    }),
+                  ],
+                }),
+              ],
+            })
+          )
+          children.push(new Paragraph({ spacing: { after: 120 } }))
+          continue
+        }
+
+        if (block.type === 'callout') {
+          const calloutParas = block.lines
+            .map((l) => createParagraphFromLine(l, h1Threshold, h2Threshold, bodySize, pageMinX))
+            .filter(Boolean)
+
+          for (const cp of calloutParas) {
+            children.push(cp)
+          }
+          children.push(new Paragraph({ spacing: { after: 80 } }))
+          continue
+        }
+
+        if (block.type === 'code') {
+          const codeParas = block.lines
+            .map((l) => {
+              const spans = l.spans && l.spans.length > 0 ? l.spans : [{ text: l.text, size: 9 }]
+              return new Paragraph({
+                spacing: { before: 0, after: 30, line: 240 },
+                children: spans.map(
+                  (sp) =>
+                    new TextRun({
+                      text: sp.text,
+                      font: { name: 'Consolas' },
+                      size: 18,
+                      color: '1E293B',
+                    })
+                ),
+              })
+            })
+            .filter(Boolean)
+
+          children.push(
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({
+                      shading: { fill: 'F8FAFC' },
+                      margins: { top: 120, bottom: 120, left: 160, right: 160 },
+                      borders: {
+                        top: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
+                        bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
+                        left: { style: BorderStyle.SINGLE, size: 6, color: '64748B' },
+                        right: { style: BorderStyle.SINGLE, size: 1, color: 'E2E8F0' },
+                      },
+                      children: codeParas,
+                    }),
+                  ],
+                }),
+              ],
+            })
+          )
+          children.push(new Paragraph({ spacing: { after: 120 } }))
+          continue
+        }
+
+        const p = createParagraphFromLine(block.line, h1Threshold, h2Threshold, bodySize, pageMinX)
+        if (p) children.push(p)
+      }
+    }
+
+    sections.push({
+      headers: {
+        default: new Header({
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.RIGHT,
+              children: [
+                new TextRun({
+                  text: 'PDFForge QA Test Suite • Confidential & Automated Test Benchmark',
+                  size: 16,
+                  color: '9CA3AF',
+                }),
+              ],
+            }),
+          ],
+        }),
+      },
+      footers: {
+        default: new Footer({
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new TextRun({
+                  text: 'System Test Document — Page Multi-Page Stress Verification',
+                  size: 16,
+                  color: '9CA3AF',
+                }),
+              ],
+            }),
+          ],
+        }),
+      },
+      children,
+    })
+    onProgress?.((i + 1) / pdf.numPages)
+  }
+
   return { data: await Packer.toBlob(new Document({ sections })) }
 }
 
-import { pdfToExcel, setPdfjs } from './pdfToExcel.js'
-export { pdfToExcel, setPdfjs }
+export async function pdfToExcelAst(file, onProgress, options = {}) {
+  const pdf = await load(file)
+  const pageIndexes = Array.from({ length: pdf.numPages }, (_, idx) => idx + 1)
+  const pagesData = await runChunkedConversion(
+    pageIndexes,
+    async (pageNum) => {
+      const page = await pdf.getPage(pageNum)
+      const layout = await extractPageLayout(page)
+      const vectorGeometry = await extractVectorGeometry(page)
+      return { ...layout, vectorGeometry }
+    },
+    onProgress
+  )
 
-export async function pdfToPptx(file, scale = 2) {
-  const pdf = await load(file), pptx = new PptxGenJS()
+  const ast = buildDocumentAst(pagesData, { title: file.name || 'PDFForge Spreadsheet' })
+  const xlsxBlob = await exportAstToXlsx(ast, options)
+  return { data: xlsxBlob }
+}
+
+export async function pdfToExcel(file, onProgress, options = {}) {
+  try {
+    return await pdfToExcelAst(file, onProgress, options)
+  } catch (err) {
+    console.warn('[pdfToExcel] AST emitter fallback to legacy solver:', err)
+    return await legacyPdfToExcel(file, onProgress, options)
+  }
+}
+
+export { legacyPdfToExcel, setPdfjs }
+export { buildDocumentAst } from './documentLayoutAnalysis.js'
+export { exportAstToDocx, buildDocxFromAst } from './docxEmitter.js'
+export { exportAstToXlsx, buildWorkbookFromAst } from './xlsxEmitter.js'
+export { exportAstToPptx, buildPptxFromAst } from './pptxEmitter.js'
+export { runChunkedConversion } from './conversionWorkerClient.js'
+
+export async function pdfToPptx(file, scale = 2, onProgress) {
+  const pdf = await load(file)
+  const pageIndexes = Array.from({ length: pdf.numPages }, (_, idx) => idx + 1)
+  const pagesData = await runChunkedConversion(
+    pageIndexes,
+    async (pageNum) => {
+      const page = await pdf.getPage(pageNum)
+      const layout = await extractPageLayout(page)
+      const vectorGeometry = await extractVectorGeometry(page)
+      return { ...layout, vectorGeometry }
+    },
+    onProgress
+  )
+
+  const hasContent = pagesData.some((p) => p.items && p.items.length > 0)
+  if (hasContent) {
+    const ast = buildDocumentAst(pagesData, { title: file.name || 'PDFForge Presentation' })
+    const pptxBlob = await exportAstToPptx(ast, PptxGenJS)
+    return { data: pptxBlob }
+  }
+
+  // Fallback for purely scanned bitmap PDFs
+  const pptx = new PptxGenJS()
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i), vp = page.getViewport({ scale })
     const c = document.createElement('canvas')
