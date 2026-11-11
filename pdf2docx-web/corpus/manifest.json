@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "documents": [
+    {
+      "id": "tierA_letter_sample",
+      "tier": "A",
+      "path": "corpus/tierA/letter_sample.pdf",
+      "pages": 1,
+      "tags": ["simple", "single_column", "letter"],
+      "split": "tune"
+    }
+  ]
+}

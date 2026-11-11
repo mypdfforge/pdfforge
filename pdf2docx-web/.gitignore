@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.cache/
+*.converted.docx
+corpus/test_output/

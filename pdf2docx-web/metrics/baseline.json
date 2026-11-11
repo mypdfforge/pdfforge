@@ -1,0 +1,11 @@
+{
+  "updatedAt": "2026-11-11T16:43:30.494Z",
+  "composite": 1,
+  "tiers": {
+    "A": {
+      "composite": 1,
+      "cer": 0.002,
+      "compliance": 1
+    }
+  }
+}

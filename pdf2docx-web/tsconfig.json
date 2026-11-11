@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["src/core/*"],
+      "@ingest/*": ["src/ingest/*"],
+      "@dla/*": ["src/dla/*"],
+      "@ast/*": ["src/ast/*"],
+      "@emit/*": ["src/emit/*"]
+    }
+  },
+  "include": ["src/**/*", "tests/**/*", "tools/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
