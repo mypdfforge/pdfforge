@@ -1,7 +1,7 @@
 import { TextLine } from './lines.js';
 import { Table, TableRow, Cell, Para } from '../core/ast.js';
 import { params } from '../core/params.js';
-import { Rect } from '../core/pageir.js';
+import { Rect, Glyph } from '../core/pageir.js';
 import { containsPoint, rectWidth, rectHeight } from '../core/geometry.js';
 import { reflowParagraphs } from './paragraphs.js';
 import { detectListMarker } from './lists.js';
@@ -155,7 +155,7 @@ export function splitLineByWideGaps(line: TextLine): LineChunk[] {
   return chunks;
 }
 
-function makeChunkFromGlyphs(glyphs: typeof TextLine.prototype.glyphs): LineChunk {
+function makeChunkFromGlyphs(glyphs: Glyph[]): LineChunk {
   const minX = glyphs[0].box.x0;
   const minY = Math.min(...glyphs.map((g) => g.box.y0));
   const maxX = glyphs[glyphs.length - 1].box.x1;

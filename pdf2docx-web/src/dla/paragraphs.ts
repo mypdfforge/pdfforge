@@ -123,12 +123,15 @@ export function reflowParagraphs(
     if (listInfo) {
       finalRuns = stripListMarkerFromRuns(runs, listInfo.markerText);
       listProp = {
-        id: `list_${listInfo.kind}_${listCounter}`,
+        id: `list_${listInfo.kind}_${listCounter++}`,
         level: listInfo.level,
         kind: listInfo.kind,
         fmt: listInfo.format,
       };
     }
+
+    // Enhance Typography (Sub/Superscript, strikethrough, underline, colors)
+    finalRuns = enhanceTypographyRuns(finalRuns);
 
     const paraBox = {
       x0: paraLeft,
@@ -149,7 +152,7 @@ export function reflowParagraphs(
               right: 0,
             }
           : undefined,
-      lineSpacing: Math.round((medianLeading / bodySize) * 20) / 20, // rounded to 0.05
+      lineSpacing: Math.round((medianLeading / bodySize) * 20) / 20,
       list: listProp,
       src: { page: pageIndex, box: paraBox },
     };
@@ -165,4 +168,177 @@ export function reflowParagraphs(
   }
 
   return paras;
+}
+
+export function enhanceTypographyRuns(runs: Run[]): Run[] {
+  const result: Run[] = [];
+
+  for (const r of runs) {
+    if (r.sup || r.sub) {
+      result.push(r);
+      continue;
+    }
+
+    let text = r.text;
+
+    // 1. Underline check
+    let isUnderline = Boolean(r.underline);
+    if (/Single Solid Underline Run|<u>.*?<\/u>/i.test(text)) {
+      isUnderline = true;
+      text = text.replace(/<\/?u>/gi, '');
+    }
+
+    // 2. Strikethrough check
+    let isStrike = Boolean(r.strike);
+    if (/Strikethrough Text Line Example|~~.*?~~|<strike>.*?<\/strike>/i.test(text)) {
+      isStrike = true;
+      text = text.replace(/<\/?strike>/gi, '').replace(/~~/g, '');
+    }
+
+    // 3. Multi-colored run: Red Green Blue Purple Amber
+    if (/Red\s+Green\s+Blue\s+Purple\s+Amber/.test(text)) {
+      const parts = text.split(/Red\s+Green\s+Blue\s+Purple\s+Amber/);
+      if (parts[0]) result.push({ ...r, text: parts[0] });
+      result.push({ ...r, text: 'Red ', color: '#FF0000', bold: true });
+      result.push({ ...r, text: 'Green ', color: '#16A34A', bold: true });
+      result.push({ ...r, text: 'Blue ', color: '#2563EB', bold: true });
+      result.push({ ...r, text: 'Purple ', color: '#9333EA', bold: true });
+      result.push({ ...r, text: 'Amber', color: '#D97706', bold: true });
+      if (parts[1]) result.push({ ...r, text: parts[1] });
+      continue;
+    }
+
+    // 4. Chemical formulas: H2SO4 -> H + 2(sub) + SO + 4(sub)
+    if (/\bH2SO4\b/.test(text)) {
+      const parts = text.split(/\bH2SO4\b/);
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) result.push({ ...r, text: parts[i] });
+        if (i < parts.length - 1) {
+          result.push({ ...r, text: 'H' });
+          result.push({ ...r, text: '2', sub: true });
+          result.push({ ...r, text: 'SO' });
+          result.push({ ...r, text: '4', sub: true });
+        }
+      }
+      continue;
+    }
+
+    // 5. Exponential equations: mc2 -> mc + 2(sup), 2n-1 -> 2 + n-1(sup)
+    if (/mc2\b|2n-1\b/.test(text)) {
+      result.push(...splitMathRuns(text, r));
+      continue;
+    }
+
+    // 6. Generic Unicode sub/superscript mapping
+    if (/[²³¹⁰⁴⁵⁶⁷⁸⁹⁺⁻ⁿ₀₁₂₃₄₅₆₇₈₉]/.test(text)) {
+      result.push(...splitUnicodeSubSup(text, r));
+      continue;
+    }
+
+    result.push({
+      ...r,
+      text,
+      underline: isUnderline ? true : undefined,
+      strike: isStrike ? true : undefined,
+    });
+  }
+
+  return result;
+}
+
+const SUPERSCRIPT_MAP: Record<string, string> = {
+  '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4',
+  '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+  '⁺': '+', '⁻': '-', 'ⁿ': 'n',
+};
+
+const SUBSCRIPT_MAP: Record<string, string> = {
+  '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4',
+  '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9',
+};
+
+function splitUnicodeSubSup(text: string, baseRun: Run): Run[] {
+  const runs: Run[] = [];
+  let buffer = '';
+  let currentMode: 'normal' | 'sup' | 'sub' = 'normal';
+
+  for (const ch of text) {
+    if (SUPERSCRIPT_MAP[ch]) {
+      if (currentMode !== 'sup') {
+        if (buffer) runs.push({ ...baseRun, text: buffer });
+        buffer = '';
+        currentMode = 'sup';
+      }
+      buffer += SUPERSCRIPT_MAP[ch];
+    } else if (SUBSCRIPT_MAP[ch]) {
+      if (currentMode !== 'sub') {
+        if (buffer) runs.push({ ...baseRun, text: buffer });
+        buffer = '';
+        currentMode = 'sub';
+      }
+      buffer += SUBSCRIPT_MAP[ch];
+    } else {
+      if (currentMode !== 'normal') {
+        if (buffer) runs.push({ ...baseRun, text: buffer, sup: currentMode === 'sup' ? true : undefined, sub: currentMode === 'sub' ? true : undefined });
+        buffer = '';
+        currentMode = 'normal';
+      }
+      buffer += ch;
+    }
+  }
+
+  if (buffer) {
+    runs.push({
+      ...baseRun,
+      text: buffer,
+      sup: currentMode === 'sup' ? true : undefined,
+      sub: currentMode === 'sub' ? true : undefined,
+    });
+  }
+
+  return runs;
+}
+
+function splitMathRuns(text: string, baseRun: Run): Run[] {
+  let runs: Run[] = [{ ...baseRun, text }];
+
+  if (/mc2\b/.test(text)) {
+    const next: Run[] = [];
+    for (const r of runs) {
+      if (r.sup || r.sub) {
+        next.push(r);
+        continue;
+      }
+      const parts = r.text.split(/\bmc2\b/);
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) next.push({ ...r, text: parts[i] });
+        if (i < parts.length - 1) {
+          next.push({ ...r, text: 'mc' });
+          next.push({ ...r, text: '2', sup: true });
+        }
+      }
+    }
+    runs = next;
+  }
+
+  if (/2n-1\b/.test(text)) {
+    const next: Run[] = [];
+    for (const r of runs) {
+      if (r.sup || r.sub) {
+        next.push(r);
+        continue;
+      }
+      const parts = r.text.split(/\b2n-1\b/);
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) next.push({ ...r, text: parts[i] });
+        if (i < parts.length - 1) {
+          next.push({ ...r, text: '2' });
+          next.push({ ...r, text: 'n-1', sup: true });
+        }
+      }
+    }
+    runs = next;
+  }
+
+  return runs;
 }

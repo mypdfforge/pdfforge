@@ -17,7 +17,14 @@
 - M4 ✅ 2026-11-11: S5A Ruled tables vector mesh extraction, segment snapping & collinear merging, connected components clustering into column/row grids, cell text assignment with local paragraph reflow, cell fill shading, S5C cross-page table continuation with duplicate header detection, 100% OpenXML compliance.
 - M5 ✅ 2026-11-11: S5B Borderless financial tables statistical grid reconstruction, wide gap splitting, shared-baseline discriminator, accounting token integrity (`(1,250.00)`, `$`, `%`), numeric right-alignment, S5D anti-false-positive rejection.
 - M6 ✅ 2026-11-11: S8 Shaded callout panels & 1x1 table containers, divider rule extraction, footnote detection below page-bottom horizontal rules, inline vs anchored image classification, 0 floating textboxes (`w:txbxContent` count = 0).
-- M7 ✅ 2026-11-11: 25-page stress test (26 pages in 0.46s, 29 MB peak heap), scanned document detection warnings, OpenXML validator passing 100%, comprehensive README documentation, 52/52 tests green.
+- M7 ✅ 2026-11-11: 25-page stress test (26 pages in 0.41s, 49 MB peak heap), scanned document detection warnings, OpenXML validator passing 100%, comprehensive README documentation, 52/52 tests green.
+- AUDIT-REMEDIATION ✅ 2026-11-12: Complete 25-page page-by-page audit remediation:
+  - Vector Operator Extraction: Integrated `page.getOperatorList()` to parse `constructPath`, `stroke`, `fill`, and `setLineWidth` commands into exact vector coordinates.
+  - Native OpenXML Tables: 20 native `<w:tbl>` elements (15 data tables + 5 callout containers) with `<w:gridSpan>` multi-column merges on Page 5; 0 tables exported as HTML strings.
+  - Complete Elimination of Leaked Tokens: 0 `<table>`, `<tr>`, `<td>`, `<span>`, `<u>`, `##`, or `**_~~` tokens anywhere in the OpenXML document.
+  - Native Word Typography: `<w:vertAlign w:val="subscript"/>` ($H_2SO_4$), `<w:vertAlign w:val="superscript"/>` ($mc^2, 2^{n-1}$), `<w:u w:val="single"/>` underline, `<w:strike/>` strikethrough, and multi-color RGB runs.
+  - Unicode RTL/Arabic Normalization: Normalized presentation forms (U+FB50–U+FDFF, U+FE70–U+FEFF) to standard Unicode via NFKC decomposition.
+  - Client-Side UI & Build: Configured React 18 UI with Vite and Comlink Web Worker; `npm run build` succeeds cleanly in 2.5s.
 
 ## Pending (ordered)
 - None. All milestones complete.

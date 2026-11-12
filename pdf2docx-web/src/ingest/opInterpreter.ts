@@ -35,7 +35,9 @@ export function applyMatrixToPoint(m: Matrix, x: number, y: number): { x: number
 }
 
 export function expandLigatures(str: string): string {
-  return str
+  // First normalize Unicode NFKC to resolve Arabic presentation forms
+  const normalized = str.normalize('NFKC');
+  return normalized
     .replace(/\uFB00/g, 'ff')
     .replace(/\uFB01/g, 'fi')
     .replace(/\uFB02/g, 'fl')
@@ -80,9 +82,14 @@ export class OperatorInterpreter {
   private hScale: number = 1.0;
   private renderMode: number = 0;
 
-  // Colors
+  // Colors & Line State
   private fillColor: string = '#000000';
   private strokeColor: string = '#000000';
+  private lineWidth: number = 1.0;
+
+  // Pending Path Elements
+  private pendingRects: { x: number; y: number; w: number; h: number }[] = [];
+  private pendingLines: { x0: number; y0: number; x1: number; y1: number }[] = [];
 
   // Output collectors
   public glyphs: Glyph[] = [];
@@ -116,6 +123,10 @@ export class OperatorInterpreter {
   transform(a: number, b: number, c: number, d: number, e: number, f: number) {
     const m: Matrix = [a, b, c, d, e, f];
     this.currentCtm = multiplyMatrices(this.currentCtm, m);
+  }
+
+  setLineWidth(width: number) {
+    this.lineWidth = Math.max(0.5, width);
   }
 
   setFillColorRgb(r: number, g: number, b: number) {
@@ -261,5 +272,141 @@ export class OperatorInterpreter {
       z: this.zIndex++,
       pathPts,
     });
+  }
+
+  /**
+   * Interprets vector operators from page.getOperatorList()
+   */
+  interpretOperators(fnArray: number[], argsArray: any[], OPS: Record<string, number>) {
+    let currentPathRects: { x: number; y: number; w: number; h: number }[] = [];
+    let currentPathLines: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    let currentPoint = { x: 0, y: 0 };
+
+    for (let i = 0; i < fnArray.length; i++) {
+      const fn = fnArray[i];
+      const args = argsArray[i];
+
+      if (fn === OPS.save) {
+        this.save();
+      } else if (fn === OPS.restore) {
+        this.restore();
+      } else if (fn === OPS.transform) {
+        this.transform(args[0], args[1], args[2], args[3], args[4], args[5]);
+      } else if (fn === OPS.setLineWidth) {
+        this.setLineWidth(args[0]);
+      } else if (fn === OPS.setStrokeRGBColor) {
+        this.setStrokeColorRgb(args[0], args[1], args[2]);
+      } else if (fn === OPS.setFillRGBColor) {
+        this.setFillColorRgb(args[0], args[1], args[2]);
+      } else if (fn === OPS.setStrokeGray) {
+        this.setStrokeColorGray(args[0]);
+      } else if (fn === OPS.setFillGray) {
+        this.setFillColorGray(args[0]);
+      } else if (fn === OPS.setStrokeCMYKColor) {
+        this.setStrokeColorCmyk(args[0], args[1], args[2], args[3]);
+      } else if (fn === OPS.setFillCMYKColor) {
+        this.setFillColorCmyk(args[0], args[1], args[2], args[3]);
+      } else if (fn === OPS.constructPath) {
+        currentPathRects = [];
+        currentPathLines = [];
+        const ops = args[0];
+        const pathArgs = args[1];
+        let argIdx = 0;
+
+        for (const subOp of ops) {
+          if (subOp === 19) {
+            // rectangle: [x, y, w, h]
+            const x = pathArgs[argIdx++];
+            const y = pathArgs[argIdx++];
+            const w = pathArgs[argIdx++];
+            const h = pathArgs[argIdx++];
+            currentPathRects.push({ x, y, w, h });
+          } else if (subOp === 13) {
+            // moveTo
+            currentPoint = { x: pathArgs[argIdx++], y: pathArgs[argIdx++] };
+          } else if (subOp === 14) {
+            // lineTo
+            const nextX = pathArgs[argIdx++];
+            const nextY = pathArgs[argIdx++];
+            currentPathLines.push({
+              x0: currentPoint.x,
+              y0: currentPoint.y,
+              x1: nextX,
+              y1: nextY,
+            });
+            currentPoint = { x: nextX, y: nextY };
+          } else if (subOp === 15) {
+            // curveTo
+            argIdx += 6;
+          } else if (subOp === 16 || subOp === 17) {
+            argIdx += 4;
+          }
+        }
+      } else if (fn === OPS.stroke || fn === OPS.closeStroke) {
+        // Emit strokes for current path
+        for (const r of currentPathRects) {
+          const pt1 = applyMatrixToPoint(this.currentCtm, r.x, r.y);
+          const pt2 = applyMatrixToPoint(this.currentCtm, r.x + r.w, r.y + r.h);
+          const x0 = Math.min(pt1.x, pt2.x);
+          const x1 = Math.max(pt1.x, pt2.x);
+          const y0 = this.pageHeight - Math.max(pt1.y, pt2.y);
+          const y1 = this.pageHeight - Math.min(pt1.y, pt2.y);
+          this.addStroke('rect', [x0, y0, x1 - x0, y1 - y0], this.lineWidth, this.strokeColor);
+        }
+        for (const l of currentPathLines) {
+          const p1 = applyMatrixToPoint(this.currentCtm, l.x0, l.y0);
+          const p2 = applyMatrixToPoint(this.currentCtm, l.x1, l.y1);
+          this.addStroke(
+            'line',
+            [p1.x, this.pageHeight - p1.y, p2.x, this.pageHeight - p2.y],
+            this.lineWidth,
+            this.strokeColor
+          );
+        }
+        currentPathRects = [];
+        currentPathLines = [];
+      } else if (fn === OPS.fill || fn === OPS.eoFill) {
+        // Emit fills for current path
+        for (const r of currentPathRects) {
+          const pt1 = applyMatrixToPoint(this.currentCtm, r.x, r.y);
+          const pt2 = applyMatrixToPoint(this.currentCtm, r.x + r.w, r.y + r.h);
+          const x0 = Math.min(pt1.x, pt2.x);
+          const x1 = Math.max(pt1.x, pt2.x);
+          const y0 = this.pageHeight - Math.max(pt1.y, pt2.y);
+          const y1 = this.pageHeight - Math.min(pt1.y, pt2.y);
+          this.addFill({ x0, y0, x1, y1 }, this.fillColor);
+        }
+        currentPathRects = [];
+        currentPathLines = [];
+      } else if (
+        fn === OPS.fillStroke ||
+        fn === OPS.eoFillStroke ||
+        fn === OPS.closeFillStroke ||
+        fn === OPS.closeEOFillStroke
+      ) {
+        for (const r of currentPathRects) {
+          const pt1 = applyMatrixToPoint(this.currentCtm, r.x, r.y);
+          const pt2 = applyMatrixToPoint(this.currentCtm, r.x + r.w, r.y + r.h);
+          const x0 = Math.min(pt1.x, pt2.x);
+          const x1 = Math.max(pt1.x, pt2.x);
+          const y0 = this.pageHeight - Math.max(pt1.y, pt2.y);
+          const y1 = this.pageHeight - Math.min(pt1.y, pt2.y);
+          this.addFill({ x0, y0, x1, y1 }, this.fillColor);
+          this.addStroke('rect', [x0, y0, x1 - x0, y1 - y0], this.lineWidth, this.strokeColor);
+        }
+        for (const l of currentPathLines) {
+          const p1 = applyMatrixToPoint(this.currentCtm, l.x0, l.y0);
+          const p2 = applyMatrixToPoint(this.currentCtm, l.x1, l.y1);
+          this.addStroke(
+            'line',
+            [p1.x, this.pageHeight - p1.y, p2.x, this.pageHeight - p2.y],
+            this.lineWidth,
+            this.strokeColor
+          );
+        }
+        currentPathRects = [];
+        currentPathLines = [];
+      }
+    }
   }
 }

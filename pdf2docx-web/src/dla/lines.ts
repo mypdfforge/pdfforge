@@ -162,8 +162,8 @@ function buildLineFromGlyphs(
       currentRun.font === fontFamily &&
       Math.abs((currentRun.size || dominantSize) - g.size) < 0.5 &&
       currentRun.color === g.color &&
-      currentRun.sup === isSup &&
-      currentRun.sub === isSub &&
+      Boolean(currentRun.sup) === isSup &&
+      Boolean(currentRun.sub) === isSub &&
       currentRun.link?.url === linkUrl
     ) {
       currentRun.text += charText;

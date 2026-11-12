@@ -3,7 +3,7 @@ import { canRepairHyphen, repairHyphenatedPair } from '../../src/dla/hyphen.js';
 import { detectParagraphAlignment } from '../../src/dla/alignment.js';
 import { detectListMarker, stripListMarkerFromRuns } from '../../src/dla/lists.js';
 import { classifyHeading, computeBodyFontSize } from '../../src/dla/headings.js';
-import { extractHeaderFooterFurniture, isPageNumberText } from '../../src/dla/headerFooter.ts';
+import { extractHeaderFooterFurniture, isPageNumberText } from '../../src/dla/headerFooter.js';
 import { TextLine } from '../../src/dla/lines.js';
 import { Para, DocAST } from '../../src/core/ast.js';
 import { emitDocxBuffer } from '../../src/emit/docxEmitter.js';

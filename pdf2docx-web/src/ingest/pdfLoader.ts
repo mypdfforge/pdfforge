@@ -35,6 +35,10 @@ export async function loadPdfDocument(
 
     const interpreter = new OperatorInterpreter(height);
 
+    // Extract vector paths (strokes, fills, table meshes)
+    const opList = await page.getOperatorList();
+    interpreter.interpretOperators(opList.fnArray, opList.argsArray, pdfjsLib.OPS);
+
     // Extract text content items
     const textContent = await page.getTextContent();
     const fontsMap = new Map<string, FontInfo>();
@@ -66,6 +70,7 @@ export async function loadPdfDocument(
           currentX,
           pdfY,
           avgCharWidth,
+          fontSize,
           fontSize,
           fontInfo.key,
           '#000000'

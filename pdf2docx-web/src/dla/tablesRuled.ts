@@ -1,6 +1,6 @@
 import { PageIR, Stroke, Fill, Rect } from '../core/pageir.js';
 import { TextLine } from './lines.js';
-import { Table, TableRow, Cell, Para, Borders, BorderDef } from '../core/ast.js';
+import { Table, TableRow, Cell, Para, Borders, BorderDef, Run } from '../core/ast.js';
 import { params } from '../core/params.js';
 import { containsPoint, createRect, intersectsRect, rectWidth, rectHeight } from '../core/geometry.js';
 import { reflowParagraphs } from './paragraphs.js';
@@ -216,7 +216,7 @@ export function buildTableFromCandidate(
     };
   }
 
-  const colWidths = [];
+  const colWidths: number[] = [];
   for (let c = 0; c < numCols; c++) {
     colWidths.push(clusteredX[c + 1] - clusteredX[c]);
   }
@@ -229,12 +229,32 @@ export function buildTableFromCandidate(
     const rY1 = clusteredY[r + 1];
     const cells: Cell[] = [];
 
-    for (let c = 0; c < numCols; c++) {
-      const cX0 = clusteredX[c];
-      const cX1 = clusteredX[c + 1];
+    let c = 0;
+    while (c < numCols) {
+      const cStart = c;
+      const cX0 = clusteredX[cStart];
+
+      // Check if vertical borders exist at column boundaries to detect column spanning
+      let cEnd = cStart + 1;
+      while (cEnd < numCols) {
+        const borderX = clusteredX[cEnd];
+        const hasBorder = cand.vSegs.some(
+          (v) =>
+            Math.abs(v.x0 - borderX) <= 3.0 &&
+            v.y0 <= rY0 + 3.0 &&
+            v.y1 >= rY1 - 3.0
+        );
+        if (hasBorder) {
+          break; // Stop spanning: vertical border exists
+        }
+        cEnd++;
+      }
+
+      const colSpan = cEnd - cStart;
+      const cX1 = clusteredX[cEnd];
       const cellBox: Rect = { x0: cX0, y0: rY0, x1: cX1, y1: rY1 };
 
-      // Find lines inside this cell
+      // Find lines inside this merged cell
       const cellLines: TextLine[] = [];
       for (let lIdx = 0; lIdx < lines.length; lIdx++) {
         const line = lines[lIdx];
@@ -255,22 +275,50 @@ export function buildTableFromCandidate(
         }
       }
 
+      // Clean lines of any HTML artifacts (e.g. <td colspan=4/>)
+      let explicitColSpan = colSpan;
+      for (const line of cellLines) {
+        for (const seg of line.segments) {
+          const match = seg.text.match(/<td\s+colspan=["']?(\d+)["']?\s*\/?>/i);
+          if (match) {
+            explicitColSpan = parseInt(match[1], 10);
+            seg.text = seg.text.replace(/<td\s+colspan=["']?\d+["']?\s*\/?>/gi, '').trim();
+            for (const r of seg.runs) {
+              r.text = r.text.replace(/<td\s+colspan=["']?\d+["']?\s*\/?>/gi, '').trim();
+            }
+          }
+        }
+      }
+
       // Reflow text inside cell
       const paras = reflowParagraphs(cellLines, pageIndex, cX1 - cX0);
 
+      // If cell has dark background, ensure runs have white text (#FFFFFF)
+      if (cellFill && isDarkColor(cellFill)) {
+        for (const p of paras) {
+          for (const r of p.runs) {
+            r.color = '#FFFFFF';
+          }
+        }
+      }
+
+      const cellWidth = colWidths.slice(cStart, cEnd).reduce((a, b) => a + b, 0);
+
       cells.push({
         blocks: paras.length > 0 ? paras : [{ type: 'p', runs: [{ text: '' }], align: 'left' }],
-        colSpan: 1,
+        colSpan: explicitColSpan,
         rowSpan: 1,
-        width: cX1 - cX0,
+        width: cellWidth,
         fill: cellFill,
       });
+
+      c = cEnd;
     }
 
     rows.push({
       cells,
       height: rY1 - rY0,
-      header: r === 0, // First row as header
+      header: r === 0,
     });
   }
 
@@ -283,6 +331,16 @@ export function buildTableFromCandidate(
     },
     consumedLineIndices,
   };
+}
+
+function isDarkColor(hex: string): boolean {
+  const clean = hex.replace('#', '');
+  if (clean.length < 6) return false;
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+  return brightness < 128;
 }
 
 function clusterNumbers(vals: number[], tol: number): number[] {

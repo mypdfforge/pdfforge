@@ -41,7 +41,7 @@ export function App() {
       setStatus('Done! Downloading DOCX...');
 
       // Trigger download
-      const blob = new Blob([result.docx], {
+      const blob = new Blob([result.docx as BlobPart], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       });
       const url = URL.createObjectURL(blob);

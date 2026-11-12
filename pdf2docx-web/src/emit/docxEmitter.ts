@@ -192,7 +192,7 @@ function emitTable(table: Table, binaryStore: Map<string, Uint8Array>): DocxTabl
         .map((b) => emitBlock(b, binaryStore))
         .filter((el): el is Paragraph | DocxTable => el !== null);
 
-      let verticalAlign = VerticalAlign.TOP;
+      let verticalAlign: (typeof VerticalAlign)[keyof typeof VerticalAlign] = VerticalAlign.TOP;
       if (cell.vAlign === 'center') verticalAlign = VerticalAlign.CENTER;
       else if (cell.vAlign === 'bottom') verticalAlign = VerticalAlign.BOTTOM;
 
@@ -237,6 +237,7 @@ function emitImage(img: ImageBlock, binaryStore: Map<string, Uint8Array>): Parag
 
   const imageRun = new ImageRun({
     data,
+    type: 'png',
     transformation: {
       width: Math.round(img.w),
       height: Math.round(img.h),
