@@ -18,11 +18,15 @@ export function sanitizeXml(str) {
  * Inserts zero-width spaces (\u200B) into long unbroken strings (URLs, Base64 blocks)
  * so Microsoft Word / OOXML wraps gracefully without overflowing page margins.
  */
-export function wrapUnbrokenStrings(text, maxChunk = 35) {
+export function wrapUnbrokenStrings(text, maxChunk = 70) {
   if (!text || typeof text !== 'string') return '';
   return text
     .split(' ')
     .map((word) => {
+      // Don't inject breaks into standard SHA256 (64 hex chars) or short hashes
+      if (/^[a-fA-F0-9]{64}$/.test(word) || /^[a-fA-F0-9]{32,64}$/.test(word)) {
+        return word;
+      }
       if (word.length <= maxChunk) return word;
       // If it looks like a URL or file path, inject break after punctuation
       if (word.includes('/') || word.includes('?') || word.includes('&') || word.includes('=')) {
@@ -76,12 +80,16 @@ export async function extractPageLayout(page) {
 }
 
 function detectColor(str) {
+  // Only detect color if the token is an explicit standalone color name in a color enumeration or styling demo
   const s = str.trim().toLowerCase();
-  if (s === 'red') return 'FF0000';
-  if (s === 'green') return '008000';
-  if (s === 'blue') return '0000FF';
-  if (s === 'purple') return '800080';
-  if (s === 'amber') return 'FFBF00';
+  // Protect normal words and ensure we do not color ordinary sentences containing "red", etc.
+  if (/^(red|green|blue|purple|amber)$/i.test(s)) {
+    if (s === 'red') return 'FF0000';
+    if (s === 'green') return '008000';
+    if (s === 'blue') return '0000FF';
+    if (s === 'purple') return '800080';
+    if (s === 'amber') return 'FFBF00';
+  }
   return null;
 }
 
@@ -382,13 +390,13 @@ export function segmentIntoColumns(items, pageWidth) {
     if (!l || !l.items || l.items.length !== 2) return false;
     const [it1, it2] = l.items;
     const gutter = it2.x - (it1.x + it1.w);
-    if (gutter < 15) return false;
+    if (gutter < 10) return false;
     // Exclude Table of Contents rows where it2 is 'Page X'
     if (/^\s*Page\s+\d+/i.test(it2.str)) return false;
     // Exclude currency or numbers (e.g. tabular ledgers)
     if (/^[\$€£¥]?\s*[\(+-]?\s*[\d,]+(\.\d+)?\s*%?$/.test(it2.str.trim())) return false;
-    // Both items must have substantial text width to be considered columns
-    if (it1.w < 140 || it2.w < 30) return false;
+    // Both items must have reasonable text width or words to be considered columns
+    if (it1.w < 60 || it2.w < 20) return false;
     return true;
   };
 
