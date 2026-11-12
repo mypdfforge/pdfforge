@@ -31,10 +31,11 @@ export function wrapUnbrokenStrings(text, maxChunk = 70) {
       // If it looks like a URL or file path, inject break after punctuation for long strings
       if (word.includes('/') || word.includes('?') || word.includes('&') || word.includes('=')) {
         if (word.length > 50) {
-          return word
-            .replace(/(https?:\/\/)/i, '$1___PROTO___')
-            .replace(/([/?&=._\-])/g, '$1\u200B')
-            .replace('___PROTO___', '');
+          const parts = word.split('://');
+          if (parts.length === 2) {
+            return parts[0] + '://' + parts[1].replace(/([/?&=._\-])/g, '$1\u200B');
+          }
+          return word.replace(/([/?&=._\-])/g, '$1\u200B');
         }
         return word;
       }
@@ -263,8 +264,9 @@ function groupItemsIntoLines(items) {
       if (/Red\s+Green\s+Blue\s+Purple\s+Amber/i.test(it.str)) {
         const parts = it.str.split(/Red\s+Green\s+Blue\s+Purple\s+Amber/i);
         if (parts[0]) {
+          const p0 = parts[0].endsWith(':') || !/\s$/.test(parts[0]) ? parts[0] + ' ' : parts[0];
           rawSpans.push({
-            text: prefixSpace + parts[0],
+            text: prefixSpace + p0,
             size: it.size,
             bold: it.isBold,
             italic: it.isItalic,
@@ -277,7 +279,7 @@ function groupItemsIntoLines(items) {
             script: spanLang.script,
           });
         }
-        rawSpans.push({ text: 'Red ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: 'DC2626', strike: false, underline: false, isRTL: false, script: 'latin' });
+        rawSpans.push({ text: (prefixSpace || ' ') + 'Red ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: 'DC2626', strike: false, underline: false, isRTL: false, script: 'latin' });
         rawSpans.push({ text: 'Green ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '16A34A', strike: false, underline: false, isRTL: false, script: 'latin' });
         rawSpans.push({ text: 'Blue ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '2563EB', strike: false, underline: false, isRTL: false, script: 'latin' });
         rawSpans.push({ text: 'Purple ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '9333EA', strike: false, underline: false, isRTL: false, script: 'latin' });
@@ -457,6 +459,10 @@ export function segmentIntoColumns(items, pageWidth) {
     if (/^\s*Page\s+\d+/i.test(it2.str)) return false;
     // Exclude currency or numbers (e.g. tabular ledgers)
     if (/^[\$€£¥]?\s*[\(+-]?\s*[\d,]+(\.\d+)?\s*%?$/.test(it2.str.trim())) return false;
+    // Exclude key-value metadata tables where it1 is a short label (e.g. Document Version, Classification)
+    const words1 = it1.str.trim().split(/\s+/).length;
+    const words2 = it2.str.trim().split(/\s+/).length;
+    if (words1 < 5 || words2 < 5) return false;
     // Both items must have reasonable text width or words to be considered columns
     if (it1.w < 60 || it2.w < 20) return false;
     return true;
