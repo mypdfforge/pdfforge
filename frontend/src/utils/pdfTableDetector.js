@@ -220,6 +220,11 @@ export function detectTableRegions(lines, pageWidth, vectorGeometry = null) {
 
 export function getTableHeaderTheme(headerText, firstCellText) {
   const combined = ((headerText || '') + ' ' + (firstCellText || '')).toLowerCase();
+
+  // TOC entries must always retain neutral background even if they cite an "incident" or "audit" chapter
+  if (combined.includes('executive summary') || combined.includes('table of contents') || combined.includes('structural index') || /page\s+\d+/i.test(combined)) {
+    return { bg: 'F8FAFC', text: '1E293B', border: 'E2E8F0' }; // Neutral TOC
+  }
   if (combined.includes('trial specimen') || combined.includes('mean delta') || combined.includes('scientific')) {
     return { bg: '047756', text: 'FFFFFF', border: '03543F' }; // Emerald
   }
@@ -347,7 +352,8 @@ function buildTableBlock(tableLines, pageWidth, vectorGeometry = null) {
 
     // Check if this line is a continuation of the previous row:
     // If previous row exists and is not a merged header, and either column 0 is empty,
-    // or only column 0 has items and prevRow already has text in col 0 while other cols are empty
+    // or only column 0 has items and prevRow already has text in col 0 while other cols are empty,
+    // or the trailing column (e.g. status) is empty in current line while present in prevRow
     const isContinuation =
       prevRow &&
       !prevRow.isMergedHeader &&
@@ -356,7 +362,11 @@ function buildTableBlock(tableLines, pageWidth, vectorGeometry = null) {
         (cellBuckets.slice(1).every((b) => b.length === 0) &&
           prevRow.cells[0]?.text &&
           !CURRENCY_OR_NUM_RE.test(cellBuckets[0][0]?.str) &&
-          !/^\d+\./.test(cellBuckets[0][0]?.str)));
+          !/^\d+\./.test(cellBuckets[0][0]?.str)) ||
+        (numCols >= 3 &&
+          cellBuckets[numCols - 1].length === 0 &&
+          prevRow.cells[numCols - 1]?.text &&
+          !/^(Phase\s+\d+|[A-Z0-9_\-]{4,}:|\d+\.)/i.test(cellBuckets[0].map((it) => it.str).join(' ').trim())));
 
     if (isContinuation) {
       cellBuckets.forEach((itemsInCell, colIdx) => {

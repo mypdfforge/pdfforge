@@ -16,6 +16,7 @@ import {
   BorderStyle,
   AlignmentType,
   ShadingType,
+  PageOrientation,
 } from 'docx';
 import { NodeType } from './documentAst.js';
 import { wrapUnbrokenStrings } from './pdfLayoutSegmenter.js';
@@ -56,11 +57,11 @@ export function renderParagraphNode(pNode) {
     children.push(
       new TextRun({
         text,
-        bold: r.bold,
+        bold: r.bold || Boolean(pNode.headingLevel),
         italics: r.italic,
         underline: r.underline ? {} : undefined,
         strike: r.strike,
-        color: r.color || undefined,
+        color: r.color ? r.color.replace('#', '') : pNode.headingLevel ? '1E293B' : undefined,
         superScript: r.superScript,
         subScript: r.subScript,
         font: fontName ? { name: fontName } : undefined,
@@ -229,9 +230,18 @@ export function buildDocxFromAst(ast) {
       pageChildren.push(new Paragraph({}));
     }
 
+    const pWidth = page.width || 612;
+    const pHeight = page.height || 792;
+    const isLandscape = pWidth > pHeight;
+
     sections.push({
       properties: {
         page: {
+          size: {
+            width: Math.round(pWidth * 20),
+            height: Math.round(pHeight * 20),
+            orientation: isLandscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
+          },
           margin: {
             top: 720,
             bottom: 720,
