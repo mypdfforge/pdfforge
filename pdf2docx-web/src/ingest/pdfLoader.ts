@@ -3,6 +3,18 @@ import { PageIR, DocumentIR, Glyph, FontInfo, LinkObj } from '../core/pageir.js'
 import { OperatorInterpreter } from './opInterpreter.js';
 import { resolveFontDescriptor, parseFontDescriptor } from './fontMap.js';
 
+function getPdfLib(): any {
+  if (typeof window !== 'undefined' && (window as any).pdfjsLib) {
+    const lib = (window as any).pdfjsLib;
+    if (lib.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) {
+      lib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+    return lib;
+  }
+  return pdfjsLib;
+}
+
 export async function loadPdfDocument(
   source: ArrayBuffer | Uint8Array,
   onPageProgress?: (current: number, total: number) => void
@@ -14,7 +26,8 @@ export async function loadPdfDocument(
     uint8Data = new Uint8Array(source);
   }
 
-  const loadingTask = pdfjsLib.getDocument({
+  const lib = getPdfLib();
+  const loadingTask = lib.getDocument({
     data: uint8Data,
     disableFontFace: false,
     useSystemFonts: false,
@@ -37,7 +50,12 @@ export async function loadPdfDocument(
 
     // Extract vector paths and text with full styling from operator stream
     const opList = await page.getOperatorList();
-    interpreter.interpretOperators(opList.fnArray, opList.argsArray, pdfjsLib.OPS, page.commonObjs);
+    interpreter.interpretOperators(
+      opList.fnArray,
+      opList.argsArray,
+      lib.OPS || pdfjsLib.OPS,
+      page.commonObjs
+    );
 
     // Fallback: If no glyphs extracted from operator list, extract via getTextContent
     const fontsMap = new Map<string, FontInfo>();

@@ -46,6 +46,8 @@ import { exportAstToXlsx, buildWorkbookFromAst } from './xlsxEmitter.js'
 import { exportAstToPptx, buildPptxFromAst } from './pptxEmitter.js'
 import { runChunkedConversion } from './conversionWorkerClient.js'
 import { pdfToExcel as legacyPdfToExcel, setPdfjs } from './pdfToExcel.js'
+import { loadPdfDocument } from '../../../pdf2docx-web/src/ingest/pdfLoader'
+import { convertDocumentIRToDocx } from '../../../pdf2docx-web/src/dla/pipeline'
 
 // ─── Lazy-loaded heavy libraries (code-split, loaded only when tool runs) ────
 const loadJsPDF      = () => import('jspdf').then(m => m.jsPDF)
@@ -221,6 +223,26 @@ function createParagraphFromLine(line, h1Threshold, h2Threshold, bodySize, pageM
 }
 
 export async function pdfToWord(file, onProgress) {
+  try {
+    const buf = await file.arrayBuffer();
+    onProgress?.(0.05);
+    const docIr = await loadPdfDocument(buf, (cur, total) => {
+      onProgress?.(0.05 + 0.65 * (cur / Math.max(1, total)));
+    });
+    onProgress?.(0.75);
+    const result = await convertDocumentIRToDocx(docIr);
+    onProgress?.(1.0);
+    const blob = new Blob([result.docx], {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    return { data: blob };
+  } catch (err) {
+    console.error('High-fidelity PDF-to-Word conversion failed, falling back to legacy pipeline:', err);
+    return legacyPdfToWord(file, onProgress);
+  }
+}
+
+async function legacyPdfToWord(file, onProgress) {
   const pdf = await load(file), sections = []
 
   // First pass: gather font sizes across all pages to determine body font size
