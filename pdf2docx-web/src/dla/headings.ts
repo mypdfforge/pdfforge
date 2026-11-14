@@ -52,9 +52,15 @@ export function classifyHeading(
     return { isHeading: true, isTitle: true, level: 1 };
   }
 
-  // Large size or bold short phrase
-  const isLarge = size >= bodySize * 1.15;
-  const isBoldHeading = isBold && size >= bodySize && fullText.length < 120 && !fullText.endsWith('.');
+  // Never classify body-sized numbered lines as headings (e.g. "2. Bold Weight...", "8. Multi-Colored Runs:")
+  if ((/^\d+[\.\)]\s/.test(fullText) || para.list) && size < bodySize * 1.25) {
+    return { isHeading: false };
+  }
+
+  // Large size or bold short phrase with size above body font
+  const isLarge = size >= bodySize * 1.2;
+  const isBoldHeading =
+    isBold && size >= bodySize * 1.15 && fullText.length < 100 && !fullText.endsWith('.');
 
   if (!isLarge && !isBoldHeading && !isAllCaps) {
     return { isHeading: false };

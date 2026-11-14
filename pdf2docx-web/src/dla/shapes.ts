@@ -1,6 +1,6 @@
 import { Fill, Stroke, ImageObj, Rect } from '../core/pageir.js';
 import { Block, Para, Table, ImageBlock, Borders } from '../core/ast.js';
-import { containsRect, rectWidth, rectHeight } from '../core/geometry.js';
+import { containsRect, containsPoint, rectWidth, rectHeight } from '../core/geometry.js';
 
 export function wrapInCalloutTable(
   paras: Para[],
@@ -41,6 +41,27 @@ export function wrapInCalloutTable(
   };
 }
 
+export function joinWrappedParagraphs(paras: Para[]): Para[] {
+  if (paras.length <= 1) return paras;
+  const mergedRuns: Run[] = [];
+  for (let i = 0; i < paras.length; i++) {
+    const p = paras[i];
+    if (i > 0 && mergedRuns.length > 0 && p.runs.length > 0) {
+      const lastRun = mergedRuns[mergedRuns.length - 1];
+      if (!lastRun.text.endsWith(' ') && !lastRun.text.endsWith('-')) {
+        lastRun.text += ' ';
+      }
+    }
+    mergedRuns.push(...p.runs);
+  }
+  return [
+    {
+      ...paras[0],
+      runs: mergedRuns,
+    },
+  ];
+}
+
 export function detectCalloutContainers(
   blocks: Block[],
   fills: Fill[],
@@ -59,7 +80,112 @@ export function detectCalloutContainers(
     return !isFullPage && !isWhite && f.alpha >= 0.5 && w >= 50 && h >= 20;
   });
 
-  for (const fill of calloutFills) {
+  const usedFillIndices = new Set<number>();
+
+  // 1. Detect multi-column side-by-side containers (e.g. 2-column shaded box in Sec 03)
+  for (let i = 0; i < calloutFills.length; i++) {
+    if (usedFillIndices.has(i)) continue;
+    const f1 = calloutFills[i];
+
+    for (let j = i + 1; j < calloutFills.length; j++) {
+      if (usedFillIndices.has(j)) continue;
+      const f2 = calloutFills[j];
+
+      const isSameY =
+        Math.abs(f1.box.y0 - f2.box.y0) <= 6.0 && Math.abs(f1.box.y1 - f2.box.y1) <= 6.0;
+      const isSideBySide =
+        Math.abs(f1.box.x1 - f2.box.x0) <= 15.0 || Math.abs(f2.box.x1 - f1.box.x0) <= 15.0;
+
+      if (isSameY && isSideBySide) {
+        // Order left to right
+        const leftFill = f1.box.x0 < f2.box.x0 ? f1 : f2;
+        const rightFill = f1.box.x0 < f2.box.x0 ? f2 : f1;
+
+        const leftParas: Para[] = [];
+        const leftIndices: number[] = [];
+        const rightParas: Para[] = [];
+        const rightIndices: number[] = [];
+
+        for (let bIdx = 0; bIdx < blocks.length; bIdx++) {
+          const b = blocks[bIdx];
+          if (b.type === 'p' && (b as Para).src && !handledParaIndices.has(bIdx)) {
+            const pBox = (b as Para).src!.box;
+            const pCenterX = (pBox.x0 + pBox.x1) / 2;
+            const pCenterY = (pBox.y0 + pBox.y1) / 2;
+
+            if (containsPoint(leftFill.box, pCenterX, pCenterY)) {
+              leftParas.push(b as Para);
+              leftIndices.push(bIdx);
+            } else if (containsPoint(rightFill.box, pCenterX, pCenterY)) {
+              rightParas.push(b as Para);
+              rightIndices.push(bIdx);
+            }
+          }
+        }
+
+        if (leftParas.length > 0 || rightParas.length > 0) {
+          for (const idx of [...leftIndices, ...rightIndices]) {
+            handledParaIndices.add(idx);
+          }
+          usedFillIndices.add(i);
+          usedFillIndices.add(j);
+
+          const colW = Math.max(rectWidth(leftFill.box), rectWidth(rightFill.box));
+          const boxBorders: Borders = {
+            top: { style: 'single', size: 4, color: '#94A3B8' },
+            bottom: { style: 'single', size: 4, color: '#94A3B8' },
+            left: { style: 'single', size: 4, color: '#94A3B8' },
+            right: { style: 'single', size: 4, color: '#94A3B8' },
+          };
+
+          const multiColTable: Table = {
+            type: 'tbl',
+            colWidths: [colW, colW],
+            rows: [
+              {
+                cells: [
+                  {
+                    blocks: joinWrappedParagraphs(leftParas),
+                    colSpan: 1,
+                    rowSpan: 1,
+                    width: colW,
+                    fill: leftFill.color,
+                    borders: boxBorders,
+                  },
+                  {
+                    blocks: joinWrappedParagraphs(rightParas),
+                    colSpan: 1,
+                    rowSpan: 1,
+                    width: colW,
+                    fill: rightFill.color,
+                    borders: boxBorders,
+                  },
+                ],
+              },
+            ],
+            borders: boxBorders,
+            src: {
+              page: leftParas[0]?.src?.page || 0,
+              box: {
+                x0: leftFill.box.x0,
+                y0: Math.min(leftFill.box.y0, rightFill.box.y0),
+                x1: rightFill.box.x1,
+                y1: Math.max(leftFill.box.y1, rightFill.box.y1),
+              },
+            },
+          };
+
+          processedBlocks.push(multiColTable);
+          break;
+        }
+      }
+    }
+  }
+
+  // 2. Single callout containers
+  for (let fIdx = 0; fIdx < calloutFills.length; fIdx++) {
+    if (usedFillIndices.has(fIdx)) continue;
+    const fill = calloutFills[fIdx];
     const enclosedParas: Para[] = [];
     const enclosedIndices: number[] = [];
 

@@ -266,10 +266,18 @@ export function buildTableFromCandidate(
         }
       }
 
-      // Check cell fill
+      // Check cell fill: match either cell center or substantial intersection with fill rect
       let cellFill: string | undefined;
       for (const f of fills) {
-        if (containsPoint(cellBox, (f.box.x0 + f.box.x1) / 2, (f.box.y0 + f.box.y1) / 2)) {
+        const isCenterContained =
+          containsPoint(f.box, (cellBox.x0 + cellBox.x1) / 2, (cellBox.y0 + cellBox.y1) / 2) ||
+          containsPoint(cellBox, (f.box.x0 + f.box.x1) / 2, (f.box.y0 + f.box.y1) / 2);
+        const overlapW = Math.min(cellBox.x1, f.box.x1) - Math.max(cellBox.x0, f.box.x0);
+        const overlapH = Math.min(cellBox.y1, f.box.y1) - Math.max(cellBox.y0, f.box.y0);
+        const isAreaOverlap =
+          overlapW > 0.4 * (cellBox.x1 - cellBox.x0) && overlapH > 0.4 * (cellBox.y1 - cellBox.y0);
+
+        if (isCenterContained || isAreaOverlap) {
           cellFill = f.color;
           break;
         }
@@ -293,14 +301,35 @@ export function buildTableFromCandidate(
       // Reflow text inside cell
       const paras = reflowParagraphs(cellLines, pageIndex, cX1 - cX0);
 
-      // If cell has dark background, ensure runs have white text (#FFFFFF)
+      // Header row or dark fill text formatting
+      const isHeaderRow = r === 0;
       if (cellFill && isDarkColor(cellFill)) {
         for (const p of paras) {
           for (const r of p.runs) {
             r.color = '#FFFFFF';
+            if (isHeaderRow) r.bold = true;
+          }
+        }
+      } else if (isHeaderRow) {
+        for (const p of paras) {
+          for (const r of p.runs) {
+            r.bold = true;
           }
         }
       }
+
+      // Cell borders from candidate segments
+      const hasTop = cand.hSegs.some((h) => Math.abs(h.y0 - rY0) <= 3.0 && h.x0 <= cX1 && h.x1 >= cX0);
+      const hasBottom = cand.hSegs.some((h) => Math.abs(h.y0 - rY1) <= 3.0 && h.x0 <= cX1 && h.x1 >= cX0);
+      const hasLeft = cand.vSegs.some((v) => Math.abs(v.x0 - cX0) <= 3.0 && v.y0 <= rY1 && v.y1 >= rY0);
+      const hasRight = cand.vSegs.some((v) => Math.abs(v.x0 - cX1) <= 3.0 && v.y0 <= rY1 && v.y1 >= rY0);
+
+      const cellBorders: Borders = {
+        top: hasTop ? { style: 'single', size: 4, color: '#334155' } : undefined,
+        bottom: hasBottom ? { style: 'single', size: 4, color: '#334155' } : undefined,
+        left: hasLeft ? { style: 'single', size: 4, color: '#334155' } : undefined,
+        right: hasRight ? { style: 'single', size: 4, color: '#334155' } : undefined,
+      };
 
       const cellWidth = colWidths.slice(cStart, cEnd).reduce((a, b) => a + b, 0);
 
@@ -310,6 +339,7 @@ export function buildTableFromCandidate(
         rowSpan: 1,
         width: cellWidth,
         fill: cellFill,
+        borders: cellBorders,
       });
 
       c = cEnd;

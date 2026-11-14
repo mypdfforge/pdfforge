@@ -1,9 +1,9 @@
-import { Glyph, Rect, PageIR, FontInfo, LinkObj } from '../core/pageir.js';
+import { Glyph, Rect, PageIR, FontInfo, LinkObj, Stroke } from '../core/pageir.js';
 import { Run, Para } from '../core/ast.js';
 import { params } from '../core/params.js';
-import { containsPoint, createRect } from '../core/geometry.js';
+import { containsPoint } from '../core/geometry.js';
 
-export type LineSegment = {
+export type TextSegment = {
   box: Rect;
   text: string;
   runs: Run[];
@@ -14,14 +14,15 @@ export type TextLine = {
   box: Rect;
   dominantSize: number;
   dominantFont: string;
-  segments: LineSegment[];
+  segments: TextSegment[];
   glyphs: Glyph[];
 };
 
 export function clusterGlyphsIntoLines(
   glyphs: Glyph[],
   fonts: FontInfo[] = [],
-  links: LinkObj[] = []
+  links: LinkObj[] = [],
+  strokes: Stroke[] = []
 ): TextLine[] {
   if (glyphs.length === 0) return [];
 
@@ -31,10 +32,10 @@ export function clusterGlyphsIntoLines(
     fontMap.set(f.key, f);
   }
 
-  // Sort glyphs by baseline (top to bottom) then x (left to right)
+  // Sort glyphs: band-based by baseline then x0 so sub/superscripts stay in reading order
   const sorted = [...glyphs].sort((a, b) => {
     const diffY = a.baseline - b.baseline;
-    if (Math.abs(diffY) > 2.0) {
+    if (Math.abs(diffY) > 4.5) {
       return diffY;
     }
     return a.box.x0 - b.box.x0;
@@ -46,15 +47,25 @@ export function clusterGlyphsIntoLines(
   let currentSize = sorted[0].size;
 
   for (const g of sorted) {
-    const tol = params.line.baselineTol * Math.max(g.size, currentSize);
-    if (Math.abs(g.baseline - currentBaseline) <= tol) {
+    const tol = Math.max(params.line.baselineTol * Math.max(g.size, currentSize), 4.5);
+    const isSameBaseline = Math.abs(g.baseline - currentBaseline) <= tol;
+
+    // Check if there is a multi-column gutter (gap across column boundary or large gap)
+    const lastGlyph = currentGlyphs[currentGlyphs.length - 1];
+    const isColumnGutter =
+      lastGlyph &&
+      g.box.x0 - lastGlyph.box.x1 > 18.0 &&
+      (g.box.x0 >= 280.0 || g.box.x0 - lastGlyph.box.x1 > 40.0);
+
+    if (isSameBaseline && !isColumnGutter) {
       currentGlyphs.push(g);
-      // Update baseline running average
-      currentBaseline =
-        currentBaseline * 0.8 + g.baseline * 0.2;
+      // Update baseline running average only for regular-sized glyphs
+      if (Math.abs(g.size - currentSize) < 1.5) {
+        currentBaseline = currentBaseline * 0.8 + g.baseline * 0.2;
+      }
     } else {
       if (currentGlyphs.length > 0) {
-        lines.push(buildLineFromGlyphs(currentGlyphs, fontMap, links));
+        lines.push(buildLineFromGlyphs(currentGlyphs, fontMap, links, strokes));
       }
       currentGlyphs = [g];
       currentBaseline = g.baseline;
@@ -63,7 +74,7 @@ export function clusterGlyphsIntoLines(
   }
 
   if (currentGlyphs.length > 0) {
-    lines.push(buildLineFromGlyphs(currentGlyphs, fontMap, links));
+    lines.push(buildLineFromGlyphs(currentGlyphs, fontMap, links, strokes));
   }
 
   return lines;
@@ -72,7 +83,8 @@ export function clusterGlyphsIntoLines(
 function buildLineFromGlyphs(
   glyphs: Glyph[],
   fontMap: Map<string, FontInfo>,
-  links: LinkObj[]
+  links: LinkObj[],
+  strokes: Stroke[] = []
 ): TextLine {
   // Sort line glyphs strictly by x0
   glyphs.sort((a, b) => a.box.x0 - b.box.x0);
@@ -81,7 +93,6 @@ function buildLineFromGlyphs(
   let minY0 = glyphs[0].box.y0;
   let maxX1 = glyphs[0].box.x1;
   let maxY1 = glyphs[0].box.y1;
-  const baseline = glyphs[0].baseline;
 
   // Calculate dominant font and size
   const sizeCounts = new Map<number, number>();
@@ -116,9 +127,18 @@ function buildLineFromGlyphs(
     }
   }
 
+  // Calculate dominant baseline from glyphs matching dominant size
+  const dominantGlyphs = glyphs.filter((g) => Math.abs(g.size - dominantSize) < 1.0);
+  const baseline =
+    dominantGlyphs.length > 0
+      ? dominantGlyphs.reduce((sum, g) => sum + g.baseline, 0) / dominantGlyphs.length
+      : glyphs[0].baseline;
+
   // Segment line into words & runs
   const runs: Run[] = [];
   let currentRun: Run | null = null;
+  let currentRunX0 = 0;
+  let currentRunX1 = 0;
 
   for (let i = 0; i < glyphs.length; i++) {
     const g = glyphs[i];
@@ -137,12 +157,13 @@ function buildLineFromGlyphs(
     const fontInfo = fontMap.get(g.fontKey);
     const isBold = fontInfo?.bold || false;
     const isItalic = fontInfo?.italic || false;
-    const fontFamily = fontInfo?.family || 'Calibri';
+    const fontFamily = fontInfo?.family || 'Arial';
 
-    // Subscript / superscript check
+    // Subscript / superscript check against dominant baseline
+    // In PageIR y points down: superscript has smaller y (higher), subscript has larger y (lower)
     const yOffset = baseline - g.baseline;
-    const isSup = yOffset > 0.2 * dominantSize && g.size <= 0.85 * dominantSize;
-    const isSub = yOffset < -0.2 * dominantSize && g.size <= 0.85 * dominantSize;
+    const isSup = yOffset > 1.2 && g.size <= 0.9 * dominantSize;
+    const isSub = yOffset < -1.0 && g.size <= 0.9 * dominantSize;
 
     // Check link containment
     let linkUrl: string | undefined;
@@ -167,7 +188,11 @@ function buildLineFromGlyphs(
       currentRun.link?.url === linkUrl
     ) {
       currentRun.text += charText;
+      currentRunX1 = Math.max(currentRunX1, g.box.x1);
     } else {
+      if (currentRun) {
+        checkRunStrokeDecorations(currentRun, currentRunX0, currentRunX1, minY0, maxY1, baseline, strokes);
+      }
       currentRun = {
         text: charText,
         bold: isBold,
@@ -179,8 +204,14 @@ function buildLineFromGlyphs(
         sub: isSub ? true : undefined,
         link: linkUrl ? { url: linkUrl } : undefined,
       };
+      currentRunX0 = g.box.x0;
+      currentRunX1 = g.box.x1;
       runs.push(currentRun);
     }
+  }
+
+  if (currentRun) {
+    checkRunStrokeDecorations(currentRun, currentRunX0, currentRunX1, minY0, maxY1, baseline, strokes);
   }
 
   const lineBox: Rect = { x0: minX0, y0: minY0, x1: maxX1, y1: maxY1 };
@@ -202,9 +233,42 @@ function buildLineFromGlyphs(
   };
 }
 
+function checkRunStrokeDecorations(
+  run: Run,
+  runX0: number,
+  runX1: number,
+  lineY0: number,
+  lineY1: number,
+  baseline: number,
+  strokes: Stroke[]
+) {
+  if (strokes.length === 0 || runX1 <= runX0) return;
+  const runWidth = runX1 - runX0;
+  const height = lineY1 - lineY0;
+
+  for (const s of strokes) {
+    if (s.kind === 'line' && s.pts.length >= 4) {
+      const sx0 = Math.min(s.pts[0], s.pts[2]);
+      const sx1 = Math.max(s.pts[0], s.pts[2]);
+      const sy = (s.pts[1] + s.pts[3]) / 2;
+
+      const overlapX = Math.min(runX1, sx1) - Math.max(runX0, sx0);
+      if (overlapX > 0.45 * runWidth) {
+        // Strikethrough: horizontal line through text vertical middle
+        if (sy >= lineY0 + 0.15 * height && sy <= lineY1 - 0.15 * height && Math.abs(sy - baseline) > 1.5) {
+          run.strike = true;
+        }
+        // Underline: horizontal line just below or at baseline
+        if (sy >= baseline - 2.5 && sy <= baseline + 4.5) {
+          run.underline = true;
+        }
+      }
+    }
+  }
+}
+
 /**
- * Naive S6 Paragraph Clustering for M1 (single-column MVP):
- * Groups consecutive lines where vertical gap <= medianLeading * 1.5 into a single paragraph.
+ * Naive S6 Paragraph Clustering for single-column text
  */
 export function clusterLinesIntoParagraphs(lines: TextLine[], pageIndex: number): Para[] {
   if (lines.length === 0) return [];
@@ -248,18 +312,13 @@ export function clusterLinesIntoParagraphs(lines: TextLine[], pageIndex: number)
       });
       currentRuns = [];
       currentBox = { ...line.box };
+    } else if (currentRuns.length > 0 && !currentRuns[currentRuns.length - 1].text.endsWith(' ')) {
+      currentRuns[currentRuns.length - 1].text += ' ';
     }
 
-    // Append runs with a space separator between lines
-    for (let rIdx = 0; rIdx < line.segments[0].runs.length; rIdx++) {
-      const run = line.segments[0].runs[rIdx];
-      if (rIdx === 0 && currentRuns.length > 0 && !currentRuns[currentRuns.length - 1].text.endsWith(' ')) {
-        currentRuns.push({ ...run, text: ' ' + run.text });
-      } else {
-        currentRuns.push({ ...run });
-      }
+    for (const seg of line.segments) {
+      currentRuns.push(...seg.runs);
     }
-
     currentBox.x0 = Math.min(currentBox.x0, line.box.x0);
     currentBox.y0 = Math.min(currentBox.y0, line.box.y0);
     currentBox.x1 = Math.max(currentBox.x1, line.box.x1);

@@ -7,7 +7,7 @@ import {
   Rect,
   PageIR,
 } from '../core/pageir.js';
-import { parseFontDescriptor } from './fontMap.js';
+import { resolveFontDescriptor, parseFontDescriptor } from './fontMap.js';
 
 // Matrix math helpers [a, b, c, d, e, f]
 export type Matrix = [number, number, number, number, number, number];
@@ -130,19 +130,27 @@ export class OperatorInterpreter {
   }
 
   setFillColorRgb(r: number, g: number, b: number) {
-    this.fillColor = rgbToHex(r * 255, g * 255, b * 255);
+    const red = r > 1 ? r : r * 255;
+    const green = g > 1 ? g : g * 255;
+    const blue = b > 1 ? b : b * 255;
+    this.fillColor = rgbToHex(red, green, blue);
   }
 
   setStrokeColorRgb(r: number, g: number, b: number) {
-    this.strokeColor = rgbToHex(r * 255, g * 255, b * 255);
+    const red = r > 1 ? r : r * 255;
+    const green = g > 1 ? g : g * 255;
+    const blue = b > 1 ? b : b * 255;
+    this.strokeColor = rgbToHex(red, green, blue);
   }
 
   setFillColorGray(g: number) {
-    this.fillColor = rgbToHex(g * 255, g * 255, g * 255);
+    const gray = g > 1 ? g : g * 255;
+    this.fillColor = rgbToHex(gray, gray, gray);
   }
 
   setStrokeColorGray(g: number) {
-    this.strokeColor = rgbToHex(g * 255, g * 255, g * 255);
+    const gray = g > 1 ? g : g * 255;
+    this.strokeColor = rgbToHex(gray, gray, gray);
   }
 
   setFillColorCmyk(c: number, m: number, y: number, k: number) {
@@ -158,9 +166,11 @@ export class OperatorInterpreter {
     this.tlm = identityMatrix();
   }
 
-  setFont(fontName: string, size: number, fontFlags: number = 0) {
+  setFont(fontName: string, size: number, commonObjs?: any, fontFlags: number = 0) {
     this.fontSize = Math.abs(size);
-    const info = parseFontDescriptor(fontName, fontFlags);
+    const info = commonObjs
+      ? resolveFontDescriptor(fontName, commonObjs, undefined, fontFlags)
+      : parseFontDescriptor(fontName, fontFlags);
     this.fontKey = info.key;
     if (!this.fonts.has(this.fontKey)) {
       this.fonts.set(this.fontKey, info);
@@ -277,7 +287,12 @@ export class OperatorInterpreter {
   /**
    * Interprets vector operators from page.getOperatorList()
    */
-  interpretOperators(fnArray: number[], argsArray: any[], OPS: Record<string, number>) {
+  interpretOperators(
+    fnArray: number[],
+    argsArray: any[],
+    OPS: Record<string, number>,
+    commonObjs?: any
+  ) {
     let currentPathRects: { x: number; y: number; w: number; h: number }[] = [];
     let currentPathLines: { x0: number; y0: number; x1: number; y1: number }[] = [];
     let currentPoint = { x: 0, y: 0 };
@@ -292,6 +307,56 @@ export class OperatorInterpreter {
         this.restore();
       } else if (fn === OPS.transform) {
         this.transform(args[0], args[1], args[2], args[3], args[4], args[5]);
+      } else if (fn === OPS.beginText) {
+        this.beginText();
+      } else if (fn === OPS.setTextMatrix) {
+        this.setTextMatrix(args[0], args[1], args[2], args[3], args[4], args[5]);
+      } else if (fn === OPS.moveText) {
+        this.moveText(args[0], args[1]);
+      } else if (fn === OPS.nextLine) {
+        this.nextLine();
+      } else if (fn === OPS.setFont) {
+        this.setFont(args[0], args[1], commonObjs);
+      } else if (fn === OPS.setLeading) {
+        this.setLeading(args[0]);
+      } else if (fn === OPS.setCharSpacing) {
+        this.setCharSpacing(args[0]);
+      } else if (fn === OPS.setWordSpacing) {
+        this.setWordSpacing(args[0]);
+      } else if (fn === OPS.setHorizontalScaling) {
+        this.setHorizontalScaling(args[0]);
+      } else if (fn === OPS.setTextRise) {
+        this.setTextRise(args[0]);
+      } else if (fn === OPS.setRenderMode) {
+        this.setRenderMode(args[0]);
+      } else if (fn === OPS.showText || fn === OPS.showSpacedText) {
+        const glyphArr = args[0] || [];
+        for (const item of glyphArr) {
+          if (typeof item === 'number') {
+            const kernPt = (item / 1000) * this.fontSize * this.hScale;
+            this.tm[4] -= kernPt;
+          } else if (item && typeof item === 'object') {
+            const char = item.unicode || (item.fontChar && !isPua(item.fontChar) ? item.fontChar : '');
+            if (!char) {
+              const w = (item.width || 0) * 0.001 * this.fontSize * this.hScale;
+              this.tm[4] += w;
+              continue;
+            }
+            const charWidth = (item.width || 500) * 0.001 * this.fontSize * this.hScale;
+            const pt = applyMatrixToPoint(this.currentCtm, this.tm[4], this.tm[5]);
+            this.addGlyph(
+              char,
+              pt.x,
+              pt.y,
+              charWidth,
+              this.fontSize,
+              this.fontSize,
+              this.fontKey,
+              this.fillColor
+            );
+            this.tm[4] += charWidth + this.charSpacing + (item.isSpace ? this.wordSpacing : 0);
+          }
+        }
       } else if (fn === OPS.setLineWidth) {
         this.setLineWidth(args[0]);
       } else if (fn === OPS.setStrokeRGBColor) {

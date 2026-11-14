@@ -19,7 +19,7 @@ import {
   PageNumber,
   HeadingLevel,
 } from 'docx';
-import { DocAST, Block, Para, Run, Table, ImageBlock, Borders } from '../core/ast.js';
+import { DocAST, Block, Para, Run, Table, ImageBlock, Borders, BorderDef } from '../core/ast.js';
 import { ptToTwips, ptToHalfPoints } from '../core/units.js';
 import { sanitizeXmlString } from './xmlSafe.js';
 import { createNumberingConfig } from './numbering.js';
@@ -102,12 +102,18 @@ function emitBlock(
   return null;
 }
 
+function isRtlText(str: string): boolean {
+  return /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(str);
+}
+
 function emitParagraph(para: Para): Paragraph {
   const children = para.runs.map((r) => emitRun(r));
+  const fullText = para.runs.map((r) => r.text).join('');
+  const hasRtl = isRtlText(fullText);
 
   let alignment: (typeof AlignmentType)[keyof typeof AlignmentType] = AlignmentType.LEFT;
   if (para.align === 'center') alignment = AlignmentType.CENTER;
-  else if (para.align === 'right') alignment = AlignmentType.RIGHT;
+  else if (para.align === 'right' || hasRtl) alignment = AlignmentType.RIGHT;
   else if (para.align === 'justify') alignment = AlignmentType.BOTH;
 
   let heading: (typeof HeadingLevel)[keyof typeof HeadingLevel] | undefined;
@@ -127,6 +133,7 @@ function emitParagraph(para: Para): Paragraph {
     alignment,
     heading,
     numbering,
+    bidirectional: hasRtl ? true : undefined,
     keepNext: para.keepNext,
     spacing: {
       before: para.spaceBefore ? ptToTwips(para.spaceBefore) : undefined,
@@ -146,14 +153,34 @@ function emitParagraph(para: Para): Paragraph {
 
 function emitRun(run: Run): TextRun | ExternalHyperlink {
   const text = sanitizeXmlString(run.text);
-  const color = run.color ? run.color.replace('#', '') : undefined;
+  // Explicit color: if heading run has no color, explicitly set Navy (#1E293B); otherwise default to #000000
+  const color = run.color ? run.color.replace('#', '') : '000000';
   const size = Number.isFinite(run.size) && (run.size ?? 0) > 0 ? ptToHalfPoints(run.size!) : 22;
+  const isRtl = isRtlText(text);
+
+  // Script detection for font assignment
+  const isCjk = /[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]/.test(text);
+  const isHindi = /[\u0900-\u097F]/.test(text);
+  const isEmoji = /[\uD83C-\uD83E][\uDC00-\uDFFF]|[\u2600-\u27BF]/.test(text);
+
+  const baseFont = run.font || 'Arial';
+  let fontConfig: any = baseFont;
+
+  if (isEmoji) {
+    fontConfig = 'Segoe UI Emoji';
+  } else if (isCjk) {
+    fontConfig = 'SimSun';
+  } else if (isHindi) {
+    fontConfig = 'Nirmala UI';
+  } else if (isRtl) {
+    fontConfig = 'Arial';
+  }
 
   // Support dynamic PAGE field
   if (text === 'PAGE') {
     return new TextRun({
       children: [PageNumber.CURRENT],
-      font: run.font || 'Calibri',
+      font: fontConfig,
       size,
       color,
     });
@@ -167,7 +194,8 @@ function emitRun(run: Run): TextRun | ExternalHyperlink {
     strike: run.strike,
     color,
     size,
-    font: run.font || 'Calibri',
+    font: fontConfig,
+    rightToLeft: isRtl ? true : undefined,
     superScript: run.sup,
     subScript: run.sub,
   });
@@ -180,6 +208,15 @@ function emitRun(run: Run): TextRun | ExternalHyperlink {
   }
 
   return textRun;
+}
+
+function mapBorderDef(b?: BorderDef): any {
+  if (!b || b.style === 'nil') return undefined;
+  return {
+    style: BorderStyle.SINGLE,
+    size: b.size || 4,
+    color: b.color ? b.color.replace('#', '') : '334155',
+  };
 }
 
 function emitTable(table: Table, binaryStore: Map<string, Uint8Array>): DocxTable {
@@ -196,6 +233,15 @@ function emitTable(table: Table, binaryStore: Map<string, Uint8Array>): DocxTabl
       if (cell.vAlign === 'center') verticalAlign = VerticalAlign.CENTER;
       else if (cell.vAlign === 'bottom') verticalAlign = VerticalAlign.BOTTOM;
 
+      const cellBorders = cell.borders
+        ? {
+            top: mapBorderDef(cell.borders.top),
+            bottom: mapBorderDef(cell.borders.bottom),
+            left: mapBorderDef(cell.borders.left),
+            right: mapBorderDef(cell.borders.right),
+          }
+        : undefined;
+
       return new DocxTableCell({
         width: {
           size: ptToTwips(cell.width),
@@ -204,6 +250,13 @@ function emitTable(table: Table, binaryStore: Map<string, Uint8Array>): DocxTabl
         columnSpan: cell.colSpan > 1 ? cell.colSpan : undefined,
         rowSpan: cell.rowSpan > 1 ? cell.rowSpan : undefined,
         verticalAlign,
+        borders: cellBorders,
+        margins: {
+          top: ptToTwips(5),
+          bottom: ptToTwips(5),
+          left: ptToTwips(7),
+          right: ptToTwips(7),
+        },
         shading: cell.fill
           ? {
               fill: cell.fill.replace('#', ''),
@@ -219,12 +272,22 @@ function emitTable(table: Table, binaryStore: Map<string, Uint8Array>): DocxTabl
     });
   });
 
+  const tableBorders = table.borders
+    ? {
+        top: mapBorderDef(table.borders.top),
+        bottom: mapBorderDef(table.borders.bottom),
+        left: mapBorderDef(table.borders.left),
+        right: mapBorderDef(table.borders.right),
+      }
+    : undefined;
+
   return new DocxTable({
     width: {
       size: totalWidthTwips,
       type: WidthType.DXA,
     },
     columnWidths: colWidthsTwips,
+    borders: tableBorders,
     rows,
   });
 }

@@ -1,7 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { PageIR, DocumentIR, Glyph, FontInfo, LinkObj } from '../core/pageir.js';
 import { OperatorInterpreter } from './opInterpreter.js';
-import { parseFontDescriptor } from './fontMap.js';
+import { resolveFontDescriptor, parseFontDescriptor } from './fontMap.js';
 
 export async function loadPdfDocument(
   source: ArrayBuffer | Uint8Array,
@@ -35,47 +35,55 @@ export async function loadPdfDocument(
 
     const interpreter = new OperatorInterpreter(height);
 
-    // Extract vector paths (strokes, fills, table meshes)
+    // Extract vector paths and text with full styling from operator stream
     const opList = await page.getOperatorList();
-    interpreter.interpretOperators(opList.fnArray, opList.argsArray, pdfjsLib.OPS);
+    interpreter.interpretOperators(opList.fnArray, opList.argsArray, pdfjsLib.OPS, page.commonObjs);
 
-    // Extract text content items
-    const textContent = await page.getTextContent();
+    // Fallback: If no glyphs extracted from operator list, extract via getTextContent
     const fontsMap = new Map<string, FontInfo>();
+    for (const [k, v] of interpreter.fonts.entries()) {
+      fontsMap.set(k, v);
+    }
 
-    for (const item of textContent.items as any[]) {
-      if (!('str' in item) || !item.str) continue;
+    if (interpreter.glyphs.length === 0) {
+      const textContent = await page.getTextContent();
+      for (const item of textContent.items as any[]) {
+        if (!('str' in item) || !item.str) continue;
 
-      const str: string = item.str;
-      const tx = item.transform; // [scaleX, skewY, skewX, scaleY, transX, transY]
-      const fontSize = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
-      const fontName = item.fontName || 'Calibri';
-      const fontInfo = parseFontDescriptor(fontName);
-      if (!fontsMap.has(fontInfo.key)) {
-        fontsMap.set(fontInfo.key, fontInfo);
-      }
-
-      // Compute character advance boxes
-      const totalWidth = item.width || 0;
-      const charCount = str.length;
-      const avgCharWidth = charCount > 0 ? totalWidth / charCount : fontSize * 0.5;
-
-      let currentX = tx[4];
-      const pdfY = tx[5];
-
-      for (let i = 0; i < charCount; i++) {
-        const char = str[i];
-        interpreter.addGlyph(
-          char,
-          currentX,
-          pdfY,
-          avgCharWidth,
-          fontSize,
-          fontSize,
-          fontInfo.key,
-          '#000000'
+        const str: string = item.str;
+        const tx = item.transform; // [scaleX, skewY, skewX, scaleY, transX, transY]
+        const fontSize = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
+        const fontInfo = resolveFontDescriptor(
+          item.fontName || 'Calibri',
+          page.commonObjs,
+          textContent.styles
         );
-        currentX += avgCharWidth;
+        if (!fontsMap.has(fontInfo.key)) {
+          fontsMap.set(fontInfo.key, fontInfo);
+        }
+
+        // Compute character advance boxes
+        const totalWidth = item.width || 0;
+        const charCount = str.length;
+        const avgCharWidth = charCount > 0 ? totalWidth / charCount : fontSize * 0.5;
+
+        let currentX = tx[4];
+        const pdfY = tx[5];
+
+        for (let i = 0; i < charCount; i++) {
+          const char = str[i];
+          interpreter.addGlyph(
+            char,
+            currentX,
+            pdfY,
+            avgCharWidth,
+            fontSize,
+            fontSize,
+            fontInfo.key,
+            '#000000'
+          );
+          currentX += avgCharWidth;
+        }
       }
     }
 

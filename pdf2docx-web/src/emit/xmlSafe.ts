@@ -3,10 +3,11 @@
  * OpenXML does not allow control characters:
  * U+0000–U+0008, U+000B, U+000C, U+000E–U+001F, U+FFFE, U+FFFF.
  * Also handles lone surrogates, HTML tag leakage, and Markdown artifact cleanup.
+ * NOTE: Valid UTF-16 surrogate pairs (e.g. emojis U+10000+) are fully legal and preserved.
  */
 
-const ILLEGAL_XML_CHARS =
-  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF\uFFFE\uFFFF]/g;
+const ILLEGAL_CONTROL_CHARS =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
 
 // Leaked HTML tags (P0 bug in audit report)
 const HTML_TAG_REGEX = /<\/?(table|thead|tbody|tfoot|tr|th|td|caption|span|div|p|u|b|i|strong|em|s|strike|a)(?:\s+[^>]*)?\/?>/gi;
@@ -25,14 +26,13 @@ export function sanitizeXmlString(str: string): string {
   cleaned = cleaned.replace(MARKDOWN_HEADER_REGEX, '');
   cleaned = cleaned.replace(MARKDOWN_STRAY_SYMBOLS, '');
 
-  // 3. Remove illegal XML control characters while preserving valid surrogates and Unicode
-  return cleaned.replace(ILLEGAL_XML_CHARS, (ch) => {
-    const code = ch.charCodeAt(0);
-    if (code >= 0xd800 && code <= 0xdfff) {
-      return '';
-    }
-    return '';
-  });
+  // 3. Remove illegal XML control characters (preserving emoji surrogate pairs)
+  cleaned = cleaned.replace(ILLEGAL_CONTROL_CHARS, '');
+
+  // 4. Strip lone surrogates (unpaired surrogate halves)
+  cleaned = cleaned.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+
+  return cleaned;
 }
 
 export function escapeXmlEntities(str: string): string {

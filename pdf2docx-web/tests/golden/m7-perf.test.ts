@@ -7,9 +7,13 @@ import { validateDocxFile } from '../../tools/docx-validate.js';
 
 describe('Milestone M7 Exit Gate: 25-Page Document Stress & Performance Test', () => {
   it('converts a 25-page document in < 15 seconds with 100% OpenXML compliance', async () => {
-    const pdfPath = path.resolve('../test_25pages_output.pdf');
-    if (!fs.existsSync(pdfPath)) {
-      console.warn('test_25pages_output.pdf not found in parent directory, skipping stress test.');
+    const candidates = [
+      'C:/Users/nikhi/Downloads/test_complex_25pages.pdf',
+      path.resolve('../test_25pages_output.pdf'),
+    ];
+    const pdfPath = candidates.find((p) => fs.existsSync(p));
+    if (!pdfPath) {
+      console.warn('test_complex_25pages.pdf not found, skipping stress test.');
       return;
     }
 
@@ -53,5 +57,6 @@ describe('Milestone M7 Exit Gate: 25-Page Document Stress & Performance Test', (
     const outputDir = path.resolve('corpus/test_output');
     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(path.join(outputDir, 'test_25pages_converted.docx'), docx);
+    fs.writeFileSync(path.join(outputDir, 'test_complex_25pages_converted.docx'), docx);
   }, 30000); // 30s timeout
 });

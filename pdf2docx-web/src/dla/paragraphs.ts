@@ -140,6 +140,22 @@ export function reflowParagraphs(
       y1: group[group.length - 1].box.y1,
     };
 
+    // Derive spacing from baseline gap to previous paragraph
+    let spaceBefore: number | undefined;
+    if (gIdx > 0) {
+      const prevGroup = rawParagraphGroups[gIdx - 1];
+      const prevLastLine = prevGroup[prevGroup.length - 1];
+      const currentFirstLine = group[0];
+      const baselineGap = currentFirstLine.baseline - prevLastLine.baseline;
+      const excessGap = baselineGap - medianLeading;
+      if (excessGap > 2.0) {
+        spaceBefore = Math.min(24, Math.round(excessGap * 2) / 2);
+      } else if (listProp) {
+        spaceBefore = 2; // Clean consistent list spacing
+      }
+    }
+    const spaceAfter = listProp ? 2 : spaceBefore ? 2 : undefined;
+
     const para: Para = {
       type: 'p',
       runs: finalRuns,
@@ -152,6 +168,8 @@ export function reflowParagraphs(
               right: 0,
             }
           : undefined,
+      spaceBefore,
+      spaceAfter,
       lineSpacing: Math.round((medianLeading / bodySize) * 20) / 20,
       list: listProp,
       src: { page: pageIndex, box: paraBox },
@@ -162,6 +180,12 @@ export function reflowParagraphs(
     if (headingInfo.isHeading && !listProp) {
       para.heading = headingInfo.level;
       para.keepNext = true;
+      // Real heading color is explicit Navy (#1E293B) - never Word default blue
+      for (const r of para.runs) {
+        if (!r.color || r.color === '#000000') {
+          r.color = '#1E293B';
+        }
+      }
     }
 
     paras.push(para);

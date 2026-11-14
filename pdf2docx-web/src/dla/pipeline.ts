@@ -38,7 +38,7 @@ export async function convertDocumentIRToDocx(
   const pageLinePairs = docIr.pages.map((page) => {
     totalGlyphs += page.stats.glyphCount;
     totalImages += page.images.length;
-    const lines = clusterGlyphsIntoLines(page.glyphs, page.fonts, page.links);
+    const lines = clusterGlyphsIntoLines(page.glyphs, page.fonts, page.links, page.strokes);
     return {
       ir: page,
       lines,
