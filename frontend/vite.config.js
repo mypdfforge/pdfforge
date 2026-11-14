@@ -15,6 +15,9 @@ export default defineConfig({
     )
   },
   server: {
+    fs: {
+      allow: ['..'],
+    },
     proxy: { '/api': 'http://localhost:8000' },
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',

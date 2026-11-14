@@ -84,7 +84,7 @@ export async function emitDocxBuffer(
     sections,
   });
 
-  const buffer = await Packer.toBuffer(doc);
+  const buffer = await Packer.toArrayBuffer(doc);
   return new Uint8Array(buffer);
 }
 
