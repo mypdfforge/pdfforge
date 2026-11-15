@@ -50,7 +50,7 @@ function isRowCandidate(line) {
     }
   }
   // Check for merged header indicator
-  if (/merged\s*header/i.test(line.text) || (/^[A-Z0-9\s\-_()]{15,}$/.test(line.text) && line.isBold)) {
+  if (/^[A-Z0-9\s\-_()]{15,}$/.test(line.text) && line.isBold) {
     return true;
   }
   return false;
@@ -218,35 +218,20 @@ export function detectTableRegions(lines, pageWidth, vectorGeometry = null) {
   return mergedBlocks;
 }
 
-export function getTableHeaderTheme(headerText, firstCellText) {
-  const combined = ((headerText || '') + ' ' + (firstCellText || '')).toLowerCase();
+/**
+ * Neutral header theme. The previous version guessed colours from keywords such as
+ * "incident" or "trial specimen" (tuned to one test PDF), which painted real-world
+ * tables with the wrong colours. Real colours now come only from vector geometry.
+ */
+export function getTableHeaderTheme() {
+  return { bg: 'E7E9EE', text: '000000', border: 'A6A6A6', fromVector: false };
+}
 
-  // TOC entries must always retain neutral background even if they cite an "incident" or "audit" chapter
-  if (combined.includes('executive summary') || combined.includes('table of contents') || combined.includes('structural index') || /page\s+\d+/i.test(combined)) {
-    return { bg: 'F8FAFC', text: '1E293B', border: 'E2E8F0' }; // Neutral TOC
-  }
-  if (combined.includes('trial specimen') || combined.includes('mean delta') || combined.includes('scientific')) {
-    return { bg: '047756', text: 'FFFFFF', border: '03543F' }; // Emerald
-  }
-  if (combined.includes('severity') || combined.includes('incident') || combined.includes('timestamp (utc)')) {
-    return { bg: '7E1C1C', text: 'FFFFFF', border: '5B1414' }; // Crimson
-  }
-  if (combined.includes('language') || combined.includes('sample text') || combined.includes('verification focus')) {
-    return { bg: '334154', text: 'FFFFFF', border: '1E293B' }; // Slate
-  }
-  if (combined.includes('reporting category') || combined.includes('gross saas') || combined.includes('q1 fy26') || combined.includes('signatory role')) {
-    return { bg: '0E172A', text: 'FFFFFF', border: '020617' }; // Deep Navy
-  }
-  if (combined.includes('capability feature') || combined.includes('community free')) {
-    return { bg: '465469', text: 'FFFFFF', border: '334154' }; // Slate Gray
-  }
-  if (combined.includes('document version') || combined.includes('phase 01') || combined.includes('glyph kerning')) {
-    return { bg: 'F0F4F9', text: '1E293B', border: 'CBD5E1' }; // Ice Blue
-  }
-  if (combined.includes('executive summary') || combined.includes('table of contents')) {
-    return { bg: 'F8FAFC', text: '1E293B', border: 'E2E8F0' }; // TOC
-  }
-  return { bg: '1D283B', text: 'FFFFFF', border: '0F172A' }; // Midnight Slate default
+function hexLuminance(hex) {
+  const h = String(hex || '').replace(/^#/, '');
+  if (!/^[0-9a-f]{6}$/i.test(h)) return 1;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 /**
@@ -303,7 +288,7 @@ function buildTableBlock(tableLines, pageWidth, vectorGeometry = null) {
     // Check if this row is a merged header (single text run covering most of the table width)
     const isMergedHeader =
       line.items.length === 1 &&
-      (line.width >= 0.55 * tableWidth || /merged\s*header/i.test(line.text));
+      line.width >= 0.55 * tableWidth;
 
     if (isMergedHeader) {
       rows.push({
@@ -412,27 +397,32 @@ function buildTableBlock(tableLines, pageWidth, vectorGeometry = null) {
     rows.push({ isHeader: isHeaderRow, cells });
   });
 
-  const headerRow = rows.find((r) => r.isHeader);
-  const headerText = headerRow ? headerRow.cells.map((c) => c.text).join(' ') : '';
-  const firstCellText = rows[0]?.cells?.[0]?.text || '';
-  let theme = getTableHeaderTheme(headerText, firstCellText);
+  let theme = getTableHeaderTheme();
+  const yVals = tableLines.map((l) => getLineY(l));
+  const minY = Math.min(...yVals);
+  const maxY = Math.max(...yVals);
 
   if (vectorGeometry && vectorGeometry.rects && vectorGeometry.rects.length > 0) {
-    const yVals = tableLines.map((l) => getLineY(l));
-    const minY = Math.min(...yVals);
-    const maxY = Math.max(...yVals);
-    const vectorTheme = getVectorTableStyling(vectorGeometry.rects, vectorGeometry.lines, { minX, maxX, minY, maxY });
-    if (vectorTheme.headerBg) {
-      theme = {
-        bg: vectorTheme.headerBg,
-        text: 'FFFFFF',
-        border: vectorTheme.borderColor || theme.border,
-      };
+    try {
+      const vectorTheme = getVectorTableStyling(vectorGeometry.rects, vectorGeometry.lines, { minX, maxX, minY, maxY });
+      if (vectorTheme && vectorTheme.headerBg) {
+        const bg = String(vectorTheme.headerBg).replace(/^#/, '');
+        theme = {
+          bg,
+          // pick readable text for the REAL background (was hard-coded white → invisible on light headers)
+          text: hexLuminance(bg) < 0.5 ? 'FFFFFF' : '000000',
+          border: String(vectorTheme.borderColor || theme.border).replace(/^#/, ''),
+          fromVector: true,
+        };
+      }
+    } catch (_) {
+      /* vector styling is optional — keep neutral theme */
     }
   }
 
   return {
     type: 'table',
+    y: tableLines.length ? getLineY(tableLines[0]) : undefined,
     colWidths,
     rows,
     numCols,

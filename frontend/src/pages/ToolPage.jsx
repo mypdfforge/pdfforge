@@ -18,6 +18,7 @@ import {
 import JSZip from 'jszip'
 import { inspectWordDocument, evaluatePreselection } from '../utils/wordInspection'
 import WordToPdfTool from '../features/word-to-pdf/ui/WordToPdfTool'
+import PdfToWordTool from '../features/pdf-to-word/ui/PdfToWordTool'
 import { docxToPdfAccurate, isWasmEngineCached, isCrossOriginIsolated, warmEngine, canWarmEngine } from '../utils/libreofficeWasm'
 import axios from 'axios'
 import { clientImagesToPdf, applyPageModifications, clientOrganize, pageSelected } from '../utils/editClient'
@@ -381,9 +382,10 @@ function ActionIcon({ title, color, border, icon, onClick }) {
 }
 
 // ── Main ToolPage ──────────────────────────────────────────────────────
-// Word to PDF now lives in features/word-to-pdf. Everything else uses the old page.
+// Word to PDF and PDF to Word live in their dedicated features. Everything else uses the old page.
 function ToolPageInner(props) {
   if (props.toolId === 'word-to-pdf') return <WordToPdfTool {...props} />
+  if (props.toolId === 'pdf-to-word') return <PdfToWordTool {...props} />
   return <LegacyToolPageInner {...props} />
 }
 
