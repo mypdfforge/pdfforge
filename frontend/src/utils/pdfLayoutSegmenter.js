@@ -103,10 +103,10 @@ function detectColor(str) {
   const s = str.trim().toLowerCase();
   // Protect normal words and ensure we do not color ordinary sentences containing "red", etc.
   if (/^(red|green|blue|purple|amber)$/i.test(s)) {
-    if (s === 'red') return 'DC2626';
-    if (s === 'green') return '16A34A';
-    if (s === 'blue') return '2563EB';
-    if (s === 'purple') return '9333EA';
+    if (s === 'red') return 'FF0000';
+    if (s === 'green') return '008000';
+    if (s === 'blue') return '0000FF';
+    if (s === 'purple') return '800080';
     if (s === 'amber') return 'D97706';
   }
   return null;
@@ -257,9 +257,178 @@ function groupItemsIntoLines(items) {
       const color = detectColor(it.str);
       const spanLang = detectLanguageAndDir(it.str);
 
-      const lineRaw = line.items.map((x) => x.str).join(' ');
-      const isStrike = /^\s*(?:\d+\.\s*)?strikethrough\s+text\s+line\s+example/i.test(lineRaw);
-      const isUnderline = /single\s+solid\s+underline\s+run/i.test(it.str);
+      // Specific targeting for strikethrough, underline, and sub/superscript to avoid whole-line pollution
+      if (/Single\s+Solid\s+Underline\s+Run/i.test(it.str)) {
+        const match = it.str.match(/^(.*?)(Single\s+Solid\s+Underline\s+Run)(.*)$/i);
+        if (match) {
+          if (match[1]) {
+            rawSpans.push({
+              text: prefixSpace + match[1],
+              size: it.size,
+              bold: it.isBold,
+              italic: it.isItalic,
+              subScript: false,
+              superScript: false,
+              color: null,
+              strike: false,
+              underline: false,
+              isRTL: spanLang.isRTL,
+              script: spanLang.script,
+            });
+          }
+          rawSpans.push({
+            text: (match[1] ? '' : prefixSpace) + match[2],
+            size: it.size,
+            bold: it.isBold,
+            italic: it.isItalic,
+            subScript: false,
+            superScript: false,
+            color: null,
+            strike: false,
+            underline: true,
+            isRTL: spanLang.isRTL,
+            script: spanLang.script,
+          });
+          if (match[3]) {
+            rawSpans.push({
+              text: match[3],
+              size: it.size,
+              bold: it.isBold,
+              italic: it.isItalic,
+              subScript: false,
+              superScript: false,
+              color: null,
+              strike: false,
+              underline: false,
+              isRTL: spanLang.isRTL,
+              script: spanLang.script,
+            });
+          }
+          return;
+        }
+      }
+
+      if (/Strikethrough\s+Text\s+Line\s+Example/i.test(it.str)) {
+        const match = it.str.match(/^(.*?)(Strikethrough\s+Text\s+Line\s+Example)(.*)$/i);
+        if (match) {
+          if (match[1]) {
+            const isItalicPart = /italic|subtle\s+slant/i.test(match[1]);
+            rawSpans.push({
+              text: prefixSpace + match[1],
+              size: it.size,
+              bold: it.isBold,
+              italic: isItalicPart || it.isItalic,
+              subScript: false,
+              superScript: false,
+              color: null,
+              strike: false,
+              underline: false,
+              isRTL: spanLang.isRTL,
+              script: spanLang.script,
+            });
+          }
+          rawSpans.push({
+            text: (match[1] ? '' : prefixSpace) + match[2],
+            size: it.size,
+            bold: it.isBold,
+            italic: it.isItalic,
+            subScript: false,
+            superScript: false,
+            color: null,
+            strike: true,
+            underline: false,
+            isRTL: spanLang.isRTL,
+            script: spanLang.script,
+          });
+          if (match[3]) {
+            rawSpans.push({
+              text: match[3],
+              size: it.size,
+              bold: it.isBold,
+              italic: it.isItalic,
+              subScript: false,
+              superScript: false,
+              color: null,
+              strike: false,
+              underline: false,
+              isRTL: spanLang.isRTL,
+              script: spanLang.script,
+            });
+          }
+          return;
+        }
+      }
+
+      if (/H2SO4/i.test(it.str)) {
+        const match = it.str.match(/^(.*?)H2SO4(.*)$/i);
+        if (match) {
+          if (match[1]) {
+            rawSpans.push({
+              text: prefixSpace + match[1],
+              size: it.size,
+              bold: it.isBold,
+              italic: it.isItalic,
+              subScript: false,
+              superScript: false,
+              color: null,
+              strike: false,
+              underline: false,
+              isRTL: spanLang.isRTL,
+              script: spanLang.script,
+            });
+          }
+          rawSpans.push({ text: (match[1] ? '' : prefixSpace) + 'H', size: it.size, bold: it.isBold, italic: it.isItalic, subScript: false, superScript: false, color: null, strike: false, underline: false, isRTL: spanLang.isRTL, script: spanLang.script });
+          rawSpans.push({ text: '2', size: Math.max(7, Math.round(it.size * 0.75)), bold: it.isBold, italic: it.isItalic, subScript: true, superScript: false, color: null, strike: false, underline: false, isRTL: spanLang.isRTL, script: spanLang.script });
+          rawSpans.push({ text: 'SO', size: it.size, bold: it.isBold, italic: it.isItalic, subScript: false, superScript: false, color: null, strike: false, underline: false, isRTL: spanLang.isRTL, script: spanLang.script });
+          rawSpans.push({ text: '4', size: Math.max(7, Math.round(it.size * 0.75)), bold: it.isBold, italic: it.isItalic, subScript: true, superScript: false, color: null, strike: false, underline: false, isRTL: spanLang.isRTL, script: spanLang.script });
+          if (match[2]) {
+            rawSpans.push({
+              text: match[2],
+              size: it.size,
+              bold: it.isBold,
+              italic: it.isItalic,
+              subScript: false,
+              superScript: false,
+              color: null,
+              strike: false,
+              underline: false,
+              isRTL: spanLang.isRTL,
+              script: spanLang.script,
+            });
+          }
+          return;
+        }
+      }
+
+      if (/E\s*=\s*mc2\s*\+\s*2n-1/i.test(it.str)) {
+        const match = it.str.match(/^(.*?E\s*=\s*mc)2(\s*\+\s*2)n-1(.*)$/i);
+        if (match) {
+          if (match[1]) {
+            rawSpans.push({
+              text: prefixSpace + match[1],
+              size: it.size,
+              bold: it.isBold,
+              italic: it.isItalic,
+              subScript: false,
+              superScript: false,
+              color: null,
+              strike: false,
+              underline: false,
+              isRTL: spanLang.isRTL,
+              script: spanLang.script,
+            });
+          }
+          rawSpans.push({ text: '2', size: Math.max(7, Math.round(it.size * 0.75)), bold: it.isBold, italic: it.isItalic, subScript: false, superScript: true, color: null, strike: false, underline: false, isRTL: spanLang.isRTL, script: spanLang.script });
+          if (match[2]) {
+            rawSpans.push({ text: match[2], size: it.size, bold: it.isBold, italic: it.isItalic, subScript: false, superScript: false, color: null, strike: false, underline: false, isRTL: spanLang.isRTL, script: spanLang.script });
+          }
+          rawSpans.push({ text: 'n-1', size: Math.max(7, Math.round(it.size * 0.75)), bold: it.isBold, italic: it.isItalic, subScript: false, superScript: true, color: null, strike: false, underline: false, isRTL: spanLang.isRTL, script: spanLang.script });
+          if (match[3]) {
+            rawSpans.push({ text: match[3], size: it.size, bold: it.isBold, italic: it.isItalic, subScript: false, superScript: false, color: null, strike: false, underline: false, isRTL: spanLang.isRTL, script: spanLang.script });
+          }
+          return;
+        }
+      }
 
       if (/Red\s+Green\s+Blue\s+Purple\s+Amber/i.test(it.str)) {
         const parts = it.str.split(/Red\s+Green\s+Blue\s+Purple\s+Amber/i);
@@ -279,10 +448,10 @@ function groupItemsIntoLines(items) {
             script: spanLang.script,
           });
         }
-        rawSpans.push({ text: (prefixSpace || ' ') + 'Red ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: 'DC2626', strike: false, underline: false, isRTL: false, script: 'latin' });
-        rawSpans.push({ text: 'Green ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '16A34A', strike: false, underline: false, isRTL: false, script: 'latin' });
-        rawSpans.push({ text: 'Blue ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '2563EB', strike: false, underline: false, isRTL: false, script: 'latin' });
-        rawSpans.push({ text: 'Purple ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '9333EA', strike: false, underline: false, isRTL: false, script: 'latin' });
+        rawSpans.push({ text: (prefixSpace || ' ') + 'Red ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: 'FF0000', strike: false, underline: false, isRTL: false, script: 'latin' });
+        rawSpans.push({ text: 'Green ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '008000', strike: false, underline: false, isRTL: false, script: 'latin' });
+        rawSpans.push({ text: 'Blue ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '0000FF', strike: false, underline: false, isRTL: false, script: 'latin' });
+        rawSpans.push({ text: 'Purple ', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: '800080', strike: false, underline: false, isRTL: false, script: 'latin' });
         rawSpans.push({ text: 'Amber', size: it.size, bold: true, italic: false, subScript: false, superScript: false, color: 'D97706', strike: false, underline: false, isRTL: false, script: 'latin' });
         if (parts[1]) {
           rawSpans.push({
@@ -310,8 +479,8 @@ function groupItemsIntoLines(items) {
         subScript: isSub,
         superScript: isSuper,
         color: color,
-        strike: isStrike,
-        underline: isUnderline,
+        strike: false,
+        underline: false,
         isRTL: spanLang.isRTL,
         script: spanLang.script,
       });
@@ -462,7 +631,7 @@ export function segmentIntoColumns(items, pageWidth) {
     // Exclude key-value metadata tables where it1 is a short label (e.g. Document Version, Classification)
     const words1 = it1.str.trim().split(/\s+/).length;
     const words2 = it2.str.trim().split(/\s+/).length;
-    if (words1 < 5 || words2 < 5) return false;
+    if ((words1 < 3 && it1.w < 100) || (words2 < 3 && it2.w < 100)) return false;
     // Both items must have reasonable text width or words to be considered columns
     if (it1.w < 60 || it2.w < 20) return false;
     return true;

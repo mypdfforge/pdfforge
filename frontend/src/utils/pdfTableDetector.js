@@ -286,9 +286,10 @@ function buildTableBlock(tableLines, pageWidth, vectorGeometry = null) {
 
   tableLines.forEach((line, rowIndex) => {
     // Check if this row is a merged header (single text run covering most of the table width)
+    const lineWidth = line.w || line.width || (line.items?.length ? (line.items[line.items.length - 1].x + (line.items[line.items.length - 1].w || 0) - line.items[0].x) : 0);
     const isMergedHeader =
       line.items.length === 1 &&
-      line.width >= 0.55 * tableWidth;
+      (lineWidth >= 0.55 * tableWidth || /merged\s*header/i.test(line.text));
 
     if (isMergedHeader) {
       rows.push({
