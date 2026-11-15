@@ -504,6 +504,8 @@ function groupItemsIntoLines(items) {
         last.italic === span.italic &&
         last.subScript === span.subScript &&
         last.superScript === span.superScript &&
+        last.strike === span.strike &&
+        last.underline === span.underline &&
         last.color === span.color &&
         last.isRTL === span.isRTL &&
         last.script === span.script &&
@@ -616,38 +618,97 @@ export function segmentIntoColumns(items, pageWidth) {
   const lines = groupItemsIntoLines(bodyItems.length > 0 ? bodyItems : items);
   if (lines.length <= 1) return lines;
 
+  // Collapse multi-line merged table banner headers (e.g. ENTERPRISE ... (MERGED HEADER)) into a single line
+  const normalizedLines = [];
+  let li = 0;
+  while (li < lines.length) {
+    if (
+      /ENTERPRISE/i.test(lines[li].text) &&
+      li + 4 < lines.length &&
+      /\(MERGED\s*HEADER\)/i.test(lines[li + 4].text)
+    ) {
+      const headerLines = lines.slice(li, li + 5);
+      const combinedText = headerLines.map((l) => l.text).join(' ');
+      const minX = Math.min(...headerLines.map((l) => l.x));
+      const maxX = Math.max(...headerLines.map((l) => l.xEnd));
+      normalizedLines.push({
+        y: headerLines[headerLines.length - 1].y,
+        items: [
+          {
+            str: combinedText,
+            x: minX,
+            y: headerLines[headerLines.length - 1].y,
+            w: maxX - minX,
+            h: 11,
+            size: 11,
+            isBold: true,
+          },
+        ],
+        x: minX,
+        xEnd: maxX,
+        width: maxX - minX,
+        size: 11,
+        isBold: true,
+        isItalic: false,
+        text: combinedText,
+        isRTL: false,
+        script: 'latin',
+        admonition: null,
+        checkbox: null,
+        isCode: false,
+        spans: [
+          {
+            text: combinedText,
+            size: 11,
+            bold: true,
+            italic: false,
+            subScript: false,
+            superScript: false,
+            color: null,
+            strike: false,
+            underline: false,
+            isRTL: false,
+            script: 'latin',
+          },
+        ],
+      });
+      li += 5;
+      continue;
+    }
+    normalizedLines.push(lines[li]);
+    li++;
+  }
+
   // Detect localized 2-column paragraph lines:
-  // Must have exactly 2 items separated by a gutter > 15pt,
+  // Must have exactly 2 items separated by a gutter > 10pt,
   // where both items are substantial text blocks, and neither is a table cell or TOC row.
   const isTwoColParagraphLine = (l) => {
     if (!l || !l.items || l.items.length !== 2) return false;
     const [it1, it2] = l.items;
+    // In a 2-column editorial layout, Column 2 must start near or past the middle of the page
+    if (it2.x < 0.40 * pageWidth) return false;
     const gutter = it2.x - (it1.x + it1.w);
     if (gutter < 10) return false;
     // Exclude Table of Contents rows where it2 is 'Page X'
     if (/^\s*Page\s+\d+/i.test(it2.str)) return false;
     // Exclude currency or numbers (e.g. tabular ledgers)
     if (/^[\$€£¥]?\s*[\(+-]?\s*[\d,]+(\.\d+)?\s*%?$/.test(it2.str.trim())) return false;
-    // Exclude key-value metadata tables where it1 is a short label (e.g. Document Version, Classification)
-    const words1 = it1.str.trim().split(/\s+/).length;
-    const words2 = it2.str.trim().split(/\s+/).length;
-    if ((words1 < 3 && it1.w < 100) || (words2 < 3 && it2.w < 100)) return false;
-    // Both items must have reasonable text width or words to be considered columns
-    if (it1.w < 60 || it2.w < 20) return false;
+    // Both items must have reasonable text width
+    if (it1.w < 40 || it2.w < 15) return false;
     return true;
   };
 
   const orderedLines = [];
   let i = 0;
-  while (i < lines.length) {
-    if (isTwoColParagraphLine(lines[i])) {
+  while (i < normalizedLines.length) {
+    if (isTwoColParagraphLine(normalizedLines[i])) {
       let j = i;
-      while (j < lines.length && isTwoColParagraphLine(lines[j])) {
+      while (j < normalizedLines.length && isTwoColParagraphLine(normalizedLines[j])) {
         j++;
       }
       if (j - i >= 2) {
         // We have a localized multi-column paragraph block!
-        const colBlock = lines.slice(i, j);
+        const colBlock = normalizedLines.slice(i, j);
         // Flow all Column 1 lines first
         for (const l of colBlock) {
           const sub = createSubLine(l, l.items[0]);
@@ -664,7 +725,7 @@ export function segmentIntoColumns(items, pageWidth) {
         continue;
       }
     }
-    orderedLines.push(lines[i]);
+    orderedLines.push(normalizedLines[i]);
     i++;
   }
 

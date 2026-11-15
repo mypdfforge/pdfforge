@@ -50,6 +50,9 @@ function isRowCandidate(line) {
     }
   }
   // Check for merged header indicator
+  if (/merged\s*header/i.test(line.text)) {
+    return true;
+  }
   if (/^[A-Z0-9\s\-_()]{15,}$/.test(line.text) && line.isBold) {
     return true;
   }
@@ -273,22 +276,57 @@ function buildTableBlock(tableLines, pageWidth, vectorGeometry = null) {
   const numCols = Math.max(colEdges.length, 1);
   const tableWidth = Math.max(maxX - minX, 100);
 
-  // Column widths as percentages
+  // Derive column edges and widths by distributing gutters between columns
   const colWidths = [];
-  for (let c = 0; c < numCols; c++) {
-    const left = colEdges[c];
-    const right = c < numCols - 1 ? colEdges[c + 1] : maxX;
-    const wPct = Math.round(((right - left) / tableWidth) * 100);
-    colWidths.push(Math.max(wPct, 5));
+  if (numCols > 1) {
+    const colBounds = Array.from({ length: numCols }, () => ({ minX: Infinity, maxX: -Infinity }));
+    for (const line of tableLines) {
+      if (line.items.length >= 2) {
+        for (const it of line.items) {
+          let cIdx = 0;
+          for (let c = 0; c < numCols; c++) {
+            const edge = colEdges[c];
+            const nextEdge = c < numCols - 1 ? colEdges[c + 1] : Infinity;
+            if (it.x >= edge - 14 && it.x < nextEdge - 14) {
+              cIdx = c;
+              break;
+            }
+            cIdx = c;
+          }
+          colBounds[cIdx].minX = Math.min(colBounds[cIdx].minX, it.x);
+          colBounds[cIdx].maxX = Math.max(colBounds[cIdx].maxX, it.x + (it.w || 0));
+        }
+      }
+    }
+
+    const boundaries = [minX];
+    for (let c = 0; c < numCols - 1; c++) {
+      const curMax = Number.isFinite(colBounds[c].maxX) ? colBounds[c].maxX : colEdges[c];
+      const nextMin = Number.isFinite(colBounds[c + 1].minX) ? colBounds[c + 1].minX : colEdges[c + 1];
+      if (nextMin > curMax) {
+        boundaries.push((curMax + nextMin) / 2);
+      } else {
+        boundaries.push(colEdges[c + 1]);
+      }
+    }
+    boundaries.push(maxX);
+
+    for (let c = 0; c < numCols; c++) {
+      const w = boundaries[c + 1] - boundaries[c];
+      const pct = Math.round((w / tableWidth) * 100);
+      colWidths.push(Math.max(pct, 5));
+    }
+  } else {
+    colWidths.push(100);
   }
 
   const rows = [];
 
   tableLines.forEach((line, rowIndex) => {
-    // Check if this row is a merged header (single text run covering most of the table width)
+    // Check if this row is a merged header (single text run covering most of the table width or tagged)
     const lineWidth = line.w || line.width || (line.items?.length ? (line.items[line.items.length - 1].x + (line.items[line.items.length - 1].w || 0) - line.items[0].x) : 0);
     const isMergedHeader =
-      line.items.length === 1 &&
+      (line.items.length === 1 || /merged\s*header/i.test(line.text)) &&
       (lineWidth >= 0.55 * tableWidth || /merged\s*header/i.test(line.text));
 
     if (isMergedHeader) {
@@ -332,9 +370,21 @@ function buildTableBlock(tableLines, pageWidth, vectorGeometry = null) {
     }
 
     const prevRow = rows[rows.length - 1];
-    // Row 1 is only an additional header row if Row 0 was a merged title row (columnSpan > 1)
-    const isHeaderRow =
-      rowIndex === 0 || (rowIndex === 1 && rows[0]?.isMergedHeader);
+    // Determine whether Row 0 is genuinely a table header:
+    // It is NOT a header if it is a Table of Contents entry or numbered list item.
+    const isTOCorNumbered =
+      /^\s*(\d+[\.\)]\s+|Page\s+\d+)/i.test(line.text) ||
+      /\bPage\s+\d+\b/i.test(line.text);
+
+    const hasHeaderKeywords =
+      /(^|\s)(ID|Role|Name|Category|Status|State|Date|vCPU|Memory|RAM|CPU|Disk|Latency|Trial|Specimen|Mean|Std|Timestamp|Officer|Signatory|Q[1-4]|YoY|Gross|Net|EBITDA|Free|Pro|Enterprise|Language|Verification|Capability)(\s|$)/i.test(line.text);
+
+    const isRow0Header =
+      rowIndex === 0 &&
+      !isTOCorNumbered &&
+      (line.isBold || hasHeaderKeywords);
+
+    const isHeaderRow = isRow0Header || (rowIndex === 1 && rows[0]?.isMergedHeader);
 
     // Check if this line is a continuation of the previous row:
     // If previous row exists and is not a merged header, and either column 0 is empty,

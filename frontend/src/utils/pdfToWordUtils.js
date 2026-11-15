@@ -336,7 +336,12 @@ export function fitColumnWidths(widths, needs) {
 
 /** Rough twips needed for the longest word of a cell (avoids mid-number wraps like "$1,200.5 / 0"). */
 export function cellMinTwips(text, fontPt = 10) {
-  const longest = String(text || '').split(/\s+/).reduce((m, w) => Math.max(m, w.length), 0)
+  const str = String(text || '').trim()
+  // Short phrases like "Page 1", "35%", "OPERATIONAL" should never wrap across lines
+  if (str.length <= 15) {
+    return Math.ceil(str.length * fontPt * 0.65 * 20) + 300
+  }
+  const longest = str.split(/\s+/).reduce((m, w) => Math.max(m, w.length), 0)
   return Math.ceil(longest * fontPt * 0.56 * 20) + 230 // 0.56em avg glyph + cell margins
 }
 
