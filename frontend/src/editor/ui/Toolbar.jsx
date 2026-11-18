@@ -38,9 +38,18 @@ export function TopBar({ doc, store, saveState, saveDetail, zoom, setZoom, onBac
           className={`pe-tb${doc.flow?.enabled ? ' on' : ''}`}
           aria-pressed={!!doc.flow?.enabled}
           onClick={() => store.setFlowEnabled(!doc.flow?.enabled)}
-          style={{ fontSize: 12, padding: '3px 8px', fontWeight: doc.flow?.enabled ? 600 : 400 }}
+          style={{
+            fontSize: 12,
+            padding: '3px 10px',
+            fontWeight: 600,
+            borderRadius: 6,
+            background: doc.flow?.enabled ? 'var(--brand, #3b82f6)' : 'transparent',
+            color: doc.flow?.enabled ? '#ffffff' : 'inherit',
+            border: doc.flow?.enabled ? '1px solid var(--brand, #3b82f6)' : '1px solid rgba(128,128,128,0.3)',
+            cursor: 'pointer'
+          }}
           title="Push following text down as you type, per column (Word-like fluid reflow)">
-          ⚡ Live Flow
+          ⚡ Live Flow: {doc.flow?.enabled ? 'ON' : 'OFF'}
         </button>
       )}
       <Btn icon={<Search size={15} />} label="Find & replace" onClick={onFind} />

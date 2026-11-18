@@ -43,7 +43,8 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
     if (el.cover) pages[el.page].draws.push({ kind: 'rect', x: el.origBox.x - 0.5, y: el.origBox.y, w: el.origBox.w + 1, h: el.origBox.h, color: el.cover })
     else removeOps(el, el.page)
     const s = styled(el.style)
-    pages[sh.page].draws.push(...drawsForLines(layoutElement({ ...el, style: s, baseline: sh.baseline }, m).lines, s))
+    const wrap = el.wrap || !!doc.flow?.enabled
+    pages[sh.page].draws.push(...drawsForLines(layoutElement({ ...el, style: s, wrap, maxW: Math.max(20, el.maxW), baseline: sh.baseline }, m).lines, s))
   }
 
   // Horizontal rules travel with their anchor: remove the original vector op, redraw a crisp rect.

@@ -139,7 +139,7 @@ function Thumb({ session, index, active, onClick, sigKey }) {
 export default function Workspace({ session, projectId, onClose }) {
   const store = session.store
   useStore(store)
-  const doc = store.doc
+  const doc = store.effectiveDoc()
   const plan = session.plan()
   const { pages: overlays, pageCount } = session.overlays()
   const issues = store.issues()

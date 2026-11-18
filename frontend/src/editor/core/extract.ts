@@ -116,5 +116,5 @@ export async function extractDocument(pdf: any, analyses: (i: number) => Promise
   const lowest = pages.map((p) => Math.min(Infinity, ...order.filter((k) => els[k].page === p.index).map((k) => els[k].origBox.y)))
   const limit = Math.max(36, Math.min(...lowest.filter(Number.isFinite), 1e9))
   const contentBottom = pages.map((p) => Math.max(p.y0 + 36, Number.isFinite(limit) && limit < 1e8 ? limit : p.y0 + 36))
-  return { doc: { name, pages, els, order, mode: 'design', blocks: null, contentBottom }, notes }
+  return { doc: { name, pages, els, order, mode: 'design', blocks: null, contentBottom, flow: { enabled: true, squeeze: null } }, notes }
 }

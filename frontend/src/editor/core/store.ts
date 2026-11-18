@@ -31,7 +31,10 @@ export class EditorStore {
   private flowCache: { doc: DocState; value: CascadeResult } | null = null
   lastLabel = ''
 
-  constructor(doc: DocState, m: Measurer) { this.doc = doc; this.m = m }
+  constructor(doc: DocState, m: Measurer) {
+    this.doc = doc.flow !== undefined ? doc : { ...doc, flow: { enabled: true, squeeze: null } }
+    this.m = m
+  }
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => this.listeners.delete(fn) }
   getVersion = () => this.version
   private emit() { this.version++; this.listeners.forEach((f) => f()) }
@@ -116,7 +119,7 @@ export class EditorStore {
   }
   private editable(e: TextElement) { return !e.locked || !!e.cover || e.created }
   setText(id: string, text: string) {
-    return this.commit('Edit text', (d) => this.patchEl(d, id, (e) => (!this.editable(e) || e.text === text ? e : { ...e, text })))
+    return this.commit('Edit text', (d) => this.patchEl(d, id, (e) => (!this.editable(e) || e.text === text ? e : { ...e, text, wrap: d.flow?.enabled ? true : e.wrap })))
   }
   setStyle(patch: Partial<TextStyle>, label = 'Format') {
     const s = this.selection; if (!s) return false
@@ -324,14 +327,14 @@ export class EditorStore {
 }
 export type IssueReport = { byId: Record<string, Issue[]>; all: Issue[]; flow: string[]; pageCount: number }
 
-export function flowOverlays(doc: DocState, res: CascadeResult) {
+export function flowOverlays(doc: DocState, res: CascadeResult): { pages: Array<Array<{ key: string; id: string; kind: 'el'; rect: Rect; locked: boolean; changed: boolean }>>; pageCount: number } {
   const pages: Array<Array<{ key: string; id: string; kind: 'el'; rect: Rect; locked: boolean; changed: boolean }>> =
     res.pageBox.map(() => [])
   for (const id of doc.order) {
     const e = doc.els[id]; if (e.deleted) continue
     const sh = res.shifts.get(id)
     const rect = res.rects.get(id) ?? e.origBox
-    pages[sh?.page ?? e.page].push({ key: id, id, kind: 'el', rect, locked: !!e.locked, changed: isChanged(e) })
+    pages[sh?.page ?? e.page]?.push({ key: id, id, kind: 'el', rect, locked: !!e.locked, changed: isChanged(e) })
   }
-  return pages
+  return { pages, pageCount: res.pageCount }
 }
