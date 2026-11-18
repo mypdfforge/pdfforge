@@ -1,10 +1,15 @@
 // Editor store: immutable document operations + undo/redo history. Framework-agnostic (React subscribes via useSyncExternalStore).
-import type { DocState, TextElement, TextStyle, Block, Role, RGB } from './types.ts'
+import type { DocState, TextElement, TextStyle, Block, Role, RGB, Squeeze } from './types.ts'
 import type { Measurer } from './fonts.ts'
 import { elementIssues } from './layout.ts'
 import type { Issue } from './layout.ts'
 import { reconstruct, layoutFlow, flowWarnings } from './reflow.ts'
 import { isChanged } from './plan.ts'
+import { cascadeVerticalShift } from './flow.ts'
+import type { CascadeResult } from './flow.ts'
+import { intersects } from './geometry.ts'
+import type { Rect } from './geometry.ts'
+import { findSections } from './sections.ts'
 
 export type Target = { kind: 'el' | 'block'; id: string }
 const HISTORY_LIMIT = 100
@@ -22,6 +27,8 @@ export class EditorStore {
   m: Measurer
   private listeners = new Set<() => void>()
   private issueCache: { doc: DocState; value: IssueReport } | null = null
+  private preview: { target: Target; text: string } | null = null
+  private flowCache: { doc: DocState; value: CascadeResult } | null = null
   lastLabel = ''
 
   constructor(doc: DocState, m: Measurer) { this.doc = doc; this.m = m }
@@ -48,6 +55,58 @@ export class EditorStore {
     if (s && (s.kind === 'el' ? !this.doc.els[s.id] : !this.doc.blocks?.some((b) => b.id === s.id))) this.selection = null
   }
   select(t: Target | null) { this.selection = t; this.emit() }
+
+  setPreview(target: Target, text: string) { this.preview = { target, text }; this.emit() }
+  clearPreview() { if (this.preview) { this.preview = null; this.emit() } }
+
+  effectiveDoc(): DocState {
+    const p = this.preview
+    if (!p) return this.doc
+    const d = this.doc
+    if (p.target.kind === 'el') {
+      const e = d.els[p.target.id]
+      return !e || e.text === p.text ? d : { ...d, els: { ...d.els, [p.target.id]: { ...e, text: p.text } } }
+    }
+    return d.blocks ? { ...d, blocks: d.blocks.map((b) => (b.id === p.target.id ? { ...b, text: p.text, edited: true } : b)) } : d
+  }
+
+  cascade(): CascadeResult {
+    const d = this.effectiveDoc()
+    if (this.flowCache?.doc === d) return this.flowCache.value
+    const value = cascadeVerticalShift(d, this.m)
+    this.flowCache = { doc: d, value }
+    return value
+  }
+
+  setFlowEnabled(on: boolean) {
+    return this.commit(on ? 'Enable Live Flow' : 'Disable Live Flow',
+      (d) => (d.mode !== 'design' || !!d.flow?.enabled === on ? d : { ...d, flow: { enabled: on, squeeze: d.flow?.squeeze ?? null } }))
+  }
+
+  applySqueeze(sq: Squeeze | null) {
+    return this.commit(sq ? 'Fit to page' : 'Clear squeeze',
+      (d) => ({ ...d, flow: { enabled: true, squeeze: sq } }))
+  }
+
+  moveSection(sectionId: string, beforeSectionId: string | null) {
+    return this.commit('Reorder section', (d) => {
+      if (!d.blocks) return d
+      const secs = findSections(d.blocks)
+      const from = secs.findIndex((s) => s.id === sectionId)
+      if (from < 0) return d
+      const moved = secs.splice(from, 1)[0]
+      const to = beforeSectionId ? secs.findIndex((s) => s.id === beforeSectionId) : secs.length
+      secs.splice(to < 0 ? secs.length : to, 0, moved)
+      const byId = new Map(d.blocks.map((b) => [b.id, b]))
+      const targetPage = secs[to]?.page ?? moved.page
+      const blocks: Block[] = []
+      for (const s of secs) for (const id of s.blockIds) {
+        const b = byId.get(id)!
+        blocks.push(s.id === moved.id ? { ...b, page: targetPage } : b)
+      }
+      return { ...d, blocks }
+    })
+  }
 
   // ---- element ops --------------------------------------------------------------------------------------------
   private patchEl(d: DocState, id: string, f: (e: TextElement) => TextElement): DocState {
@@ -217,20 +276,43 @@ export class EditorStore {
 
   // ---- diagnostics ------------------------------------------------------------------------------------------------------
   issues(): IssueReport {
-    if (this.issueCache?.doc === this.doc) return this.issueCache.value
-    const d = this.doc, byId: Record<string, Issue[]> = {}, all: Issue[] = []
+    const d = this.effectiveDoc()
+    if (this.issueCache?.doc === d) return this.issueCache.value
+    const byId: Record<string, Issue[]> = {}, all: Issue[] = []
     const inBlock = this.blockLineIds()
-    for (const id of d.order) {
-      const e = d.els[id]
-      if (!isChanged(e) || e.deleted || (d.mode === 'reflow' && inBlock.has(id))) continue
-      const is = elementIssues(d, e, this.m)
-      if (is.length) { byId[id] = is; all.push(...is) }
-    }
     let flowMsgs: string[] = [], pageCount = d.pages.length
-    if (d.mode === 'reflow' && d.blocks) {
-      const f = layoutFlow(d, this.m); flowMsgs = flowWarnings(d, f); pageCount = f.pageCount
-      for (const pb of f.placed) { const bad = this.m.canEncode(pb.block.style.family, pb.block.text); if (bad.length && pb.from === 0) all.push({ id: pb.block.id, kind: 'encoding', message: `Characters not supported by the export font: ${bad.join(' ')}` }) }
+
+    if (d.mode === 'design' && d.flow?.enabled) {
+      const res = this.cascade()
+      for (const id of d.order) {
+        const e = d.els[id]
+        if (!isChanged(e) || e.deleted || e.locked) continue
+        const is = elementIssues(d, e, this.m).filter((i) => i.kind !== 'collision')
+        const r = res.rects.get(id)
+        if (r) {
+          const hits: string[] = []
+          for (const [oid, or] of res.rects) {
+            if (oid === id || res.shifts.get(oid)?.page !== res.shifts.get(id)?.page) continue
+            if (intersects(r, or, 0.8)) hits.push(oid)
+          }
+          if (hits.length) is.push({ id, kind: 'collision', message: `Overlaps ${hits.length} neighbouring text item${hits.length > 1 ? 's' : ''}.`, with: hits })
+        }
+        if (is.length) { byId[id] = is; all.push(...is) }
+      }
+      flowMsgs = res.warnings; pageCount = res.pageCount
+    } else {
+      for (const id of d.order) {
+        const e = d.els[id]
+        if (!isChanged(e) || e.deleted || (d.mode === 'reflow' && inBlock.has(id))) continue
+        const is = elementIssues(d, e, this.m)
+        if (is.length) { byId[id] = is; all.push(...is) }
+      }
+      if (d.mode === 'reflow' && d.blocks) {
+        const f = layoutFlow(d, this.m); flowMsgs = flowWarnings(d, f); pageCount = f.pageCount
+        for (const pb of f.placed) { const bad = this.m.canEncode(pb.block.style.family, pb.block.text); if (bad.length && pb.from === 0) all.push({ id: pb.block.id, kind: 'encoding', message: `Characters not supported by the export font: ${bad.join(' ')}` }) }
+      }
     }
+
     const value = { byId, all, flow: flowMsgs, pageCount }
     this.issueCache = { doc: d, value }
     return value
@@ -241,3 +323,15 @@ export class EditorStore {
   }
 }
 export type IssueReport = { byId: Record<string, Issue[]>; all: Issue[]; flow: string[]; pageCount: number }
+
+export function flowOverlays(doc: DocState, res: CascadeResult) {
+  const pages: Array<Array<{ key: string; id: string; kind: 'el'; rect: Rect; locked: boolean; changed: boolean }>> =
+    res.pageBox.map(() => [])
+  for (const id of doc.order) {
+    const e = doc.els[id]; if (e.deleted) continue
+    const sh = res.shifts.get(id)
+    const rect = res.rects.get(id) ?? e.origBox
+    pages[sh?.page ?? e.page].push({ key: id, id, kind: 'el', rect, locked: !!e.locked, changed: isChanged(e) })
+  }
+  return pages
+}

@@ -32,6 +32,17 @@ export function TopBar({ doc, store, saveState, saveDetail, zoom, setZoom, onBac
         <option value="design">Design Lock</option>
         <option value="reflow">Document Reflow</option>
       </select>
+      {doc.mode === 'design' && (
+        <button
+          type="button"
+          className={`pe-tb${doc.flow?.enabled ? ' on' : ''}`}
+          aria-pressed={!!doc.flow?.enabled}
+          onClick={() => store.setFlowEnabled(!doc.flow?.enabled)}
+          style={{ fontSize: 12, padding: '3px 8px', fontWeight: doc.flow?.enabled ? 600 : 400 }}
+          title="Push following text down as you type, per column (Word-like fluid reflow)">
+          ⚡ Live Flow
+        </button>
+      )}
       <Btn icon={<Search size={15} />} label="Find & replace" onClick={onFind} />
       <Btn icon={<History size={15} />} label="Version history" onClick={onVersions} disabled={!canVersions} />
       <span className="pe-spacer" />

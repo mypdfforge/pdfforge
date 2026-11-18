@@ -3,6 +3,7 @@ import { TopBar, FormatBar } from './Toolbar.jsx'
 import Inspector from './Inspector.jsx'
 import { ExportDialog, FindDialog, VersionsDialog } from './Dialogs.jsx'
 import { rectToCss, cssToPdf } from '../core/geometry.ts'
+import { wrapText } from '../core/layout.ts'
 import { saveDoc, addVersion, isStorageError } from '../core/projects.ts'
 import { FONT_CSS, hex, sampleBackground } from '../ui-util.js'
 
@@ -23,31 +24,43 @@ function TextEditor({ store, doc, target, rect, pageBox, zoom, onDone }) {
   const isBlock = target.kind === 'block'
   const obj = isBlock ? doc.blocks.find((b) => b.id === target.id) : doc.els[target.id]
   const [val, setVal] = useState(obj.text)
-  const ref = useRef(null)
-  const done = useRef(false)
+  const ref = useRef(null), done = useRef(false), deb = useRef(0)
   useEffect(() => { ref.current?.focus(); ref.current?.select() }, [])
   const s = obj.style
   const css = rectToCss(pageBox, zoom, rect)
-  const wrap = isBlock || obj.wrap
+  const wrap = isBlock || obj.wrap || !!doc.flow?.enabled
   const regionW = (isBlock ? obj.width : Math.max(obj.maxW, rect.w)) * zoom
-  const lines = val.split('\n').length
-  const width = wrap ? regionW : Math.max(regionW, css.width + 24)
-  const lh = s.size * zoom * s.lineHeight
-  const measure = store.m.width(val.split('\n').reduce((a, b) => (b.length > a.length ? b : a), ''), s)
-  const over = !wrap && !isBlock && measure > obj.maxW + 0.5
+
+  const onChange = (e) => {
+    const v = e.target.value
+    setVal(v)
+    clearTimeout(deb.current)
+    deb.current = setTimeout(() => store.setPreview({ kind: target.kind, id: target.id }, v), 120)
+  }
   const commit = () => {
     if (done.current) return; done.current = true
+    clearTimeout(deb.current); store.clearPreview()
     if (val !== obj.text) isBlock ? store.setBlockText(obj.id, val) : store.setText(obj.id, val)
     onDone()
   }
-  const cancel = () => { done.current = true; onDone() }
+  const cancel = () => { done.current = true; clearTimeout(deb.current); store.clearPreview(); onDone() }
+
+  const lineCount = useMemo(() => {
+    if (!wrap) return val.split('\n').length
+    return wrapText(val, Math.max(10, regionW / zoom), s, store.m).length
+  }, [val, wrap, regionW, zoom, s, store.m])
+  const lh = s.size * zoom * s.lineHeight
+  const width = wrap ? regionW : Math.max(regionW, css.width + 24)
+  const measure = store.m.width(val.split('\n').reduce((a, b) => (b.length > a.length ? b : a), ''), s)
+  const over = !wrap && !isBlock && measure > obj.maxW + 0.5
+
   return (
     <>
       <textarea ref={ref} className={`pe-edit${wrap ? ' wrap' : ''}`} aria-label="Edit text" data-testid="text-editor" value={val} wrap={wrap ? 'soft' : 'off'}
-        onChange={(e) => setVal(e.target.value)} onBlur={commit}
+        onChange={onChange} onBlur={commit}
         onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') cancel(); else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
-        style={{ left: css.left - 2, top: css.top - 2, width, height: Math.max(css.height, lines * lh) + 4, fontFamily: FONT_CSS[s.family], fontSize: s.size * zoom, lineHeight: `${lh}px`, fontWeight: s.bold ? 700 : 400, fontStyle: s.italic ? 'italic' : 'normal', color: hex(s.color), textAlign: s.align === 'justify' ? 'left' : s.align, letterSpacing: s.charSpacing * zoom, textDecoration: [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean).join(' ') || 'none' }} />
-      <div className={`pe-hint${over ? ' bad' : ''}`} style={{ left: css.left, top: css.top + Math.max(css.height, lines * lh) + 8 }}>
+        style={{ left: css.left - 2, top: css.top - 2, width, height: Math.max(css.height, lineCount * lh) + 4, fontFamily: FONT_CSS[s.family], fontSize: s.size * zoom, lineHeight: `${lh}px`, fontWeight: s.bold ? 700 : 400, fontStyle: s.italic ? 'italic' : 'normal', color: hex(s.color), textAlign: s.align === 'justify' ? 'left' : s.align, letterSpacing: s.charSpacing * zoom, textDecoration: [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean).join(' ') || 'none' }} />
+      <div className={`pe-hint${over ? ' bad' : ''}`} style={{ left: css.left, top: css.top + Math.max(css.height, lineCount * lh) + 8 }}>
         {over ? `Wider than its region by ${Math.round(measure - obj.maxW)} pt: it will be flagged` : 'Enter to apply · Shift+Enter new line · Esc to cancel'}
       </div>
     </>
@@ -80,6 +93,9 @@ function PageView({ session, store, doc, index, zoom, boxOf, overlays, issues, e
     <div ref={wrap} className={`pe-page${pp.src === null ? ' added' : ''}${tool === 'add' ? ' tool-add' : ''}`} data-page={index} data-testid={`page-${index}`}
       style={{ width: pp.w * zoom, height: pp.h * zoom }} onMouseDown={onPageDown}>
       <canvas ref={canvas} aria-label={`Page ${index + 1}`} />
+      {doc.flow?.enabled && store.cascade().lanes.filter((l) => l.page === index).map((l, i) => (
+        <div key={i} className="pe-lane" style={{ position: 'absolute', pointerEvents: 'none', borderLeft: '1px dashed rgba(59, 130, 246, 0.25)', borderRight: '1px dashed rgba(59, 130, 246, 0.25)', left: (l.x0 - pageBox.x0) * zoom, top: 0, width: (l.x1 - l.x0) * zoom, height: '100%', zIndex: 1 }} />
+      ))}
       {visible && items.map((o) => {
         const c = rectToCss(pageBox, zoom, o.rect)
         const bad = (issues.byId[o.id] || []).some((i) => i.kind === 'overflow' || i.kind === 'collision')

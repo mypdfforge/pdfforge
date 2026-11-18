@@ -2,7 +2,7 @@
 import { createEngine } from './core/engineClient.ts'
 import { extractDocument } from './core/extract.ts'
 import { Measurer } from './core/fonts.ts'
-import { EditorStore } from './core/store.ts'
+import { EditorStore, flowOverlays } from './core/store.ts'
 import { buildPlan } from './core/plan.ts'
 import { overlaysByPage } from './core/overlays.ts'
 import { LIMITS } from './core/limits.ts'
@@ -49,9 +49,19 @@ export class Session {
     this._plan = null; this._ov = null
     this.exporting = null
   }
-  get doc() { return this.store.doc }
+  get doc() { return this.store.effectiveDoc() }
   plan() { if (this._plan?.doc !== this.doc) this._plan = { doc: this.doc, v: buildPlan(this.doc, this.m) }; return this._plan.v }
-  overlays() { if (this._ov?.doc !== this.doc) this._ov = { doc: this.doc, v: overlaysByPage(this.doc, this.m) }; return this._ov.v }
+  overlays() {
+    const d = this.doc
+    if (this._ov?.doc !== d) {
+      if (d.mode === 'design' && d.flow?.enabled) {
+        this._ov = { doc: d, v: flowOverlays(d, this.store.cascade()) }
+      } else {
+        this._ov = { doc: d, v: overlaysByPage(d, this.m) }
+      }
+    }
+    return this._ov.v
+  }
   isDirtyPage(i) { const p = this.plan().pages[i]; return !!p && (p.src === null || p.edits.length > 0 || p.draws.length > 0) }
   sig(i) { const p = this.plan().pages[i]; return p ? (this.isDirtyPage(i) ? `${i}:${p.src}:` + JSON.stringify([p.edits, p.draws]) : `${i}:orig`) : '' }
 

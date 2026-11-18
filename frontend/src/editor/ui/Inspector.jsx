@@ -2,6 +2,8 @@ import React, { useState } from 'react'
 import { AlertCircle, Lock, ShieldCheck, Check } from 'lucide-react'
 import { FAMILIES } from '../ui-util.js'
 import { FAMILY_LABEL, stripSubset } from '../core/fonts.ts'
+import { fitToPage } from '../core/squeeze.ts'
+import { auditATS } from '../core/ats.ts'
 
 const KIND = { overflow: 'Overflow', collision: 'Overlap', encoding: 'Font' }
 const FID = { exact: ['Original font', 'pe-ok'], 'metric-compatible': ['Metric-compatible standard font', 'pe-ok'], substituted: ['Substituted font', ''] }
@@ -58,10 +60,26 @@ export default function Inspector({ session, store, doc, sel, target, issues, pa
           <select className="pe-sel" aria-label="Font for whole document" value={fam} onChange={(e) => setFam(e.target.value)}>{FAMILIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
           <button className="btn btn-ghost" onClick={() => store.replaceFamilyEverywhere(fam)}>Use everywhere</button>
         </div>
+        <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => {
+            const r = fitToPage(store.effectiveDoc(), store.m, 1)
+            if (!r.squeeze) { alert(r.pages <= 1 ? 'Already fits on one page.' : 'Cannot fit on one page even at maximum tightening.'); return }
+            store.applySqueeze(r.squeeze)
+          }} title="Smartly adjust gaps and leading to squeeze content onto 1 page">
+            📐 Fit to 1 Page
+          </button>
+          {doc.flow?.squeeze && (
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => store.applySqueeze(null)}>
+              Reset Squeeze
+            </button>
+          )}
+        </div>
         <div className="pe-muted" style={{ marginTop: 8 }}>
           {doc.mode === 'design' ? 'Design Lock keeps every original position. Longer text is flagged, never clipped or drawn over neighbours.' : 'Document Reflow moves following paragraphs and adds pages as text grows. Images and vector graphics are not tracked, so check pages that contain them.'}
         </div>
       </section>
+
+      <AtsSection store={store} onSelect={onSelect} />
       <section className="pe-muted"><ShieldCheck size={13} style={{ verticalAlign: -2 }} /> Processed entirely in your browser. Autosaved only in this browser's storage.</section>
     </>
   )
@@ -126,5 +144,33 @@ function BlockInfo({ store, b, onEdit }) {
         <button className="btn btn-ghost" onClick={() => store.setBlockIncluded(b.id, !b.included)}>{b.included ? 'Keep fixed' : 'Include in flow'}</button>
       </div>
     </div>
+  )
+}
+
+function AtsSection({ store, onSelect }) {
+  const [open, setOpen] = useState(false)
+  const report = React.useMemo(() => auditATS(store.effectiveDoc(), store.m), [store.version, store.m])
+  return (
+    <section>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setOpen(!open)}>
+        <h4 style={{ margin: 0 }}>ATS Resume Audit</h4>
+        <span className={`badge ${report.score >= 80 ? 'badge-browser' : ''}`} style={{ fontWeight: 700, color: report.score >= 80 ? 'var(--green, #10b981)' : report.score >= 55 ? '#f59e0b' : '#ef4444' }}>
+          {report.score}/100
+        </span>
+      </div>
+      <div className="pe-muted" style={{ marginTop: 4 }}>Analyzed locally in browser. 0 data sent to servers.</div>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {report.findings.length === 0 && <div className="pe-card pe-ok">No ATS formatting hazards detected!</div>}
+          {report.findings.map((f) => (
+            <button key={f.id} className="pe-card pe-warn" style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 6, cursor: 'pointer', font: 'inherit', color: 'inherit' }}
+              onClick={() => f.ids?.[0] && onSelect({ kind: 'el', id: f.ids[0] }, null)}>
+              <b>{f.severity.toUpperCase()}:</b> {f.message}
+              <div className="pe-muted" style={{ marginTop: 2, fontSize: 11 }}>💡 Fix: {f.fix}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }

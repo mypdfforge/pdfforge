@@ -35,10 +35,28 @@ export type Block = {
   followers: Array<{ id: string; line: number }> // same-row items (e.g. right-aligned dates) that travel with a line
   spacing: number // user multiplier for paragraph spacing
 }
+export type Squeeze = {
+  gapScale: number     // 1 = original inter-row gaps; 0.6 = 40% tighter
+  lineHeightK: number  // 1 = original leading; 0.9 = 10% tighter
+  sizeDelta: number    // pt added to every font size (negative = shrink). 0 = no redraw of unedited text.
+}
+
+export type FlowSettings = { enabled: boolean; squeeze: Squeeze | null }
+
+export type GraphicRule = {
+  id: string; page: number
+  ops: number[]        // content-stream instruction indices (removed only when the rule moves)
+  rect: Rect           // PDF points, bottom-left origin
+  color: RGB
+  anchorId: string | null  // text element it travels with (nearest heading above)
+}
+
 export type DocState = {
   name: string; pages: PageModel[]; els: Record<string, TextElement>; order: string[]
   mode: 'design' | 'reflow'; blocks: Block[] | null
   contentBottom: number[] // per page: lowest y (PDF) text may reach in reflow
+  flow?: FlowSettings      // absent => legacy Design Lock, byte-identical
+  rules?: GraphicRule[]    // absent => no graphic followers
 }
 
 export type Draw =
