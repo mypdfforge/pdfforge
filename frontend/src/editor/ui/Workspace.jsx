@@ -23,7 +23,10 @@ function useVisible(ref, margin = '900px') {
 function TextEditor({ store, doc, target, rect, pageBox, zoom, onDone }) {
   const isBlock = target.kind === 'block'
   const obj = isBlock ? doc.blocks.find((b) => b.id === target.id) : doc.els[target.id]
-  const [val, setVal] = useState(obj.text)
+  const orig = isBlock
+    ? store.doc.blocks?.find((b) => b.id === target.id)?.text
+    : store.doc.els[target.id]?.text
+  const [val, setVal] = useState(orig ?? obj.text)
   const ref = useRef(null), done = useRef(false), deb = useRef(0)
   useEffect(() => { ref.current?.focus(); ref.current?.select() }, [])
   const s = obj.style
@@ -40,7 +43,13 @@ function TextEditor({ store, doc, target, rect, pageBox, zoom, onDone }) {
   const commit = () => {
     if (done.current) return; done.current = true
     clearTimeout(deb.current); store.clearPreview()
-    if (val !== obj.text) isBlock ? store.setBlockText(obj.id, val) : store.setText(obj.id, val)
+    const committed = isBlock
+      ? store.doc.blocks?.find((b) => b.id === target.id)?.text
+      : store.doc.els[target.id]?.text
+    if (val !== committed) {
+      if (isBlock) store.setBlockText(obj.id, val)
+      else store.setText(obj.id, val)
+    }
     onDone()
   }
   const cancel = () => { done.current = true; clearTimeout(deb.current); store.clearPreview(); onDone() }
@@ -108,7 +117,19 @@ function PageView({ session, store, doc, index, zoom, boxOf, overlays, issues, e
             className={`pe-ov${isSel ? ' sel' : ''}${o.changed ? ' chg' : ''}${bad ? ' bad' : ''}${o.locked ? ' lock' : ''}${store.painter ? ' paint' : ''}`}
             style={{ left: c.left - 1, top: c.top - 1, width: c.width + 2, height: c.height + 2, display: editing && editing.kind === o.kind && editing.id === o.id ? 'none' : undefined }}
             title={lockReason || undefined}
-            onClick={(e) => { e.stopPropagation(); if (store.painter) { if (lockReason) notify(lockReason); else store.paintOn({ kind: o.kind, id: o.id }) } else if (tool !== 'add') store.select({ kind: o.kind, id: o.id }) }}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (store.painter) {
+                if (lockReason) notify(lockReason)
+                else store.paintOn({ kind: o.kind, id: o.id })
+              } else if (tool !== 'add') {
+                if (isSel) {
+                  if (!store.painter) open()
+                } else {
+                  store.select({ kind: o.kind, id: o.id })
+                }
+              }
+            }}
             onDoubleClick={(e) => { e.stopPropagation(); if (!store.painter) open() }}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); store.select({ kind: o.kind, id: o.id }); open() } else if (e.key === ' ') { e.preventDefault(); store.select({ kind: o.kind, id: o.id }) } }} />
         )

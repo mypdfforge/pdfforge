@@ -6,6 +6,7 @@ import type { DocState, TextElement, TextStyle, PageModel, Rect } from './types.
 import type { Measurer } from './fonts.ts'
 import { layoutElement } from './layout.ts'
 import { intersects } from './geometry.ts'
+import { isChanged } from './plan.ts'
 
 export type FlowShift = { baseline: number; page: number; dy: number } // dy = baseline - origBaseline
 export type LaneBox = { page: number; x0: number; x1: number }
@@ -229,22 +230,35 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     const asc = r.origTop - a.origBaseline
     const manual = a.baseline - a.origBaseline               // honor Alt+Arrow nudges
     const baseline = top - asc + manual
-    const rowDy = baseline - a.baseline
-    let bottom = top - asc - a.style.size * 0.22
+    const rowDy = baseline - a.origBaseline
+    let bottom = r.origBottom + rowDy
+
     if (!r.deleted) {
-      const fLeft = r.followers.length ? Math.min(...r.followers.map((f) => f.origBox.x)) : Infinity
-      const effW = Math.max(20, Math.min(a.maxW, fLeft - a.x - 4))
-      const placed = layoutElement({ ...a, style: styleOf(a.style), wrap: true, maxW: effW, baseline }, m)
-      shifts.set(a.id, { baseline, page, dy: baseline - a.origBaseline })
-      rects.set(a.id, placed.rect)
-      bottom = placed.rect.y
+      const changed = isChanged(a) || sq !== null || Math.abs(rowDy) > 0.05
+      if (changed) {
+        const fLeft = r.followers.length ? Math.min(...r.followers.map((f) => f.origBox.x)) : Infinity
+        const effW = Math.max(20, Math.min(a.maxW, fLeft - a.x - 4))
+        const placed = layoutElement({ ...a, style: styleOf(a.style), wrap: true, maxW: effW, baseline }, m)
+        shifts.set(a.id, { baseline, page, dy: rowDy })
+        rects.set(a.id, placed.rect)
+        bottom = placed.rect.y
+      } else {
+        shifts.set(a.id, { baseline: a.origBaseline, page, dy: 0 })
+        rects.set(a.id, a.origBox)
+        bottom = r.origBottom
+      }
     }
     for (const f of r.followers) {                           // satellites ride the anchor's FIRST line
-      const fb = f.baseline + rowDy
-      const fp = layoutElement({ ...f, style: styleOf(f.style), baseline: fb }, m)
-      shifts.set(f.id, { baseline: fb, page, dy: fb - f.origBaseline })
-      rects.set(f.id, fp.rect)
-      bottom = Math.min(bottom, fp.rect.y)
+      if (Math.abs(rowDy) > 0.05 || sq !== null || isChanged(f)) {
+        const fb = f.baseline + rowDy
+        const fp = layoutElement({ ...f, style: styleOf(f.style), baseline: fb }, m)
+        shifts.set(f.id, { baseline: fb, page, dy: fb - f.origBaseline })
+        rects.set(f.id, fp.rect)
+        bottom = Math.min(bottom, fp.rect.y)
+      } else {
+        shifts.set(f.id, { baseline: f.origBaseline, page, dy: 0 })
+        rects.set(f.id, f.origBox)
+      }
     }
     maxPage = Math.max(maxPage, page)
     return { row: r, page, top, bottom, baseline }
