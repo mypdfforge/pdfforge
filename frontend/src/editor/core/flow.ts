@@ -24,7 +24,7 @@ const GUTTER_MIN = 12          // pt of empty vertical projection that separates
 const SPAN_RATIO = 0.6         // box wider than this fraction of content width => spanner
 const MIN_LANE_MASS = 6        // chars; below this a "lane" is noise (page numbers…)
 const DEFAULT_TOP_MARGIN = 54  // matches reflow.ts default for appended pages
-const MAX_EXTRA_PAGES = 200
+const MAX_EXTRA_PAGES = 5      // safe cap: never runaway to hundreds of phantom pages
 
 const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : 0 }
 const sameLook = (a: TextStyle, b: TextStyle) =>
@@ -180,6 +180,24 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
   const pageDims = (p: number) => doc.pages[Math.min(p, srcCount - 1)]
   let maxPage = srcCount - 1
 
+  // Strict identity fast-path: if no element has been edited and no squeeze applied,
+  // return exact original layout immediately. Zero extra pages, zero drift, zero lag.
+  const anyChanged = doc.order.some((id) => isChanged(doc.els[id]))
+  if (!sq && !anyChanged) {
+    for (const pm of doc.pages) {
+      const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index)
+      const { lanes } = findFlowLanes(els, pm)
+      lanes.forEach((l) => lanesOut.push({ page: pm.index, ...l }))
+    }
+    for (const id of doc.order) {
+      const el = doc.els[id]
+      shifts.set(id, { baseline: el.origBaseline, page: el.page, dy: 0 })
+      rects.set(id, el.origBox)
+    }
+    const pageBox = doc.pages.map((p) => ({ src: p.index, w: p.width, h: p.height }))
+    return { shifts, rects, pageBox, pageCount: doc.pages.length, lanes: lanesOut, warnings: [] }
+  }
+
   // Global lane identity across pages: match per-page lanes by x-overlap against running templates.
   const templates: Array<{ x0: number; x1: number }> = []
   const keyOfPage = (pm: PageModel, boxes: Array<{ x0: number; x1: number }>) => (li: number): number => {
@@ -271,22 +289,24 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     // ---- spanner: full-width barrier across all lanes ----
     if (r.lane < 0) {
       const laneStates = [...states.values()]
-      const targetPage = Math.max(r.page, ...laneStates.map((s) => s.flowPage), srcCount - 1 >= r.page ? r.page : r.page)
+      const lanesOnPage = laneStates.filter((s) => s.prevOrigPage === r.page)
+      const targetPage = Math.max(r.page, ...lanesOnPage.map((s) => s.flowPage))
       let page = targetPage
       let top = Infinity
       for (const st of laneStates) {
         if (st.flowPage !== page || st.cursor === null) continue
         top = Math.min(top, st.cursor - gapBetween(st.prevOrigBottom, st.prevOrigPage, r, st))
       }
-      if (!isFinite(top)) top = r.origTop                    // spanner is the first content
+      if (!isFinite(top) || (!sq && top > r.origTop)) top = r.origTop
       let rec = placeRow(r, top, page)
-      if (!r.deleted && rec.bottom < bottomOf(page)) {       // spanner itself overflows => next page
+      const isDisplaced = (r.origTop - top) > 1 || page > r.page
+      if (!r.deleted && isDisplaced && rec.bottom < bottomOf(page)) {
         page++; top = pageDims(page).y0 + pageDims(page).height - DEFAULT_TOP_MARGIN
         rec = placeRow(r, top, page)
       }
-      for (const [, st] of states) {                         // barrier: no lane content may sit above the rule's new bottom
+      for (const [, st] of states) {
         if (st.flowPage < page) { st.flowPage = page; st.carried = true; st.cursor = rec.bottom; st.placed = [] }
-        else st.cursor = Math.min(st.cursor ?? Infinity, rec.bottom)
+        else if (st.flowPage === page) st.cursor = Math.min(st.cursor ?? Infinity, rec.bottom)
         st.prevOrigBottom = r.origBottom; st.prevOrigPage = r.page
       }
       if (r.deleted) continue
@@ -295,7 +315,12 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
 
     // ---- lane row ----
     const st = stateOf(r.lane, r.page)
-    if (st.prevOrigPage !== r.page && !st.carried && st.flowPage === r.page) { st.cursor = null; st.placed = [] } // natural page start => identity
+    if (st.flowPage <= r.page && st.prevOrigPage !== r.page) {
+      st.flowPage = r.page
+      st.carried = false
+      st.cursor = null
+      st.placed = []
+    }
     const gap = gapBetween(st.prevOrigBottom, st.prevOrigPage, r, st)
     let page = st.flowPage
     let top = st.cursor === null ? r.origTop : st.cursor - gap
@@ -303,8 +328,10 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     for (;;) {                                               // placement + pagination (terminates: empty-page guard)
       const rec = placeRow(r, top, page)
       const limit = bottomOf(page)
-      if (r.deleted || rec.bottom >= limit || st.placed.length === 0) {
-        if (!r.deleted && rec.bottom < limit) warnings.push(`A line on page ${page + 1} is taller than the text region; it was kept on the page.`)
+      const isDisplaced = (r.origBottom - rec.bottom) > 1 || page > r.page
+      const overflows = !r.deleted && isDisplaced && rec.bottom < limit && st.placed.length > 0
+      if (r.deleted || !overflows) {
+        if (!r.deleted && rec.bottom < limit && isDisplaced) warnings.push(`A line on page ${page + 1} is taller than the text region; it was kept on the page.`)
         if (!r.deleted) { st.cursor = rec.bottom; st.placed.push(rec) }
         else if (r.followers.length) st.cursor = Math.min(st.cursor ?? rec.bottom, rec.bottom)
         break
@@ -323,7 +350,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       }
       const moved = st.placed.splice(bs)
       page++
-      if (page > srcCount + MAX_EXTRA_PAGES) { warnings.push('Stopped adding pages after 200 extra pages.'); st.placed.push(rec); break }
+      if (page > srcCount + MAX_EXTRA_PAGES) { warnings.push('Stopped adding pages after safe page limit.'); st.placed.push(rec); break }
       st.flowPage = page; st.carried = true; st.placed = []
       st.cursor = laneTop(r.lane, page)
       let prevB: number | null = null

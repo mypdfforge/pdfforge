@@ -76,7 +76,7 @@ function TextEditor({ store, doc, target, rect, pageBox, zoom, onDone }) {
   )
 }
 
-function PageView({ session, store, doc, index, zoom, boxOf, overlays, issues, editing, setEditing, tool, setTool, canvasRefs, notify }) {
+function PageView({ session, store, doc, index, zoom, boxOf, overlays, issues, lanes, editing, setEditing, tool, setTool, canvasRefs, notify }) {
   const wrap = useRef(null), canvas = useRef(null)
   const visible = useVisible(wrap)
   const pp = session.plan().pages[index]
@@ -102,7 +102,7 @@ function PageView({ session, store, doc, index, zoom, boxOf, overlays, issues, e
     <div ref={wrap} className={`pe-page${pp.src === null ? ' added' : ''}${tool === 'add' ? ' tool-add' : ''}`} data-page={index} data-testid={`page-${index}`}
       style={{ width: pp.w * zoom, height: pp.h * zoom }} onMouseDown={onPageDown}>
       <canvas ref={canvas} aria-label={`Page ${index + 1}`} />
-      {doc.flow?.enabled && store.cascade().lanes.filter((l) => l.page === index).map((l, i) => (
+      {doc.flow?.enabled && (lanes || []).map((l, i) => (
         <div key={i} className="pe-lane" style={{ position: 'absolute', pointerEvents: 'none', borderLeft: '1px dashed rgba(59, 130, 246, 0.25)', borderRight: '1px dashed rgba(59, 130, 246, 0.25)', left: (l.x0 - pageBox.x0) * zoom, top: 0, width: (l.x1 - l.x0) * zoom, height: '100%', zIndex: 1 }} />
       ))}
       {visible && items.map((o) => {
@@ -265,6 +265,16 @@ export default function Workspace({ session, projectId, onClose }) {
   const wrapScroll = (i) => scroller.current?.querySelector(`[data-page="${i}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   useEffect(() => { if (session.notes?.[0]) notify(session.notes[0]) }, [])
   const sigs = plan.pages.map((_, i) => session.sig(i))
+  const lanesByPage = useMemo(() => {
+    if (!doc.flow?.enabled) return []
+    const lanes = store.cascade().lanes
+    const map = []
+    for (const l of lanes) {
+      if (!map[l.page]) map[l.page] = []
+      map[l.page].push(l)
+    }
+    return map
+  }, [doc.flow?.enabled, store.version, doc])
 
   return (
     <div className="pe" data-testid="workspace" data-engine={session.engine.mode}>
@@ -281,7 +291,7 @@ export default function Workspace({ session, projectId, onClose }) {
         <div className="pe-canvas" ref={scroller} onScroll={onScroll} onClick={() => !editing && !store.painter && store.select(null)}>
           {plan.pages.map((_, i) => (
             <PageView key={i} session={session} store={store} doc={doc} index={i} zoom={zoom} boxOf={boxOf} overlays={overlays} issues={issues}
-              editing={editing} setEditing={setEditing} tool={tool} setTool={setTool} canvasRefs={canvasRefs} notify={notify} />
+              lanes={lanesByPage[i]} editing={editing} setEditing={setEditing} tool={tool} setTool={setTool} canvasRefs={canvasRefs} notify={notify} />
           ))}
         </div>
         <aside className={`pe-side${side ? ' open' : ''}`} aria-label="Properties">
