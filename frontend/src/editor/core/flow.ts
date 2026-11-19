@@ -302,9 +302,12 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     return st
   }
   const laneTop = (lane: number, page: number): number => {
-    const r = allRows.find((x) => x.lane === lane && x.page === page && !x.deleted)
-    if (r) return r.origTop
     const pm = pageDims(page)
+    const pageRows = allRows.filter((x) => x.page === page && !x.deleted)
+    if (pageRows.length) {
+      const topRow = pageRows.reduce((a, b) => (b.origTop > a.origTop ? b : a), pageRows[0])
+      return topRow.origTop
+    }
     return pm.y0 + pm.height - DEFAULT_TOP_MARGIN
   }
 
@@ -313,38 +316,24 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     const a = r.anchor
     const inTable = tableElMap.has(a.id)
 
-    // Pin unedited table cells to their exact original positions so text does not slide out of vector grid boxes
+    // Pin unedited table cells to their exact original positions inside vector grid boxes
+    // when the text from above fits within the available space before the table
     if (inTable && !isChanged(a) && sq === null && !r.followers.some((f) => isChanged(f))) {
-      shifts.set(a.id, { baseline: a.origBaseline, page: a.page, dy: 0 })
-      rects.set(a.id, a.origBox)
-      for (const f of r.followers) {
-        shifts.set(f.id, { baseline: f.origBaseline, page: f.page, dy: 0 })
-        rects.set(f.id, f.origBox)
-      }
-      maxPage = Math.max(maxPage, a.page)
-      return { row: r, page: a.page, top: r.origTop, bottom: r.origBottom, baseline: a.origBaseline }
-    }
-
-    // Clamp headings/rows directly above a table on the same page so they never penetrate or overlap the table top border
-    let effectiveTop = top
-    if (sq === null) {
-      let nearestTr: TableRegion | null = null
-      for (const tr of allTableRegions) {
-        if (tr.page === page && tr.top <= r.origBottom && !tr.elementIds.has(a.id)) {
-          if (!nearestTr || tr.top > nearestTr.top) nearestTr = tr
+      if (top >= r.origTop - 1.5) {
+        shifts.set(a.id, { baseline: a.origBaseline, page: a.page, dy: 0 })
+        rects.set(a.id, a.origBox)
+        for (const f of r.followers) {
+          shifts.set(f.id, { baseline: f.origBaseline, page: f.page, dy: 0 })
+          rects.set(f.id, f.origBox)
         }
-      }
-      if (nearestTr) {
-        const h = r.origTop - r.origBottom
-        if (effectiveTop - h < nearestTr.top + 2) {
-          effectiveTop = nearestTr.top + h + 4
-        }
+        maxPage = Math.max(maxPage, a.page)
+        return { row: r, page: a.page, top: r.origTop, bottom: r.origBottom, baseline: a.origBaseline }
       }
     }
 
     const asc = r.origTop - a.origBaseline
     const manual = a.baseline - a.origBaseline               // honor Alt+Arrow nudges
-    const baseline = effectiveTop - asc + manual
+    const baseline = top - asc + manual
     const rowDy = baseline - a.origBaseline
     let bottom = r.origBottom + rowDy
 
@@ -376,7 +365,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       }
     }
     maxPage = Math.max(maxPage, page)
-    return { row: r, page, top: effectiveTop, bottom, baseline }
+    return { row: r, page, top, bottom, baseline }
   }
 
   const gapBetween = (prevBottom: number | null, prevPage: number, r: Row, st: LaneState) =>
@@ -421,11 +410,12 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
 
     // ---- lane row ----
     const st = stateOf(r.lane, r.page)
-    if (st.flowPage <= r.page && st.prevOrigPage !== r.page) {
-      st.flowPage = r.page
-      st.carried = false
-      st.cursor = null
-      st.placed = []
+    if (st.prevOrigPage !== r.page) {
+      if (!st.carried && st.flowPage === r.page) {
+        st.cursor = null
+        st.placed = []
+      }
+      st.prevOrigPage = r.page
     }
     let gap = gapBetween(st.prevOrigBottom, st.prevOrigPage, r, st)
     const minSectionGap = Math.max(3.5, body * 0.35)
