@@ -74,3 +74,22 @@ export function elementIssues(doc: DocState, el: TextElement, m: Measurer): Issu
   if (bad.length) issues.push({ id: el.id, kind: 'encoding', message: `Characters not supported by the export font: ${bad.join(' ')} (will print as "?").` })
   return issues
 }
+
+/** Descender clearance used by placeLines (kept in one place so pagination agrees with layout). */
+export const descenderOf = (s: TextStyle) => s.size * 0.22
+
+/**
+ * How many LEADING lines keep their descender at or above `limit`.
+ * Returns 0 when even the first line does not fit — the caller must then move the row.
+ */
+export function countFittingLines(lines: Line[], s: TextStyle, limit: number): number {
+  const d = descenderOf(s)
+  let n = 0
+  for (const l of lines) { if (l.baseline - d >= limit) n++; else break }
+  return n
+}
+
+/** Wrap once. Pagination slices this array; re-wrapping per page would change the breaks. */
+export function wrapForFlow(el: TextElement, boxW: number, s: TextStyle, m: Measurer): string[] {
+  return wrapText(el.text, Math.max(boxW, 1), s, m)   // Live Flow always wraps
+}

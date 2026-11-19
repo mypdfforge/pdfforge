@@ -35,6 +35,13 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
     // Squeeze that alters glyph metrics forces redraw (move ops cannot resize original glyphs).
     const metricsTouched = !!sq && (sq.sizeDelta !== 0 || (sq.lineHeightK !== 1 && el.text.includes('\n')))
     if (el.deleted) { removeOps(el, el.page); continue }
+    const parts = res.chunks.get(id)
+    if (parts) {
+      removeOps(el, el.page)
+      const s = styled(el.style)
+      for (const c of parts) pages[c.page].draws.push(...drawsForLines(c.lines, s))
+      continue
+    }
     if (el.locked && !el.cover) continue
     if (!changed && !metricsTouched && Math.abs(sh.dy) < 0.01 && sh.page === el.page) continue
     if (!changed && !metricsTouched && sh.page === el.page && el.movable) {
@@ -46,6 +53,13 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
     const s = styled(el.style)
     const wrap = el.wrap || !!doc.flow?.enabled
     pages[sh.page].draws.push(...drawsForLines(layoutElement({ ...el, style: s, wrap, maxW: Math.max(20, el.maxW), baseline: sh.baseline }, m).lines, s))
+  }
+
+  for (const rp of res.repeats) {
+    const el = doc.els[rp.id]
+    if (!el) continue
+    const s = styled(el.style)
+    pages[rp.page].draws.push(...drawsForLines(layoutElement({ ...el, style: s, baseline: rp.baseline }, m).lines, s))
   }
 
   // Horizontal rules travel with their anchor: remove the original vector op, redraw a crisp rect.

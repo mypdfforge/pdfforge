@@ -4,12 +4,14 @@
 // PDF points, bottom-left origin. No engine/Plan changes required to consume this.
 import type { DocState, TextElement, TextStyle, PageModel, Rect } from './types.ts'
 import type { Measurer } from './fonts.ts'
-import { layoutElement } from './layout.ts'
+import { layoutElement, placeLines, descenderOf, countFittingLines, wrapForFlow } from './layout.ts'
+import type { Line } from './layout.ts'
 import { intersects } from './geometry.ts'
 import { isChanged } from './plan.ts'
 
 export type FlowShift = { baseline: number; page: number; dy: number } // dy = baseline - origBaseline
-export type LaneBox = { page: number; x0: number; x1: number }
+export type LaneBox = { page: number; x0: number; x1: number; index?: number }
+export type FlowChunk = { id: string; page: number; from: number; count: number; baseline: number; lines: Line[]; rect: Rect }
 export type CascadeResult = {
   shifts: Map<string, FlowShift>
   rects: Map<string, Rect>                       // post-flow boxes -> overlays + collision checks
@@ -17,6 +19,8 @@ export type CascadeResult = {
   pageCount: number
   lanes: LaneBox[]                               // for optional UI lane guides
   warnings: string[]
+  chunks: Map<string, FlowChunk[]>               // elements split across pages
+  repeats: Array<{ id: string; page: number; baseline: number }> // repeated table headers
 }
 
 const MARKER = /^\s*([-•–*▪◦·]|\d+[.)])\s+/
@@ -67,11 +71,11 @@ export function findFlowLanes(els: TextElement[], pm: PageModel): { lanes: Array
   const bounds = [min, ...cuts, max]
   let lanes = bounds.slice(0, -1).map((b, i) => ({ x0: pm.x0 + b, x1: pm.x0 + bounds[i + 1] }))
 
-  // Assign: crossing a gutter (or very wide) => spanner (-1); else max-overlap lane.
+  // Assign: crossing a gutter (or very wide in multi-lane) => spanner (-1); else max-overlap lane.
   const mass = lanes.map(() => 0)
   for (const e of live) {
     const a = e.origBox.x - pm.x0, b = a + e.origBox.w
-    if (cuts.some((c) => a < c - 1 && b > c + 1) || e.origBox.w >= SPAN_RATIO * (max - min)) { laneOf.set(e.id, -1); continue }
+    if (cuts.length > 0 && (cuts.some((c) => a < c - 1 && b > c + 1) || e.origBox.w >= SPAN_RATIO * (max - min))) { laneOf.set(e.id, -1); continue }
     let best = 0, ov = -1
     lanes.forEach((l, i) => {
       const o = Math.min(b, l.x1 - pm.x0) - Math.max(a, l.x0 - pm.x0)
@@ -164,9 +168,13 @@ type Row = {
   deleted: boolean
   keepWithNext: boolean
   group: number; groupLast: boolean
+  tableId?: string | null
+  keepTogetherId?: string | null
+  pinnedFurniture?: boolean
+  object?: any | null
 }
 
-function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, keyOf: (li: number) => number): Row[] {
+function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, keyOf: (li: number) => number, tableElMap?: Map<string, TableRegion>): Row[] {
   const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index && (!e.locked || e.created))
   const rows: Row[] = []
   for (const e of [...els].sort((a, b) => b.origBaseline - a.origBaseline || a.origX - b.origX)) {
@@ -178,6 +186,10 @@ function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, ke
       anchor: e, followers: [], lane, page: pm.index,
       origTop: e.origBox.y + e.origBox.h, origBottom: e.origBox.y,
       deleted: e.deleted, keepWithNext: false, group: -1, groupLast: false,
+      tableId: tableElMap?.has(e.id) ? `tr_${pm.index}_${Math.round(tableElMap.get(e.id)!.top)}` : null,
+      keepTogetherId: tableElMap?.has(e.id) ? `tr_${pm.index}_${Math.round(tableElMap.get(e.id)!.top)}` : null,
+      pinnedFurniture: false,
+      object: null,
     })
   }
   rows.forEach((r) => r.followers.sort((a, b) => a.origX - b.origX))
@@ -214,7 +226,10 @@ function annotate(rows: Row[], body: number): Map<number, number> {
 
 // ---- 2.3 cascade ------------------------------------------------------------------------------------------
 
-type PlacedRow = { row: Row; page: number; top: number; bottom: number; baseline: number }
+type PlacedRow = {
+  row: Row; page: number; top: number; bottom: number; baseline: number
+  texts: string[]; lines: Line[]; from: number; rect: Rect
+}
 type LaneState = {
   flowPage: number; cursor: number | null; carried: boolean
   prevOrigBottom: number | null; prevOrigPage: number
@@ -229,6 +244,12 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
 
   const shifts = new Map<string, FlowShift>(), rects = new Map<string, Rect>()
   const warnings: string[] = [], lanesOut: LaneBox[] = []
+  const chunks = new Map<string, FlowChunk[]>()
+  const repeats: CascadeResult['repeats'] = []
+  const groupHeight = new Map<string, number>()
+  const tableHeaders = new Map<string, Row[]>()
+  const flowObjects: any[] = []
+
   const srcCount = doc.pages.length
   const body = bodySize(doc)
   const bottomOf = (p: number) => {
@@ -246,7 +267,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     for (const pm of doc.pages) {
       const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index)
       const { lanes } = findFlowLanes(els, pm)
-      lanes.forEach((l) => lanesOut.push({ page: pm.index, ...l }))
+      lanes.forEach((l, i) => lanesOut.push({ page: pm.index, index: i, ...l }))
     }
     for (const id of doc.order) {
       const el = doc.els[id]
@@ -254,7 +275,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       rects.set(id, el.origBox)
     }
     const pageBox = doc.pages.map((p) => ({ src: p.index, w: p.width, h: p.height }))
-    return { shifts, rects, pageBox, pageCount: doc.pages.length, lanes: lanesOut, warnings: [] }
+    return { shifts, rects, pageBox, pageCount: doc.pages.length, lanes: lanesOut, warnings: [], chunks, repeats }
   }
 
   // Global lane identity across pages: match per-page lanes by x-overlap against running templates.
@@ -277,16 +298,25 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
   const tableElMap = new Map<string, TableRegion>()
   for (const pm of doc.pages) {
     const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index)
-    const { lanes, laneOf } = findFlowLanes(els, pm)
-    lanes.forEach((l) => lanesOut.push({ page: pm.index, ...l }))
-    allRows.push(...buildRows(doc, pm, laneOf, keyOfPage(pm, lanes)))
     const regions = findTableRegions(els, pm.index)
     allTableRegions.push(...regions)
     for (const tr of regions) {
       for (const eid of tr.elementIds) tableElMap.set(eid, tr)
     }
   }
+  for (const pm of doc.pages) {
+    const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index)
+    const { lanes, laneOf } = findFlowLanes(els, pm)
+    lanes.forEach((l, i) => lanesOut.push({ page: pm.index, index: i, ...l }))
+    allRows.push(...buildRows(doc, pm, laneOf, keyOfPage(pm, lanes), tableElMap))
+  }
   const groupTotals = annotate(allRows, body)
+  for (const r of allRows) {
+    if (r.keepTogetherId) {
+      const h = r.origTop - r.origBottom
+      groupHeight.set(r.keepTogetherId, (groupHeight.get(r.keepTogetherId) ?? 0) + h)
+    }
+  }
   allRows.sort((a, b) => a.page - b.page || b.origTop - a.origTop)
 
   const states = new Map<number, LaneState>()
@@ -301,75 +331,208 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     }
     return st
   }
-  const laneTop = (lane: number, page: number): number => {
-    const pm = pageDims(page)
-    const pageRows = allRows.filter((x) => x.page === page && !x.deleted)
-    if (pageRows.length) {
-      const topRow = pageRows.reduce((a, b) => (b.origTop > a.origTop ? b : a), pageRows[0])
-      return topRow.origTop
-    }
-    return pm.y0 + pm.height - DEFAULT_TOP_MARGIN
+  const gapBetween = (prevBottom: number | null, prevPage: number, r: Row, st: LaneState): number => {
+    if (prevBottom === null) return 0
+    // Crossing an ORIGINAL page boundary: the vertical distance between two pages is
+    // meaningless. Use the lane's standard gap.
+    if (prevPage !== r.page) return st.medianGap * gapK
+    const g = prevBottom - r.origTop
+    return (Number.isFinite(g) ? g : st.medianGap) * gapK   // same page: exact original gap
   }
 
-  /** Place one row at `top` on `page`; write absolute targets for anchor + followers. */
-  const placeRow = (r: Row, top: number, page: number): PlacedRow => {
-    const a = r.anchor
-    const inTable = tableElMap.has(a.id)
+  /**
+   * Top of the writable region on a page.
+   * Never above the margin, and never above where the page's own content originally began
+   * (letterhead/logos sit above that). Pinned furniture is subtracted, not merged in.
+   */
+  const pageContentTop = (page: number): number => {
+    const pm = pageDims(page)
+    const marginTop = pm.y0 + pm.height - DEFAULT_TOP_MARGIN
+    if (page >= srcCount) return marginTop
+    let top = -Infinity
+    for (const r of allRows) if (r.page === page && !r.deleted && !r.pinnedFurniture) top = Math.max(top, r.origTop)
+    return Number.isFinite(top) ? Math.min(marginTop, top) : marginTop
+  }
 
-    // Pin unedited table cells to their exact original positions inside vector grid boxes
-    // when the text from above fits within the available space before the table
-    if (inTable && !isChanged(a) && sq === null && !r.followers.some((f) => isChanged(f))) {
-      if (top >= r.origTop - 1.5) {
-        shifts.set(a.id, { baseline: a.origBaseline, page: a.page, dy: 0 })
-        rects.set(a.id, a.origBox)
-        for (const f of r.followers) {
-          shifts.set(f.id, { baseline: f.origBaseline, page: f.page, dy: 0 })
-          rects.set(f.id, f.origBox)
-        }
-        maxPage = Math.max(maxPage, a.page)
-        return { row: r, page: a.page, top: r.origTop, bottom: r.origBottom, baseline: a.origBaseline }
-      }
+  /**
+   * FIX 3 — where carried content starts on `page`.
+   * ALWAYS the page's content top, never an existing row's origTop: that row is itself
+   * about to be pushed down, so anchoring to it would collide (or drop us mid-page).
+   */
+  const laneTop = (lane: number, page: number): number => {
+    let top = pageContentTop(page)
+    const box = lanesOut.find((l) => l.page === Math.min(page, srcCount - 1) && l.index === lane)
+    for (const o of flowObjects) {
+      if (o.page !== page || o.flow !== 'pinned') continue
+      if (box && !(o.rect.x < box.x1 && o.rect.x + o.rect.w > box.x0)) continue
+      if (o.rect.y + o.rect.h > top - 1) top = Math.min(top, o.rect.y - 6)   // stay below the letterhead
     }
+    return top
+  }
 
+  const placeRow = (r: Row, top: number, page: number, from = 0, count = Number.POSITIVE_INFINITY): PlacedRow => {
+    const a = r.anchor!
+    const s = styleOf(a.style)
     const asc = r.origTop - a.origBaseline
-    const manual = a.baseline - a.origBaseline               // honor Alt+Arrow nudges
+    const manual = a.baseline - a.origBaseline
     const baseline = top - asc + manual
-    const rowDy = baseline - a.origBaseline
-    let bottom = r.origBottom + rowDy
+    const rowDy = baseline - a.baseline
 
-    if (!r.deleted) {
-      const changed = isChanged(a) || sq !== null || Math.abs(rowDy) > 0.05
-      if (changed) {
-        const fLeft = r.followers.length ? Math.min(...r.followers.map((f) => f.origBox.x)) : Infinity
-        const effW = Math.max(20, Math.min(a.maxW, fLeft - a.x - 4))
-        const placed = layoutElement({ ...a, style: styleOf(a.style), wrap: true, maxW: effW, baseline }, m)
-        shifts.set(a.id, { baseline, page, dy: rowDy })
-        rects.set(a.id, placed.rect)
-        bottom = placed.rect.y
-      } else {
-        shifts.set(a.id, { baseline: a.origBaseline, page, dy: 0 })
-        rects.set(a.id, a.origBox)
-        bottom = r.origBottom
+    const fLeft = r.followers.length ? Math.min(...r.followers.map((f) => f.origBox.x)) : Infinity
+    const effW = Math.max(20, Math.min(a.maxW, fLeft - a.x - 4))
+    const alignW = Math.max(effW, a.origBox.w)
+
+    const texts = r.deleted ? [] : wrapForFlow(a, effW, s, m)
+    const take = Math.max(0, Math.min(count, texts.length - from))
+
+    // FIX 2 — pin an untouched table cell ONLY on its own page and only if it has not
+    // been pushed. `page > a.page` means the table has paginated: it must move, not pin.
+    const pinned =
+      r.tableId !== null && r.tableId !== undefined && from === 0 && sq === null &&
+      !isChanged(a) && !r.followers.some((f) => isChanged(f)) &&
+      page === a.page && top >= r.origTop - 1.5
+
+    if (pinned) {
+      shifts.set(a.id, { baseline: a.origBaseline, page: a.page, dy: 0 })
+      rects.set(a.id, a.origBox)
+      for (const f of r.followers) {
+        shifts.set(f.id, { baseline: f.origBaseline, page: f.page, dy: 0 })
+        rects.set(f.id, f.origBox)
+      }
+      maxPage = Math.max(maxPage, page)
+      return { row: r, page, top: r.origTop, bottom: a.origBox.y, baseline: a.origBaseline, texts, lines: [], from: 0, rect: a.origBox }
+    }
+
+    const placed = take > 0 ? placeLines(texts.slice(from, from + take), a.x, baseline, effW, s, m, alignW) : null
+    let bottom = placed ? placed.rect.y : top - asc - descenderOf(s)
+    const rect = placed?.rect ?? { x: a.x, y: bottom, w: effW, h: Math.max(1, top - bottom) }
+
+    if (!r.deleted && take > 0) {
+      // A split element anchors its overlay/edit target at the FIRST chunk only.
+      if (from === 0 || !shifts.has(a.id)) {
+        shifts.set(a.id, { baseline, page, dy: baseline - a.origBaseline })
+        rects.set(a.id, rect)
       }
     }
-    for (const f of r.followers) {                           // satellites ride the anchor's FIRST line
-      if (Math.abs(rowDy) > 0.05 || sq !== null || isChanged(f)) {
+    if (from === 0) {                                   // satellites ride the first line, never a continuation
+      for (const f of r.followers) {
         const fb = f.baseline + rowDy
         const fp = layoutElement({ ...f, style: styleOf(f.style), baseline: fb }, m)
         shifts.set(f.id, { baseline: fb, page, dy: fb - f.origBaseline })
         rects.set(f.id, fp.rect)
         bottom = Math.min(bottom, fp.rect.y)
-      } else {
-        shifts.set(f.id, { baseline: f.origBaseline, page, dy: 0 })
-        rects.set(f.id, f.origBox)
       }
     }
     maxPage = Math.max(maxPage, page)
-    return { row: r, page, top, bottom, baseline }
+    return { row: r, page, top, bottom, baseline, texts, lines: placed?.lines ?? [], from, rect }
   }
 
-  const gapBetween = (prevBottom: number | null, prevPage: number, r: Row, st: LaneState) =>
-    prevBottom === null ? 0 : (prevPage === r.page ? prevBottom - r.origTop : st.medianGap) * gapK
+  const pushChunk = (r: Row, rec: PlacedRow) => {
+    const id = r.anchor!.id
+    const list = chunks.get(id) ?? []
+    list.push({ id, page: rec.page, from: rec.from, count: rec.lines.length, baseline: rec.baseline, lines: rec.lines, rect: rec.rect })
+    chunks.set(id, list)
+  }
+
+  const regionH = (p: number) => pageContentTop(p) - bottomOf(p)
+
+  /** Place one row, paginating and splitting as needed. Returns the LAST placed chunk. */
+  const flowRow = (r: Row, st: LaneState, startTop: number, startPage: number): PlacedRow => {
+    let page = startPage, top = startTop
+    let rec = placeRow(r, top, page)
+
+    for (;;) {
+      const limit = bottomOf(page)
+      if (r.deleted || rec.bottom >= limit) return rec
+
+      // ---- (a) FIX 4: split a multi-line element across the boundary ----
+      const total = rec.texts.length, avail = total - rec.from
+      if (avail > 1 && (!r.tableId || r.tableId === null)) {
+        const s = styleOf(r.anchor!.style)
+        const fit = countFittingLines(rec.lines, s, limit)
+        const firstOnPage = st.placed.length === 0
+        // Widow/orphan: don't strand 1 line on either side unless the page is otherwise empty.
+        const canSplit = fit >= 1 && fit < avail && (firstOnPage || (fit >= 2 && avail - fit >= 2))
+        if (canSplit) {
+          const head = placeRow(r, top, page, rec.from, fit)
+          st.cursor = head.bottom; st.placed.push(head); st.flowPage = page
+          pushChunk(r, head)
+          let rest = rec.from + fit
+          while (rest < total) {
+            page++
+            if (page > srcCount + MAX_EXTRA_PAGES) { warnings.push('Stopped adding pages after 200 extra pages.'); break }
+            st.flowPage = page; st.carried = true; st.placed = []
+            const cTop = laneTop(r.lane, page)                       // FIX 3: top margin, not a stale cursor
+            const probe = placeRow(r, cTop, page, rest, total - rest)
+            let take2 = total - rest
+            if (probe.bottom < bottomOf(page)) {
+              take2 = Math.max(1, countFittingLines(probe.lines, s, bottomOf(page)))
+              if (take2 >= 3 && total - rest - take2 === 1) take2--  // no 1-line widow on the following page
+            }
+            const chunk = placeRow(r, cTop, page, rest, take2)
+            st.cursor = chunk.bottom; st.placed.push(chunk)
+            pushChunk(r, chunk)
+            rest += take2
+          }
+          return st.placed[st.placed.length - 1] ?? head
+        }
+      }
+
+      // ---- (b) nothing fits here: move the row (and its group) to the next page ----
+      if (st.placed.length === 0) {
+        warnings.push(`A line on page ${page + 1} is taller than the text region; it was kept on the page.`)
+        return rec
+      }
+
+      let bs = st.placed.length
+      const kt = r.keepTogetherId
+      // Keep a table/figure intact — UNLESS it is taller than a whole page, in which case
+      // it must break at row boundaries (with its header repeated) rather than overflow.
+      const groupFits = kt ? (groupHeight.get(kt) ?? 0) <= regionH(page + 1) : true
+      if (kt && groupFits) {
+        while (bs > 0 && st.placed[bs - 1].page === page && st.placed[bs - 1].row.keepTogetherId === kt) bs--
+      }
+      // Widow/orphan + keep-with-next (unchanged rules, applied after the group pullback).
+      const groupOnPage = (g: number) => st.placed.filter((p) => p.row.group === g && p.page === page).length
+      while (bs > 0) {
+        const prev = st.placed[bs - 1]
+        if (prev.page !== page) break
+        const pr = prev.row
+        const sameGroup = pr.group === r.group && (groupTotals.get(pr.group) ?? 1) > 2
+        const orphan = sameGroup && groupOnPage(pr.group) === 1
+        const widow = sameGroup && r.groupLast && st.placed.length - bs === 0
+        if ((pr.keepWithNext || orphan || widow) && (bs > 1 || page >= srcCount)) bs--
+        else break
+      }
+      if (bs === 0 && page < srcCount && st.placed.length > 0) bs = 1   // never empty a source page
+
+      const moved = st.placed.splice(bs)
+      page++
+      if (page > srcCount + MAX_EXTRA_PAGES) { warnings.push('Stopped adding pages after safe page limit.'); st.placed.push(rec); return rec }
+      st.flowPage = page; st.carried = true; st.placed = []
+      st.cursor = laneTop(r.lane, page)                                 // FIX 3: reset on EVERY advance
+
+      // Repeat a split table's header rows at the top of the new page.
+      if (kt && !groupFits) {
+        for (const hr of tableHeaders.get(kt) ?? []) {
+          const hrec = placeRow(hr, st.cursor, page)
+          repeats.push({ id: hr.anchor!.id, page, baseline: hrec.baseline })
+          st.cursor = hrec.bottom - st.medianGap * gapK
+        }
+      }
+
+      let prevB: number | null = null
+      for (const mv of moved) {
+        const g2 = prevB === null ? 0 : (prevB - mv.row.origTop) * gapK
+        const t2 = (st.cursor ?? mv.row.origTop) - g2
+        const rec2 = flowRow(mv.row, st, t2, page)                      // recursive: a pulled row may itself split
+        st.cursor = rec2.bottom; prevB = mv.row.origBottom
+        page = st.flowPage
+      }
+      top = (st.cursor ?? r.origTop) - (prevB === null ? 0 : (prevB - r.origTop) * gapK)
+      rec = placeRow(r, top, page)
+    }
+  }
 
   for (const r of allRows) {
     // ---- spanner: full-width barrier across all lanes ----
@@ -393,15 +556,12 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
         top = Math.min(top, st.cursor - g)
       }
       if (!isFinite(top) || (!sq && top > r.origTop)) top = r.origTop
-      let rec = placeRow(r, top, page)
-      const isDisplaced = (r.origTop - top) > 1 || page > r.page
-      if (!r.deleted && isDisplaced && rec.bottom < bottomOf(page)) {
-        page++; top = pageDims(page).y0 + pageDims(page).height - DEFAULT_TOP_MARGIN
-        rec = placeRow(r, top, page)
-      }
+      const repState = laneStates[0] ?? stateOf(0, page)
+      const last = flowRow(r, repState, top, page)
+      const finalPage = repState.flowPage
       for (const [, st] of states) {
-        if (st.flowPage < page) { st.flowPage = page; st.carried = true; st.cursor = rec.bottom; st.placed = [] }
-        else if (st.flowPage === page) st.cursor = Math.min(st.cursor ?? Infinity, rec.bottom)
+        if (st.flowPage < finalPage) { st.flowPage = finalPage; st.carried = true; st.cursor = last.bottom; st.placed = [] }
+        else if (st.flowPage === finalPage) st.cursor = Math.min(st.cursor ?? Infinity, last.bottom)
         st.prevOrigBottom = r.origBottom; st.prevOrigPage = r.page
       }
       if (r.deleted) continue
@@ -410,63 +570,41 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
 
     // ---- lane row ----
     const st = stateOf(r.lane, r.page)
-    if (st.prevOrigPage !== r.page) {
-      if (!st.carried && st.flowPage === r.page) {
+
+    // FIX 1a: read the previous ORIGINAL page BEFORE any mutation.
+    const prevOrigPage = st.prevOrigPage
+    if (prevOrigPage !== r.page) {
+      if (st.flowPage < r.page) {
+        // FIX 1b: the stream reached an original page the flow has not reached yet.
+        // Advance (never backwards) and start that page at its original geometry.
+        st.flowPage = r.page
+        st.carried = false
+        st.cursor = null
+        st.placed = []
+      } else if (!st.carried && st.flowPage === r.page) {
         st.cursor = null
         st.placed = []
       }
-      st.prevOrigPage = r.page
+      // else: carried content is already on/ahead of this page → keep the cursor,
+      // and gapBetween() will return medianGap because prevOrigPage !== r.page.
     }
-    let gap = gapBetween(st.prevOrigBottom, st.prevOrigPage, r, st)
+
+    // FIX 1c: gap computed with the OLD page. cursor === null ⇒ gap 0 ⇒ exact identity.
+    let gap = st.cursor === null ? 0 : gapBetween(st.prevOrigBottom, prevOrigPage, r, st)
     const minSectionGap = Math.max(3.5, body * 0.35)
-    if (st.cursor !== null && gap > minSectionGap && !sq) {
+    if (st.cursor !== null && gap > minSectionGap && !sq && prevOrigPage === r.page) {
       const currentPush = (st.prevOrigBottom ?? 0) - st.cursor
       if (currentPush > 0.5) {
         const headroom = Math.max(0, gap - minSectionGap)
         gap -= Math.min(headroom, currentPush)
       }
     }
-    let page = st.flowPage
-    let top = st.cursor === null ? r.origTop : st.cursor - gap
+    const top = st.cursor === null ? r.origTop : st.cursor - gap
 
-    for (;;) {                                               // placement + pagination (terminates: empty-page guard)
-      const rec = placeRow(r, top, page)
-      const limit = bottomOf(page)
-      const isDisplaced = (r.origBottom - rec.bottom) > 1 || page > r.page
-      const overflows = !r.deleted && isDisplaced && rec.bottom < limit && st.placed.length > 0
-      if (r.deleted || !overflows) {
-        if (!r.deleted && rec.bottom < limit && isDisplaced) warnings.push(`A line on page ${page + 1} is taller than the text region; it was kept on the page.`)
-        if (!r.deleted) { st.cursor = rec.bottom; st.placed.push(rec) }
-        else if (r.followers.length) st.cursor = Math.min(st.cursor ?? rec.bottom, rec.bottom)
-        break
-      }
-      // Widow/orphan backoff: decide how many trailing rows travel to the next page with r.
-      let bs = st.placed.length
-      const groupOnPage = (g: number) => st.placed.filter((p) => p.row.group === g && p.page === page).length
-      while (bs > 0) {
-        const pr = st.placed[bs - 1].row
-        if (st.placed[bs - 1].page !== page) break
-        const sameGroup = pr.group === r.group && (groupTotals.get(pr.group) ?? 1) > 2
-        const orphan = sameGroup && groupOnPage(pr.group) === 1
-        const widow = sameGroup && r.groupLast && (st.placed.length - bs) === 0
-        if ((pr.keepWithNext || orphan || widow) && (bs > 1 || page >= srcCount)) bs--
-        else break
-      }
-      const moved = st.placed.splice(bs)
-      page++
-      if (page > srcCount + MAX_EXTRA_PAGES) { warnings.push('Stopped adding pages after safe page limit.'); st.placed.push(rec); break }
-      st.flowPage = page; st.carried = true; st.placed = []
-      st.cursor = laneTop(r.lane, page)
-      let prevB: number | null = null
-      for (const mv of moved) {                              // re-place pulled-back rows, preserving their gaps
-        const g2 = prevB === null ? 0 : (prevB - mv.row.origTop) * gapK
-        const t2 = (st.cursor ?? mv.row.origTop) - g2
-        const rec2 = placeRow(mv.row, t2, page)
-        st.cursor = rec2.bottom; st.placed.push(rec2); prevB = mv.row.origBottom
-      }
-      top = (st.cursor ?? r.origTop) - (prevB === null ? 0 : (prevB - r.origTop) * gapK)
-    }
-    st.prevOrigBottom = r.origBottom; st.prevOrigPage = r.page
+    const last = flowRow(r, st, top, st.flowPage)
+    if (!r.deleted) st.cursor = last.bottom
+    st.prevOrigBottom = r.origBottom
+    st.prevOrigPage = r.page          // updated AFTER gap + placement, never before
   }
 
   // ---- output page boxes + obstacle warnings ----
@@ -484,5 +622,5 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     const pm = doc.pages[Math.min(sh.page, srcCount - 1)]
     if (pm.images || pm.paints > 3) warnings.push(`Page ${sh.page + 1} has images/graphics that Live Flow cannot detect; check moved text visually.`)
   }
-  return { shifts, rects, pageBox, pageCount: pageBox.length, lanes: lanesOut, warnings: [...new Set(warnings)] }
+  return { shifts, rects, pageBox, pageCount: pageBox.length, lanes: lanesOut, warnings: [...new Set(warnings)], chunks, repeats }
 }
