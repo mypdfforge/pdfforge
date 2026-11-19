@@ -99,6 +99,61 @@ export function findFlowLanes(els: TextElement[], pm: PageModel): { lanes: Array
   return { lanes, laneOf }
 }
 
+export type TableRegion = {
+  page: number
+  top: number
+  bottom: number
+  elementIds: Set<string>
+}
+
+export function findTableRegions(els: TextElement[], page: number): TableRegion[] {
+  const live = els.filter((e) => !e.deleted && e.page === page)
+  const byY: TextElement[][] = []
+  for (const e of live) {
+    const r = byY.find((row) => Math.abs(row[0].origBaseline - e.origBaseline) < 0.35 * Math.max(e.style.size, row[0].style.size))
+    if (r) r.push(e)
+    else byY.push([e])
+  }
+  byY.sort((a, b) => b[0].origBaseline - a[0].origBaseline)
+  const multiCol = byY.filter((r) => r.length >= 3)
+  const tableClusters: TextElement[][][] = []
+  let cur: TextElement[][] = []
+  for (let i = 0; i < multiCol.length; i++) {
+    const r = multiCol[i]
+    if (!cur.length) cur.push(r)
+    else {
+      const prev = cur[cur.length - 1]
+      const gap = prev[0].origBaseline - r[0].origBaseline
+      if (gap < 45) cur.push(r)
+      else {
+        if (cur.length >= 2) tableClusters.push(cur)
+        cur = [r]
+      }
+    }
+  }
+  if (cur.length >= 2) tableClusters.push(cur)
+
+  return tableClusters.map((cluster) => {
+    const elementIds = new Set<string>()
+    let top = -Infinity, bottom = Infinity
+    for (const row of cluster) {
+      for (const e of row) {
+        elementIds.add(e.id)
+        top = Math.max(top, e.origBox.y + e.origBox.h)
+        bottom = Math.min(bottom, e.origBox.y)
+      }
+    }
+    for (const e of live) {
+      if (e.origBaseline >= bottom - 5 && e.origBaseline <= top + 5 && !elementIds.has(e.id) && e.text.length < 50) {
+        elementIds.add(e.id)
+        top = Math.max(top, e.origBox.y + e.origBox.h)
+        bottom = Math.min(bottom, e.origBox.y)
+      }
+    }
+    return { page, top, bottom, elementIds }
+  })
+}
+
 // ---- 2.2 rows ---------------------------------------------------------------------------------------------
 
 type Row = {
@@ -176,7 +231,11 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
   const warnings: string[] = [], lanesOut: LaneBox[] = []
   const srcCount = doc.pages.length
   const body = bodySize(doc)
-  const bottomOf = (p: number) => doc.contentBottom[Math.min(p, srcCount - 1)] ?? (doc.pages[Math.min(p, srcCount - 1)].y0 + 54)
+  const bottomOf = (p: number) => {
+    const pm = doc.pages[Math.min(p, srcCount - 1)]
+    const extracted = doc.contentBottom[Math.min(p, srcCount - 1)]
+    return Math.min(extracted ?? (pm.y0 + 54), pm.y0 + 36)
+  }
   const pageDims = (p: number) => doc.pages[Math.min(p, srcCount - 1)]
   let maxPage = srcCount - 1
 
@@ -214,11 +273,18 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
 
   // Collect all rows (all pages), annotate, build per-lane streams.
   const allRows: Row[] = []
+  const allTableRegions: TableRegion[] = []
+  const tableElMap = new Map<string, TableRegion>()
   for (const pm of doc.pages) {
     const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index)
     const { lanes, laneOf } = findFlowLanes(els, pm)
     lanes.forEach((l) => lanesOut.push({ page: pm.index, ...l }))
     allRows.push(...buildRows(doc, pm, laneOf, keyOfPage(pm, lanes)))
+    const regions = findTableRegions(els, pm.index)
+    allTableRegions.push(...regions)
+    for (const tr of regions) {
+      for (const eid of tr.elementIds) tableElMap.set(eid, tr)
+    }
   }
   const groupTotals = annotate(allRows, body)
   allRows.sort((a, b) => a.page - b.page || b.origTop - a.origTop)
@@ -245,9 +311,40 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
   /** Place one row at `top` on `page`; write absolute targets for anchor + followers. */
   const placeRow = (r: Row, top: number, page: number): PlacedRow => {
     const a = r.anchor
+    const inTable = tableElMap.has(a.id)
+
+    // Pin unedited table cells to their exact original positions so text does not slide out of vector grid boxes
+    if (inTable && !isChanged(a) && sq === null && !r.followers.some((f) => isChanged(f))) {
+      shifts.set(a.id, { baseline: a.origBaseline, page: a.page, dy: 0 })
+      rects.set(a.id, a.origBox)
+      for (const f of r.followers) {
+        shifts.set(f.id, { baseline: f.origBaseline, page: f.page, dy: 0 })
+        rects.set(f.id, f.origBox)
+      }
+      maxPage = Math.max(maxPage, a.page)
+      return { row: r, page: a.page, top: r.origTop, bottom: r.origBottom, baseline: a.origBaseline }
+    }
+
+    // Clamp headings/rows directly above a table on the same page so they never penetrate or overlap the table top border
+    let effectiveTop = top
+    if (sq === null) {
+      let nearestTr: TableRegion | null = null
+      for (const tr of allTableRegions) {
+        if (tr.page === page && tr.top <= r.origBottom && !tr.elementIds.has(a.id)) {
+          if (!nearestTr || tr.top > nearestTr.top) nearestTr = tr
+        }
+      }
+      if (nearestTr) {
+        const h = r.origTop - r.origBottom
+        if (effectiveTop - h < nearestTr.top + 2) {
+          effectiveTop = nearestTr.top + h + 4
+        }
+      }
+    }
+
     const asc = r.origTop - a.origBaseline
     const manual = a.baseline - a.origBaseline               // honor Alt+Arrow nudges
-    const baseline = top - asc + manual
+    const baseline = effectiveTop - asc + manual
     const rowDy = baseline - a.origBaseline
     let bottom = r.origBottom + rowDy
 
@@ -279,7 +376,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       }
     }
     maxPage = Math.max(maxPage, page)
-    return { row: r, page, top, bottom, baseline }
+    return { row: r, page, top: effectiveTop, bottom, baseline }
   }
 
   const gapBetween = (prevBottom: number | null, prevPage: number, r: Row, st: LaneState) =>
@@ -295,7 +392,16 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       let top = Infinity
       for (const st of laneStates) {
         if (st.flowPage !== page || st.cursor === null) continue
-        top = Math.min(top, st.cursor - gapBetween(st.prevOrigBottom, st.prevOrigPage, r, st))
+        let g = gapBetween(st.prevOrigBottom, st.prevOrigPage, r, st)
+        const minSectionGap = Math.max(3.5, body * 0.35)
+        if (g > minSectionGap && !sq) {
+          const currentPush = (st.prevOrigBottom ?? 0) - st.cursor
+          if (currentPush > 0.5) {
+            const headroom = Math.max(0, g - minSectionGap)
+            g -= Math.min(headroom, currentPush)
+          }
+        }
+        top = Math.min(top, st.cursor - g)
       }
       if (!isFinite(top) || (!sq && top > r.origTop)) top = r.origTop
       let rec = placeRow(r, top, page)
@@ -321,7 +427,15 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       st.cursor = null
       st.placed = []
     }
-    const gap = gapBetween(st.prevOrigBottom, st.prevOrigPage, r, st)
+    let gap = gapBetween(st.prevOrigBottom, st.prevOrigPage, r, st)
+    const minSectionGap = Math.max(3.5, body * 0.35)
+    if (st.cursor !== null && gap > minSectionGap && !sq) {
+      const currentPush = (st.prevOrigBottom ?? 0) - st.cursor
+      if (currentPush > 0.5) {
+        const headroom = Math.max(0, gap - minSectionGap)
+        gap -= Math.min(headroom, currentPush)
+      }
+    }
     let page = st.flowPage
     let top = st.cursor === null ? r.origTop : st.cursor - gap
 

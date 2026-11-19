@@ -62,13 +62,15 @@ export class Measurer {
   }
   canEncode(family: Family, text: string): string[] {
     const bad = new Set<string>()
-    for (const ch of text) if (ch !== '\n' && Number.isNaN(this.glyph(standardName(family, false, false), ch))) bad.add(ch)
+    const norm = text.replace(/[\u25cf\u25aa\u25b6\u25a0]/g, '\u2022')
+    for (const ch of norm) if (ch !== '\n' && Number.isNaN(this.glyph(standardName(family, false, false), ch))) bad.add(ch)
     return [...bad]
   }
   width(text: string, s: TextMetricsStyle): number {
     const name = standardName(s.family, s.bold, s.italic)
     let w = 0, spaces = 0, n = 0
-    for (const ch of text) {
+    const norm = text.replace(/[\u25cf\u25aa\u25b6\u25a0]/g, '\u2022')
+    for (const ch of norm) {
       const g = this.glyph(name, ch)
       w += Number.isNaN(g) ? this.glyph(name, '?') : g
       n++; if (ch === ' ') spaces++

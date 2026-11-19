@@ -14,7 +14,8 @@ export function drawsForLines(lines: Line[], s: TextStyle): Draw[] {
   const out: Draw[] = []
   for (const l of lines) {
     if (s.highlight && l.text) out.push({ kind: 'rect', x: l.x - 0.5, y: l.baseline - s.size * 0.22, w: l.width + 1, h: s.size * 1.1, color: s.highlight })
-    out.push({ kind: 'text', x: l.x, y: l.baseline, text: l.text, family: s.family, bold: s.bold, italic: s.italic, size: s.size, color: s.color, tc: s.charSpacing, tw: s.wordSpacing + l.tw, underline: s.underline, strike: s.strike, width: l.width })
+    const text = l.text.replace(/[\u25cf\u25aa\u25b6\u25a0]/g, '\u2022')
+    out.push({ kind: 'text', x: l.x, y: l.baseline, text, family: s.family, bold: s.bold, italic: s.italic, size: s.size, color: s.color, tc: s.charSpacing, tw: s.wordSpacing + l.tw, underline: s.underline, strike: s.strike, width: l.width })
   }
   return out
 }
