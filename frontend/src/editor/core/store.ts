@@ -366,6 +366,110 @@ export class EditorStore {
       return { ...d, tables }
     })
   }
+
+  listState(target: { kind: 'el' | 'block'; id: string } | null): { bullet: boolean; numbered: boolean } {
+    if (!target) return { bullet: false, numbered: false }
+    const d = this.effectiveDoc()
+    const isBlock = target.kind === 'block'
+    const obj = isBlock ? d.blocks?.find((b) => b.id === target.id) : d.els[target.id]
+    if (!obj || !obj.text.trim()) return { bullet: false, numbered: false }
+    const firstLine = obj.text.split('\n')[0]
+    return {
+      bullet: /^\s*[-•–*▪◦·●]\s*/.test(firstLine),
+      numbered: /^\s*\d+[.)]\s*/.test(firstLine)
+    }
+  }
+
+  detectMatchingBullet(page?: number): string {
+    const d = this.effectiveDoc()
+    const counts = new Map<string, number>()
+    const regex = /^\s*([●•▪◦–\-*·])/
+    const els = Object.values(d.els)
+    const pageEls = page !== undefined ? els.filter((e) => e.page === page) : els
+
+    for (const el of pageEls) {
+      for (const line of el.text.split('\n')) {
+        const m = line.match(regex)
+        if (m) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
+      }
+    }
+    if (!counts.size && page !== undefined) {
+      for (const el of els) {
+        for (const line of el.text.split('\n')) {
+          const m = line.match(regex)
+          if (m) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
+        }
+      }
+    }
+    let bestChar = '•', maxCount = 0
+    for (const [char, count] of counts.entries()) {
+      if (count > maxCount) { maxCount = count; bestChar = char }
+    }
+    return bestChar
+  }
+
+  toggleBullet(target: { kind: 'el' | 'block'; id: string } | null) {
+    if (!target) return
+    const d = this.effectiveDoc()
+    const isBlock = target.kind === 'block'
+    const obj = isBlock ? d.blocks?.find((b) => b.id === target.id) : d.els[target.id]
+    if (!obj) return
+    const text = obj.text
+    const bulletChar = this.detectMatchingBullet((obj as any).page)
+    const markerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s*/
+    const bulletRegex = /^\s*[-•–*▪◦·●]\s*/
+    const lines = text.split('\n')
+
+    const allBulleted = lines.every((l) => l.trim().length === 0 || bulletRegex.test(l))
+    let newText = ''
+    if (allBulleted) {
+      newText = lines.map((l) => l.replace(bulletRegex, '')).join('\n')
+    } else {
+      newText = lines.map((l) => {
+        const clean = l.replace(markerRegex, '')
+        return `${bulletChar} ${clean}`
+      }).join('\n')
+    }
+    if (isBlock) this.setBlockText(target.id, newText)
+    else this.setText(target.id, newText)
+  }
+
+  toggleNumber(target: { kind: 'el' | 'block'; id: string } | null) {
+    if (!target) return
+    const d = this.effectiveDoc()
+    const isBlock = target.kind === 'block'
+    const obj = isBlock ? d.blocks?.find((b) => b.id === target.id) : d.els[target.id]
+    if (!obj) return
+    const text = obj.text
+    const numberRegex = /^\s*(\d+)[.)]\s*/
+    const markerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s*/
+    const lines = text.split('\n')
+
+    const allNumbered = lines.every((l) => l.trim().length === 0 || numberRegex.test(l))
+    let newText = ''
+    if (allNumbered) {
+      newText = lines.map((l) => l.replace(numberRegex, '')).join('\n')
+    } else {
+      let startNum = 1
+      if (!isBlock) {
+        const orderIdx = d.order.indexOf(target.id)
+        if (orderIdx > 0) {
+          const prevEl = d.els[d.order[orderIdx - 1]]
+          if (prevEl && prevEl.page === (obj as any).page) {
+            const lastLine = prevEl.text.trim().split('\n').pop() || ''
+            const prevMatch = lastLine.match(/^\s*(\d+)[.)]\s*/)
+            if (prevMatch) startNum = parseInt(prevMatch[1], 10) + 1
+          }
+        }
+      }
+      newText = lines.map((l, i) => {
+        const clean = l.replace(markerRegex, '')
+        return `${startNum + i}. ${clean}`
+      }).join('\n')
+    }
+    if (isBlock) this.setBlockText(target.id, newText)
+    else this.setText(target.id, newText)
+  }
 }
 export type IssueReport = { byId: Record<string, Issue[]>; all: Issue[]; flow: string[]; pageCount: number }
 

@@ -35,7 +35,11 @@ function TextEditor({ store, doc, target, rect, pageBox, zoom, onDone }) {
   const regionW = (isBlock ? obj.width : Math.max(obj.maxW, rect.w)) * zoom
 
   const onChange = (e) => {
-    const v = e.target.value
+    let v = e.target.value
+    if (v.endsWith('- ') || v.endsWith('* ') || v.includes('\n- ') || v.includes('\n* ')) {
+      const bChar = store.detectMatchingBullet?.(obj.page) || '•'
+      v = v.replace(/(^|\n)[-*]\s/g, `$1${bChar} `)
+    }
     setVal(v)
     clearTimeout(deb.current)
     deb.current = setTimeout(() => store.setPreview({ kind: target.kind, id: target.id }, v), 120)
@@ -67,7 +71,54 @@ function TextEditor({ store, doc, target, rect, pageBox, zoom, onDone }) {
     <>
       <textarea ref={ref} className={`pe-edit${wrap ? ' wrap' : ''}`} aria-label="Edit text" data-testid="text-editor" value={val} wrap={wrap ? 'soft' : 'off'}
         onChange={onChange} onBlur={commit}
-        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') cancel(); else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Escape') cancel()
+          else if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault(); commit()
+          } else if (e.key === 'Enter' && e.shiftKey) {
+            const ta = ref.current
+            if (!ta) return
+            const pos = ta.selectionStart
+            const before = val.slice(0, pos)
+            const after = val.slice(ta.selectionEnd)
+            const curLine = before.split('\n').pop() || ''
+            const bulletMatch = curLine.match(/^(\s*)([-•–*▪◦·●])\s*/)
+            const numberMatch = curLine.match(/^(\s*)(\d+)([.)])\s*/)
+            if (bulletMatch) {
+              if (curLine.trim() === bulletMatch[2]) {
+                e.preventDefault()
+                const lineStart = pos - curLine.length
+                const nVal = val.slice(0, lineStart) + after
+                setVal(nVal)
+                setTimeout(() => { if (ref.current) ref.current.selectionStart = ref.current.selectionEnd = lineStart }, 0)
+                return
+              }
+              e.preventDefault()
+              const ins = `\n${bulletMatch[1]}${bulletMatch[2]} `
+              const nVal = before + ins + after
+              setVal(nVal)
+              setTimeout(() => { if (ref.current) ref.current.selectionStart = ref.current.selectionEnd = pos + ins.length }, 0)
+              store.setPreview({ kind: target.kind, id: target.id }, nVal)
+            } else if (numberMatch) {
+              if (curLine.trim() === `${numberMatch[2]}${numberMatch[3]}`) {
+                e.preventDefault()
+                const lineStart = pos - curLine.length
+                const nVal = val.slice(0, lineStart) + after
+                setVal(nVal)
+                setTimeout(() => { if (ref.current) ref.current.selectionStart = ref.current.selectionEnd = lineStart }, 0)
+                return
+              }
+              e.preventDefault()
+              const nextNum = parseInt(numberMatch[2], 10) + 1
+              const ins = `\n${numberMatch[1]}${nextNum}${numberMatch[3]} `
+              const nVal = before + ins + after
+              setVal(nVal)
+              setTimeout(() => { if (ref.current) ref.current.selectionStart = ref.current.selectionEnd = pos + ins.length }, 0)
+              store.setPreview({ kind: target.kind, id: target.id }, nVal)
+            }
+          }
+        }}
         style={{ left: css.left - 2, top: css.top - 2, width, height: Math.max(css.height, lineCount * lh) + 4, fontFamily: FONT_CSS[s.family], fontSize: s.size * zoom, lineHeight: `${lh}px`, fontWeight: s.bold ? 700 : 400, fontStyle: s.italic ? 'italic' : 'normal', color: hex(s.color), textAlign: s.align === 'justify' ? 'left' : s.align, letterSpacing: s.charSpacing * zoom, textDecoration: [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean).join(' ') || 'none' }} />
       <div className={`pe-hint${over ? ' bad' : ''}`} style={{ left: css.left, top: css.top + Math.max(css.height, lineCount * lh) + 8 }}>
         {over ? `Wider than its region by ${Math.round(measure - obj.maxW)} pt: it will be flagged` : 'Enter to apply · Shift+Enter new line · Esc to cancel'}

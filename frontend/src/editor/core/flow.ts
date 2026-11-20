@@ -25,7 +25,7 @@ export type CascadeResult = {
   objectShifts: Map<string, { page: number; dy: number; dx: number }>
 }
 
-const MARKER = /^\s*([-•–*▪◦·]|\d+[.)])\s+/
+const MARKER = /^\s*([-•–*▪◦·●]|\d+[.)])\s+/
 const GUTTER_MIN = 12          // pt of empty vertical projection that separates columns
 const SPAN_RATIO = 0.6         // box wider than this fraction of content width => spanner
 const MIN_LANE_MASS = 6        // chars; below this a "lane" is noise (page numbers…)
