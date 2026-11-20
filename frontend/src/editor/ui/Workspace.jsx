@@ -26,13 +26,25 @@ function TextEditor({ store, doc, target, rect, pageBox, zoom, onDone }) {
   const orig = isBlock
     ? store.doc.blocks?.find((b) => b.id === target.id)?.text
     : store.doc.els[target.id]?.text
-  const [val, setVal] = useState(orig ?? obj.text)
+  const rawText = orig ?? obj.text
+  const companion = !isBlock && store.findCompanionBulletAnchor ? store.findCompanionBulletAnchor(obj.id) : null
+  const initialText = (companion && !/^\s*[-•–*▪◦·●]/.test(rawText))
+    ? `${companion.text.trim()} ${rawText}`
+    : rawText
+  const [val, setVal] = useState(initialText)
   const ref = useRef(null), done = useRef(false), deb = useRef(0)
   useEffect(() => { ref.current?.focus(); ref.current?.select() }, [])
   const s = obj.style
-  const css = rectToCss(pageBox, zoom, rect)
+  const editRect = useMemo(() => {
+    if (companion && !/^\s*[-•–*▪◦·●]/.test(rawText)) {
+      const extra = Math.max(0, rect.x - companion.origBox.x)
+      return { ...rect, x: companion.origBox.x, w: rect.w + extra }
+    }
+    return rect
+  }, [rect, companion, rawText])
+  const css = rectToCss(pageBox, zoom, editRect)
   const wrap = isBlock || obj.wrap || !!doc.flow?.enabled
-  const regionW = (isBlock ? obj.width : Math.max(obj.maxW, rect.w)) * zoom
+  const regionW = (isBlock ? obj.width : Math.max(obj.maxW, editRect.w)) * zoom
 
   const onChange = (e) => {
     let v = e.target.value

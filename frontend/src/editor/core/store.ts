@@ -68,7 +68,30 @@ export class EditorStore {
     const d = this.doc
     if (p.target.kind === 'el') {
       const e = d.els[p.target.id]
-      return !e || e.text === p.text ? d : { ...d, els: { ...d.els, [p.target.id]: { ...e, text: p.text } } }
+      if (!e || e.text === p.text) return d
+      const els = { ...d.els, [p.target.id]: { ...e, text: p.text } }
+      const bulletMarkerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s+/
+      if (bulletMarkerRegex.test(p.text)) {
+        const bulletGlyphRegex = /^\s*[-•–*▪◦·●]\s*$/
+        for (const otherId of d.order) {
+          if (otherId === p.target.id) continue
+          const other = els[otherId]
+          if (!other || other.deleted || other.page !== e.page) continue
+          if (Math.abs(other.origBaseline - e.origBaseline) < 2) {
+            if (other.origX < e.origX && e.origX - (other.origX + other.origBox.w) < 35) {
+              if (bulletGlyphRegex.test(other.text)) {
+                els[otherId] = { ...other, deleted: true }
+                const origX = other.origX
+                const extraW = e.origX - origX
+                const origBox = { ...e.origBox, x: origX, w: e.origBox.w + extraW }
+                els[p.target.id] = { ...e, text: p.text, origX, x: origX, origBox, maxW: Math.max(e.maxW, origBox.w) }
+                break
+              }
+            }
+          }
+        }
+      }
+      return { ...d, els }
     }
     return d.blocks ? { ...d, blocks: d.blocks.map((b) => (b.id === p.target.id ? { ...b, text: p.text, edited: true } : b)) } : d
   }
@@ -119,7 +142,34 @@ export class EditorStore {
   }
   private editable(e: TextElement) { return !e.locked || !!e.cover || e.created }
   setText(id: string, text: string) {
-    return this.commit('Edit text', (d) => this.patchEl(d, id, (e) => (!this.editable(e) || e.text === text ? e : { ...e, text, wrap: d.flow?.enabled ? true : e.wrap })))
+    return this.commit('Edit text', (d) => {
+      const e = d.els[id]
+      if (!e || !this.editable(e) || e.text === text) return d
+      const els = { ...d.els }
+      const bulletMarkerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s+/
+      if (bulletMarkerRegex.test(text)) {
+        const bulletGlyphRegex = /^\s*[-•–*▪◦·●]\s*$/
+        for (const otherId of d.order) {
+          if (otherId === id) continue
+          const other = els[otherId]
+          if (!other || other.deleted || other.page !== e.page) continue
+          if (Math.abs(other.origBaseline - e.origBaseline) < 2) {
+            if (other.origX < e.origX && e.origX - (other.origX + other.origBox.w) < 35) {
+              if (bulletGlyphRegex.test(other.text)) {
+                els[otherId] = { ...other, deleted: true }
+                const origX = other.origX
+                const extraW = e.origX - origX
+                const origBox = { ...e.origBox, x: origX, w: e.origBox.w + extraW }
+                els[id] = { ...e, text, origX, x: origX, origBox, maxW: Math.max(e.maxW, origBox.w), wrap: d.flow?.enabled ? true : e.wrap }
+                return { ...d, els }
+              }
+            }
+          }
+        }
+      }
+      els[id] = { ...e, text, wrap: d.flow?.enabled ? true : e.wrap }
+      return { ...d, els }
+    })
   }
   setStyle(patch: Partial<TextStyle>, label = 'Format') {
     const s = this.selection; if (!s) return false
@@ -367,6 +417,24 @@ export class EditorStore {
     })
   }
 
+  findCompanionBulletAnchor(elId: string): TextElement | null {
+    const d = this.effectiveDoc()
+    const el = d.els[elId]
+    if (!el || el.deleted) return null
+    const bulletGlyphRegex = /^\s*[-•–*▪◦·●]\s*$/
+    for (const otherId of d.order) {
+      if (otherId === elId) continue
+      const other = d.els[otherId]
+      if (!other || other.deleted || other.page !== el.page) continue
+      if (Math.abs(other.origBaseline - el.origBaseline) < 2) {
+        if (other.origX < el.origX && el.origX - (other.origX + other.origBox.w) < 35) {
+          if (bulletGlyphRegex.test(other.text)) return other
+        }
+      }
+    }
+    return null
+  }
+
   listState(target: { kind: 'el' | 'block'; id: string } | null): { bullet: boolean; numbered: boolean } {
     if (!target) return { bullet: false, numbered: false }
     const d = this.effectiveDoc()
@@ -374,8 +442,9 @@ export class EditorStore {
     const obj = isBlock ? d.blocks?.find((b) => b.id === target.id) : d.els[target.id]
     if (!obj || !obj.text.trim()) return { bullet: false, numbered: false }
     const firstLine = obj.text.split('\n')[0]
+    const hasCompanion = !isBlock && !!this.findCompanionBulletAnchor(target.id)
     return {
-      bullet: /^\s*[-•–*▪◦·●]\s*/.test(firstLine),
+      bullet: hasCompanion || /^\s*[-•–*▪◦·●]\s*/.test(firstLine),
       numbered: /^\s*\d+[.)]\s*/.test(firstLine)
     }
   }
@@ -420,15 +489,51 @@ export class EditorStore {
     const bulletRegex = /^\s*[-•–*▪◦·●]\s*/
     const lines = text.split('\n')
 
+    const companion = !isBlock ? this.findCompanionBulletAnchor(target.id) : null
+    const hasCompanion = !!companion
     const allBulleted = lines.every((l) => l.trim().length === 0 || bulletRegex.test(l))
+    const isCurrentlyBullet = hasCompanion || allBulleted
+
     let newText = ''
-    if (allBulleted) {
+    if (isCurrentlyBullet) {
       newText = lines.map((l) => l.replace(bulletRegex, '')).join('\n')
+      if (hasCompanion) {
+        this.commit('Remove bullet list', (curDoc) => {
+          const els = { ...curDoc.els }
+          const comp = els[companion!.id]
+          const curEl = els[target.id]
+          if (comp) els[companion!.id] = { ...comp, deleted: true }
+          if (curEl) {
+            const origX = comp ? comp.origX : curEl.origX
+            const extraW = curEl.origX - origX
+            const origBox = { ...curEl.origBox, x: origX, w: curEl.origBox.w + extraW }
+            els[target.id] = { ...curEl, text: newText, origX, x: origX, origBox, maxW: Math.max(curEl.maxW, origBox.w) }
+          }
+          return { ...curDoc, els }
+        })
+        return
+      }
     } else {
       newText = lines.map((l) => {
         const clean = l.replace(markerRegex, '')
         return `${bulletChar} ${clean}`
       }).join('\n')
+      if (hasCompanion) {
+        this.commit('Add bullet list', (curDoc) => {
+          const els = { ...curDoc.els }
+          const comp = els[companion!.id]
+          const curEl = els[target.id]
+          if (comp) els[companion!.id] = { ...comp, deleted: true }
+          if (curEl) {
+            const origX = comp ? comp.origX : curEl.origX
+            const extraW = curEl.origX - origX
+            const origBox = { ...curEl.origBox, x: origX, w: curEl.origBox.w + extraW }
+            els[target.id] = { ...curEl, text: newText, origX, x: origX, origBox, maxW: Math.max(curEl.maxW, origBox.w), wrap: curDoc.flow?.enabled ? true : curEl.wrap }
+          }
+          return { ...curDoc, els }
+        })
+        return
+      }
     }
     if (isBlock) this.setBlockText(target.id, newText)
     else this.setText(target.id, newText)
@@ -445,6 +550,7 @@ export class EditorStore {
     const markerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s*/
     const lines = text.split('\n')
 
+    const companion = !isBlock ? this.findCompanionBulletAnchor(target.id) : null
     const allNumbered = lines.every((l) => l.trim().length === 0 || numberRegex.test(l))
     let newText = ''
     if (allNumbered) {
@@ -467,6 +573,24 @@ export class EditorStore {
         return `${startNum + i}. ${clean}`
       }).join('\n')
     }
+
+    if (companion) {
+      this.commit(allNumbered ? 'Remove numbered list' : 'Add numbered list', (curDoc) => {
+        const els = { ...curDoc.els }
+        const comp = els[companion.id]
+        const curEl = els[target.id]
+        if (comp) els[companion.id] = { ...comp, deleted: true }
+        if (curEl) {
+          const origX = comp ? comp.origX : curEl.origX
+          const extraW = curEl.origX - origX
+          const origBox = { ...curEl.origBox, x: origX, w: curEl.origBox.w + extraW }
+          els[target.id] = { ...curEl, text: newText, origX, x: origX, origBox, maxW: Math.max(curEl.maxW, origBox.w), wrap: curDoc.flow?.enabled ? true : curEl.wrap }
+        }
+        return { ...curDoc, els }
+      })
+      return
+    }
+
     if (isBlock) this.setBlockText(target.id, newText)
     else this.setText(target.id, newText)
   }

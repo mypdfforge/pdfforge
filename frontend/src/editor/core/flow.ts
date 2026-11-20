@@ -25,7 +25,7 @@ export type CascadeResult = {
   objectShifts: Map<string, { page: number; dy: number; dx: number }>
 }
 
-const MARKER = /^\s*([-•–*▪◦·●]|\d+[.)])\s+/
+const MARKER = /^\s*([-•–*▪◦·●]|\d+[.)])(?:\s+|$)/
 const GUTTER_MIN = 12          // pt of empty vertical projection that separates columns
 const SPAN_RATIO = 0.6         // box wider than this fraction of content width => spanner
 const MIN_LANE_MASS = 6        // chars; below this a "lane" is noise (page numbers…)
@@ -183,7 +183,16 @@ function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, ke
     const lane = keyOf(laneOf.get(e.id) ?? -1)
     const r = rows.find((q) => q.anchor && q.lane === lane &&
       Math.abs(q.anchor.origBaseline - e.origBaseline) < 0.35 * Math.max(e.style.size, q.anchor.style.size))
-    if (r) { if (!e.deleted) r.followers.push(e) }
+    if (r) {
+      if (!e.deleted) {
+        const bulletGlyphRegex = /^\s*[-•–*▪◦·●]\s*$/
+        const followerHasMarker = /^\s*([-•–*▪◦·●]|\d+[.)])\s+/.test(e.text)
+        if (bulletGlyphRegex.test(r.anchor.text) && followerHasMarker) {
+          r.anchor.deleted = true
+        }
+        r.followers.push(e)
+      }
+    }
     else {
       const t = doc.tables?.find((tbl) => tbl.page === pm.index && tbl.cells.some((c) => c.elIds.includes(e.id)))
       const tableId = t ? t.id : (tableElMap?.has(e.id) ? `tr_${pm.index}_${Math.round(tableElMap.get(e.id)!.top)}` : null)
