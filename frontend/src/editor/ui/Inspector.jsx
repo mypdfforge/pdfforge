@@ -79,6 +79,7 @@ export default function Inspector({ session, store, doc, sel, target, issues, pa
         </div>
       </section>
 
+      <ObjectsAndTablesSection store={store} doc={doc} cur={Math.min(cur, origPages - 1)} />
       <AtsSection store={store} onSelect={onSelect} />
       <section className="pe-muted"><ShieldCheck size={13} style={{ verticalAlign: -2 }} /> Processed entirely in your browser. Autosaved only in this browser's storage.</section>
     </>
@@ -168,6 +169,66 @@ function AtsSection({ store, onSelect }) {
               <b>{f.severity.toUpperCase()}:</b> {f.message}
               <div className="pe-muted" style={{ marginTop: 2, fontSize: 11 }}>💡 Fix: {f.fix}</div>
             </button>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ObjectsAndTablesSection({ store, doc, cur }) {
+  const [open, setOpen] = useState(true)
+  const pageTables = (doc.tables || []).filter((t) => t.page === cur)
+  const pageObjs = (doc.objects || []).filter((o) => o.page === cur)
+
+  if (!pageTables.length && !pageObjs.length) return null
+
+  return (
+    <section>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setOpen(!open)}>
+        <h4 style={{ margin: 0 }}>Objects &amp; Tables</h4>
+        <span className="badge">{pageTables.length} tables, {pageObjs.length} objs</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {pageTables.map((t) => (
+            <div key={t.id} className="pe-card" style={{ marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <b>Table ({t.cells.length} cells)</b>
+                <span className={`badge ${t.confidence === 'high' ? 'pe-ok' : ''}`} style={{ fontSize: 10 }}>
+                  {t.confidence} confidence
+                </span>
+              </div>
+              <div className="pe-muted" style={{ fontSize: 11, marginTop: 4 }}>
+                {t.headerRows} header row{t.headerRows > 1 ? 's' : ''} (repeats on page breaks)
+              </div>
+              {t.confidence === 'low' && (
+                <div className="pe-actions" style={{ marginTop: 4 }}>
+                  <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => store.confirmTable(t.id)}>
+                    Confirm table
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {pageObjs.map((o) => (
+            <div key={o.id} className="pe-card" style={{ marginBottom: 6, fontSize: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ textTransform: 'capitalize' }}><b>{o.kind}</b></span>
+                <span className="badge" style={{ fontSize: 10 }}>{o.flow}</span>
+              </div>
+              {o.locked ? (
+                <div className="pe-muted" style={{ fontSize: 11, color: '#f59e0b', marginTop: 2 }}>{o.locked}</div>
+              ) : (
+                <div className="pe-actions" style={{ marginTop: 4 }}>
+                  <button className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 6px' }}
+                    onClick={() => store.setObjectFlow(o.id, o.flow === 'pinned' ? 'inline' : 'pinned')}>
+                    {o.flow === 'pinned' ? 'Make inline' : 'Pin in place'}
+                  </button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

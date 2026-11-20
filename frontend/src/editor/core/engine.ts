@@ -8,7 +8,7 @@ import type { Plan, PlanPage, Draw, BuildReport } from './types.ts'
 
 export type EngineCode = 'encrypted' | 'corrupt' | 'too-large' | 'cancelled'
 export class EngineError extends Error { code: EngineCode; constructor(code: EngineCode, msg: string) { super(msg); this.code = code } }
-export type PageAnalysis = { readable: boolean; ops: ShowOp[]; fonts: Record<string, FontInfo>; images: number; paints: number }
+export type PageAnalysis = { readable: boolean; ops: ShowOp[]; fonts: Record<string, FontInfo>; images: number; paints: number; toks?: Array<{ op: string; args: any[] }> }
 
 const f3 = (n: number) => String(Math.round(n * 1000) / 1000)
 const rgb = (c: number[]) => `${f3(c[0])} ${f3(c[1])} ${f3(c[2])} rg`
@@ -35,8 +35,10 @@ export class PdfEngine {
     const fonts = readFonts(this.L, this.src, page)
     const text = readContent(this.L, this.src, page)
     if (text === null) return { readable: false, ops: [], fonts, images: 0, paints: 0 }
-    const a: Analysis = analyze(parseContent(text), metricsFor(fonts))
-    return { readable: true, ops: a.ops, fonts, images: a.images, paints: a.paints }
+    const instrs = parseContent(text)
+    const a: Analysis = analyze(instrs, metricsFor(fonts))
+    const toks = instrs.map((ins) => ({ op: ins.op, args: ins.args.map((arg) => arg.v) }))
+    return { readable: true, ops: a.ops, fonts, images: a.images, paints: a.paints, toks }
   }
 
   /** Build output. `only` => preview of just those plan pages (fresh doc, source untouched). Otherwise full export, in place. */

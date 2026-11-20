@@ -37,7 +37,14 @@ export async function openSession({ bytes, name, restored, makeWorker, onProgres
     const pdf = await task.promise
     const m = await Measurer.create(L)
     let doc = restored, notes = []
-    if (!doc) { const r = await extractDocument(pdf, (i) => engine.analyzePage(i), name, onProgress); doc = r.doc; notes = r.notes }
+    if (!doc) {
+      const r = await extractDocument(pdf, (i) => engine.analyzePage(i), name, onProgress)
+      doc = r.doc; notes = r.notes
+    } else if (!doc.objects?.length && !doc.tables?.length) {
+      const r = await extractDocument(pdf, (i) => engine.analyzePage(i), name, onProgress)
+      doc = { ...doc, objects: r.doc.objects, tables: r.doc.tables }
+      notes = r.notes
+    }
     return new Session({ engine, pdf, task, m, store: new EditorStore(doc, m), bytes, notes, pdfjs })
   } catch (e) { task?.destroy?.(); engine.close(); throw e }
 }

@@ -51,12 +51,44 @@ export type GraphicRule = {
   anchorId: string | null  // text element it travels with (nearest heading above)
 }
 
+export type FlowObject = {
+  id: string
+  page: number
+  kind: 'image' | 'rule' | 'vector'
+  rect: Rect
+  ops: number[]
+  color: RGB                       // rules only (redraw path)
+  flow: 'inline' | 'anchored' | 'pinned'
+  anchorId: string | null          // anchored: travels with this text element
+  keepTogetherId: string | null    // figure + caption group
+  translatable: boolean            // ops form a safe, state-neutral CTM range
+  locked: string | null
+}
+
+export type TableCell = { r: number; c: number; elIds: string[]; rect: Rect }
+export type TableModel = {
+  id: string
+  page: number
+  rect: Rect
+  xs: number[]                     // grid lines, PDF pts (xs ascending, ys descending)
+  ys: number[]
+  cells: TableCell[]
+  ruleOps: number[]
+  ruleColor: RGB
+  headerRows: number
+  padX: number
+  padY: number
+  confidence: 'high' | 'low'       // low = borderless guess, needs user confirmation
+}
+
 export type DocState = {
   name: string; pages: PageModel[]; els: Record<string, TextElement>; order: string[]
   mode: 'design' | 'reflow'; blocks: Block[] | null
   contentBottom: number[] // per page: lowest y (PDF) text may reach in reflow
   flow?: FlowSettings      // absent => legacy Design Lock, byte-identical
   rules?: GraphicRule[]    // absent => no graphic followers
+  objects?: FlowObject[]
+  tables?: TableModel[]
 }
 
 export type Draw =

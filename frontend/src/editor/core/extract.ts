@@ -1,8 +1,10 @@
 // Builds the document model from pdf.js text items + the content-stream analysis. The canvas is never the source of truth.
 import type { PageAnalysis } from './engine.ts'
-import type { DocState, PageModel, TextElement, TextStyle, Rect } from './types.ts'
+import type { DocState, PageModel, TextElement, TextStyle, Rect, FlowObject, TableModel } from './types.ts'
 import { mapFont } from './fonts.ts'
 import { verticalOverlap } from './geometry.ts'
+import { scanObjects } from './objects.ts'
+import { detectTables } from './table.ts'
 
 type Item = { str: string; x: number; y: number; w: number; size: number; font: string; skew: boolean; asc: number; desc: number }
 export type ExtractResult = { doc: DocState; notes: string[] }
@@ -12,11 +14,13 @@ export async function extractDocument(pdf: any, analyses: (i: number) => Promise
   const pages: PageModel[] = [], els: Record<string, TextElement> = {}, order: string[] = []
   const notes: string[] = []
   let textRuns = 0
+  const pageToks = new Map<number, any[]>()
   for (let i = 0; i < pdf.numPages; i++) {
     const page = await pdf.getPage(i + 1)
     const [vx0, vy0, vx1, vy1] = page.view
     const rotated = (page.rotate ?? 0) % 360 !== 0
     const an = await analyses(i)
+    if (an.toks) pageToks.set(i, an.toks)
     const pm: PageModel = { index: i, x0: vx0, y0: vy0, width: vx1 - vx0, height: vy1 - vy0, editable: !rotated && an.readable, reason: rotated ? 'Rotated pages are shown read-only.' : !an.readable ? 'This page uses a content encoding that cannot be edited safely.' : null, images: an.images, paints: an.paints }
     pages.push(pm)
     const tc = await page.getTextContent()
@@ -116,5 +120,20 @@ export async function extractDocument(pdf: any, analyses: (i: number) => Promise
   const lowest = pages.map((p) => Math.min(Infinity, ...order.filter((k) => els[k].page === p.index).map((k) => els[k].origBox.y)))
   const limit = Math.max(36, Math.min(...lowest.filter(Number.isFinite), 1e9))
   const contentBottom = pages.map((p) => Math.max(p.y0 + 36, Number.isFinite(limit) && limit < 1e8 ? limit : p.y0 + 36))
-  return { doc: { name, pages, els, order, mode: 'design', blocks: null, contentBottom, flow: { enabled: true, squeeze: null } }, notes }
+
+  const objects: FlowObject[] = []
+  const tables: TableModel[] = []
+  const tempDoc: DocState = { name, pages, els, order, mode: 'design', blocks: null, contentBottom, flow: { enabled: true, squeeze: null } }
+  for (let i = 0; i < pages.length; i++) {
+    const toks = pageToks.get(i)
+    if (toks) {
+      const pageObjs = scanObjects(toks, tempDoc, i)
+      objects.push(...pageObjs)
+      const pageEls = order.filter((k) => els[k].page === i).map((k) => els[k])
+      const pageTables = detectTables(pageObjs, pageEls, i)
+      tables.push(...pageTables)
+    }
+  }
+
+  return { doc: { ...tempDoc, objects, tables }, notes }
 }

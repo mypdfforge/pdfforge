@@ -324,6 +324,48 @@ export class EditorStore {
     const d = this.doc
     return d.order.filter((k) => isChanged(d.els[k])).length + (d.blocks ?? []).filter((b) => b.edited).length
   }
+
+  setObjectFlow(id: string, flow: 'inline' | 'anchored' | 'pinned') {
+    return this.commit(`Set object flow to ${flow}`, (d) => {
+      const objs = (d.objects ?? []).map((o) => (o.id === id ? { ...o, flow } : o))
+      return { ...d, objects: objs }
+    })
+  }
+
+  pinObject(id: string) {
+    return this.setObjectFlow(id, 'pinned')
+  }
+
+  confirmTable(id: string) {
+    return this.commit('Confirm table', (d) => {
+      const tables = (d.tables ?? []).map((t) => (t.id === id ? { ...t, confidence: 'high' as const } : t))
+      return { ...d, tables }
+    })
+  }
+
+  splitTableAt(id: string, rowIndex: number) {
+    return this.commit(`Split table at row ${rowIndex + 1}`, (d) => {
+      const t = (d.tables ?? []).find((tbl) => tbl.id === id)
+      if (!t || rowIndex <= 0 || rowIndex >= t.ys.length - 1) return d
+      const splitY = t.ys[rowIndex]
+      const t1: typeof t = {
+        ...t,
+        id: `${t.id}_a`,
+        rect: { ...t.rect, y: splitY, h: t.rect.y + t.rect.h - splitY },
+        ys: t.ys.slice(0, rowIndex + 1),
+        cells: t.cells.filter((c) => c.r < rowIndex)
+      }
+      const t2: typeof t = {
+        ...t,
+        id: `${t.id}_b`,
+        rect: { ...t.rect, h: splitY - t.rect.y },
+        ys: t.ys.slice(rowIndex),
+        cells: t.cells.filter((c) => c.r >= rowIndex).map((c) => ({ ...c, r: c.r - rowIndex }))
+      }
+      const tables = (d.tables ?? []).filter((tbl) => tbl.id !== id).concat([t1, t2])
+      return { ...d, tables }
+    })
+  }
 }
 export type IssueReport = { byId: Record<string, Issue[]>; all: Issue[]; flow: string[]; pageCount: number }
 

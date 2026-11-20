@@ -226,7 +226,11 @@ export function analyze(instrs: Instr[], metrics: (res: string) => FontMetrics |
   return { ops, images, paints }
 }
 
-export type OpEdit = { idx: number; action: 'remove' | 'hide' | 'move'; dy?: number; origTr?: number }
+export type OpEdit =
+  | { idx: number; action: 'remove' }
+  | { idx: number; action: 'hide'; origTr?: number }
+  | { idx: number; action: 'move'; dy: number }
+  | { idx: number; action: 'translate'; dx: number; dy: number; span: number }
 
 /** Rewrite the stream: remove / hide / translate individual show instructions. Everything else is byte-identical. */
 export function rewrite(src: string, instrs: Instr[], edits: OpEdit[]): string {
@@ -242,10 +246,21 @@ export function rewrite(src: string, instrs: Instr[], edits: OpEdit[]): string {
       // ' and " also move to the next line: keep that side effect so following text stays put
       if (ins.op === "'") out += 'T*'
       else if (ins.op === '"') out += `${src.slice(ins.args[0].s, ins.args[0].e)} Tw ${src.slice(ins.args[1].s, ins.args[1].e)} Tc T*`
-    } else if (ed.action === 'hide') out += `3 Tr\n${orig}\n${ed.origTr ?? 0} Tr`
-    else out += `0 ${f(ed.dy ?? 0)} Td\n${orig}\n0 ${f(-(ed.dy ?? 0))} Td`
-    out += '\n'
-    pos = ins.e
+      pos = ins.e
+    } else if (ed.action === 'hide') {
+      out += `3 Tr\n${orig}\n${ed.origTr ?? 0} Tr\n`
+      pos = ins.e
+    } else if (ed.action === 'translate') {
+      const span = ed.span ?? 1
+      const lastIns = instrs[ed.idx + span - 1] ?? ins
+      const spanEnd = lastIns.e
+      const chunk = src.slice(ins.s, spanEnd)
+      out += `q 1 0 0 1 ${f(ed.dx ?? 0)} ${f(ed.dy ?? 0)} cm\n${chunk}\nQ\n`
+      pos = spanEnd
+    } else {
+      out += `0 ${f(ed.dy ?? 0)} Td\n${orig}\n0 ${f(-(ed.dy ?? 0))} Td\n`
+      pos = ins.e
+    }
   }
   return out + src.slice(pos)
 }

@@ -5,6 +5,7 @@ import { layoutElement } from './layout.ts'
 import type { Line } from './layout.ts'
 import { reflowPlan } from './reflow.ts'
 import { cascadeVerticalShift } from './flow.ts'
+import { layoutTable } from './table.ts'
 
 const sameStyle = (a: TextStyle, b: TextStyle) => JSON.stringify(a) === JSON.stringify(b)
 export const isChanged = (e: TextElement) =>
@@ -68,6 +69,46 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
     if (!sh || (Math.abs(sh.dy) < 0.01 && sh.page === rule.page)) continue
     for (const op of rule.ops) pages[rule.page].edits.push({ idx: op, action: 'remove' })
     pages[sh.page].draws.push({ kind: 'rect', x: rule.rect.x, y: rule.rect.y + sh.dy, w: rule.rect.w, h: rule.rect.h, color: rule.color })
+  }
+
+  // Part B4: Objects (images, rules, vectors)
+  for (const o of doc.objects ?? []) {
+    const sh = res.objectShifts?.get(o.id) ?? (o.anchorId ? res.shifts.get(o.anchorId) : undefined)
+    if (!sh || (Math.abs(sh.dy) < 0.01 && sh.page === o.page)) continue
+    if (o.locked) { res.warnings.push(`"${o.kind}" on page ${o.page + 1} could not move: ${o.locked}`); continue }
+    if (o.translatable && sh.page === o.page) {
+      pages[o.page].edits.push({ idx: o.ops[0], action: 'translate', dx: 0, dy: sh.dy, span: o.ops.length })
+    } else if (o.kind === 'rule') {                       // cross-page or non-neutral: vector redraw
+      for (const op of o.ops) pages[o.page].edits.push({ idx: op, action: 'remove' })
+      pages[sh.page].draws.push({ kind: 'rect', x: o.rect.x, y: o.rect.y + sh.dy, w: o.rect.w, h: o.rect.h, color: o.color })
+    } else {
+      res.warnings.push(`An image on page ${o.page + 1} cannot cross a page boundary; it stayed put.`)
+    }
+  }
+
+  // Part C: Tables in cascade plan (remove old ruleOps, redraw crisp grid at new rowYs)
+  for (const t of doc.tables ?? []) {
+    const firstCellId = t.cells[0]?.elIds[0]
+    const sh = firstCellId ? res.shifts.get(firstCellId) : undefined
+    if (!sh || (Math.abs(sh.dy) < 0.01 && sh.page === t.page)) continue
+
+    for (const op of t.ruleOps) {
+      if (pages[t.page]) pages[t.page].edits.push({ idx: op, action: 'remove' })
+    }
+
+    const targetPage = sh.page
+    const top = t.rect.y + t.rect.h + sh.dy
+    const placed = layoutTable(t, doc, m, top)
+    const dest = pages[targetPage]
+    if (dest) {
+      const x0 = t.xs[0], x1 = t.xs[t.xs.length - 1], w = x1 - x0
+      for (const y of placed.rowYs) {
+        dest.draws.push({ kind: 'rect', x: x0, y: y - 0.5, w, h: 1, color: t.ruleColor })
+      }
+      for (const x of t.xs) {
+        dest.draws.push({ kind: 'rect', x: x - 0.5, y: placed.bottom, w: 1, h: placed.height, color: t.ruleColor })
+      }
+    }
   }
   return { pages }
 }
