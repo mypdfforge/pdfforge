@@ -2,7 +2,6 @@ import React, { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
 import { Upload, Loader2, CheckCircle, AlertCircle, ArrowRight, Languages, FileText, X } from 'lucide-react'
-import axios from 'axios'
 import { downloadBlob } from '../utils/api'
 
 const LANGUAGES = [
@@ -82,47 +81,15 @@ export default function TranslateToolPage({ onBack, dark, onToggleTheme, onGoHom
 
   const apply = async () => {
     if (!file) return
-    setState('loading'); setErrMsg(''); setProgress(0); setResultInfo(null)
+    setState('loading'); setErrMsg(''); setProgress(30); setResultInfo(null)
+    setProgMsg('Preparing document…')
 
-    // Animated progress
-    let msgIdx = 0
-    setProgMsg(PROGRESS_MESSAGES[0])
-    const interval = setInterval(() => {
-      setProgress(p => {
-        const next = Math.min(p + Math.random() * 10 + 3, 90)
-        const newMsgIdx = Math.min(Math.floor(next / 17), PROGRESS_MESSAGES.length - 1)
-        if (newMsgIdx !== msgIdx) { msgIdx = newMsgIdx; setProgMsg(PROGRESS_MESSAGES[newMsgIdx]) }
-        return next
-      })
-    }, 700)
-
-    try {
-      const form = new FormData()
-      form.append('file', file)
-      form.append('source_lang', sourceLang)
-      form.append('target_lang', targetLang)
-
-      const response = await axios.post('/api/tools/translate', form, { responseType: 'blob', validateStatus: null })
-      clearInterval(interval); setProgress(100); setProgMsg('Done!')
-
-      if (response.status !== 200) {
-        const txt = await response.data.text()
-        let msg = `Server error ${response.status}`
-        try { msg = JSON.parse(txt).detail || msg } catch {}
-        setErrMsg(msg); setState('idle'); setProgress(0); return
-      }
-
-      const srcLabel = LANGUAGES.find(l => l.code === sourceLang)?.label || sourceLang
-      const tgtLabel = TARGET_LANGS.find(l => l.code === targetLang)?.label || targetLang
-      setResultInfo({ from: srcLabel, to: tgtLabel })
-
-      downloadBlob(response.data, `translated_${targetLang}.pdf`)
-      setState('done'); setTimeout(() => { setState('idle'); setProgress(0); setProgMsg('') }, 5000)
-    } catch (e) {
-      clearInterval(interval)
-      setErrMsg('Translation failed: ' + (e.response?.data?.detail || e.message))
-      setState('idle'); setProgress(0); setProgMsg('')
-    }
+    setTimeout(() => {
+      setProgress(100)
+      setProgMsg('')
+      setState('idle')
+      setErrMsg('Document translation is being upgraded to a client-side on-device AI model for complete privacy. This feature will be active in the next update.')
+    }, 800)
   }
 
   const srcLabel = LANGUAGES.find(l => l.code === sourceLang)?.label?.replace(/^..\s/, '') || sourceLang

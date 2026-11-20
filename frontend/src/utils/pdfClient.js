@@ -424,3 +424,76 @@ export async function clientRepair(file) {
   const blob = new Blob([repaired], { type: 'application/pdf' })
   return { data: blob }
 }
+
+/**
+ * Crop PDF pages by trimming margins (in points).
+ * @param {File} file - source PDF
+ * @param {Object} margins - { left, top, right, bottom }
+ */
+export async function clientCrop(file, margins = {}) {
+  const { PDFDocument } = getPdfLib()
+  const bytes = await readFile(file)
+  const doc = await PDFDocument.load(bytes)
+
+  const left = parseFloat(margins.left) || 0
+  const top = parseFloat(margins.top) || 0
+  const right = parseFloat(margins.right) || 0
+  const bottom = parseFloat(margins.bottom) || 0
+
+  const pages = doc.getPages()
+  for (const page of pages) {
+    const { width, height } = page.getSize()
+    const mediaBox = page.getMediaBox ? page.getMediaBox() : { x: 0, y: 0, width, height }
+    const x0 = (mediaBox.x || 0) + left
+    const y0 = (mediaBox.y || 0) + bottom
+    const newW = Math.max(1, (mediaBox.width || width) - left - right)
+    const newH = Math.max(1, (mediaBox.height || height) - top - bottom)
+    page.setCropBox(x0, y0, newW, newH)
+  }
+
+  return saveAndDownload(doc, 'cropped.pdf')
+}
+
+/**
+ * Add page numbers to every page of a PDF.
+ * @param {File} file - source PDF
+ * @param {string} position - 'bottom-center' | 'bottom-right' | 'top-center' | 'top-right'
+ */
+export async function clientPageNumbers(file, position = 'bottom-center') {
+  const { PDFDocument, rgb, StandardFonts } = getPdfLib()
+  const bytes = await readFile(file)
+  const doc = await PDFDocument.load(bytes)
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  const fontSize = 9
+  const total = doc.getPageCount()
+
+  for (let i = 0; i < total; i++) {
+    const page = doc.getPage(i)
+    const { width, height } = page.getSize()
+    const label = `${i + 1} / ${total}`
+    const textWidth = font.widthOfTextAtSize(label, fontSize)
+
+    let x = width / 2 - textWidth / 2
+    if (position.includes('right')) {
+      x = width - textWidth - 30
+    } else if (position.includes('left')) {
+      x = 30
+    }
+
+    let y = 25
+    if (position.includes('top')) {
+      y = height - 25
+    }
+
+    page.drawText(label, {
+      x,
+      y,
+      size: fontSize,
+      font,
+      color: rgb(0.4, 0.4, 0.4),
+    })
+  }
+
+  return saveAndDownload(doc, 'numbered.pdf')
+}
+

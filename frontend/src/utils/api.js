@@ -2,19 +2,11 @@ import { clientMerge, clientSplit, clientExtract, clientRotate, clientDeletePage
 import { clientPdfToImages, clientPdfToJpg } from './pdfToImageClient'
 import axios from 'axios'
 
-// ── Render backend (existing tools) ──────────────────────────
-const RENDER_URL = import.meta.env.VITE_API_URL || 'https://mypdfforge.onrender.com/api'
-const render = axios.create({ baseURL: RENDER_URL, timeout: 300000 })
-
-// Wake up Render from sleep (free tier spins down after inactivity).
-// Call this as early as possible so the cold start happens in the background.
-export const wakeRender = () =>
-  axios.get(`${RENDER_URL.replace('/api', '')}/api/health`, { timeout: 60000 }).catch(() => {})
-
-// ── Cloudflare Brain (distributed grid tools) ─────────────────
+// ── Render backend (decommissioned - all tools run client-side) ──
+export const wakeRender = () => {}
 
 export const _post = (path, form, timeout = 300000) =>
-  render.post(path, form, { responseType: 'blob', timeout })
+  Promise.reject(new Error('Backend server is decommissioned. All operations now run 100% in-browser.'))
 
 // Compress uses XHR directly — no axios timeout, real upload progress
 export const compressPDFServer = (file, onProgress) =>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import axios from 'axios'
+import { getThumbnailsProgressive } from '../utils/thumbCache'
 
 export default function PageSelector({ file, onChange, selectionMode = 'multiple' }) {
   const [thumbs,   setThumbs]   = useState([])
@@ -9,11 +9,35 @@ export default function PageSelector({ file, onChange, selectionMode = 'multiple
   useEffect(() => {
     if (!file) return
     setLoading(true)
-    const form = new FormData()
-    form.append('file', file)
-    axios.post('/api/tools/thumbnails', form)
-      .then(r => { setThumbs(r.data.thumbnails); setLoading(false) })
-      .catch(() => setLoading(false))
+    setThumbs([])
+    let first = true
+    let isMounted = true
+
+    getThumbnailsProgressive(file, (thumb) => {
+      if (!isMounted) return
+      if (first) {
+        setLoading(false)
+        first = false
+      }
+      if (thumb?.img) {
+        setThumbs(prev => {
+          if (prev.some(t => t.page === thumb.page)) return prev
+          return [...prev, thumb].sort((a, b) => a.page - b.page)
+        })
+      }
+    }, 5)
+      .then((all) => {
+        if (!isMounted) return
+        if (all && all.length > 0) {
+          setThumbs(all)
+        }
+        setLoading(false)
+      })
+      .catch(() => {
+        if (isMounted) setLoading(false)
+      })
+
+    return () => { isMounted = false }
   }, [file])
 
   const toggle = (n) => {

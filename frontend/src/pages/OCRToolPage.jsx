@@ -2,7 +2,6 @@ import React, { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
 import { Upload, Loader2, CheckCircle, AlertCircle, FileText, Search, X } from 'lucide-react'
-import axios from 'axios'
 import { downloadBlob } from '../utils/api'
 
 /**
@@ -130,111 +129,41 @@ export default function OCRToolPage({
     abortRef.current = false
     setState('loading'); setErrMsg(''); setExtractedText(''); setProgress(0)
 
-    // OCR.space API key — loaded from env via Vite
-    // Falls back to empty string which triggers server-side fallback
-    const OCR_API_KEY = ''   // OCR.space retired (key was public in the bundle); on-device OCR comes in M5c
-    const ocrLang     = OCR_LANG_MAP[language] || 'eng'
-
     try {
-      // ── Step 1: Load PDF with pdf.js ────────────────────────────────
-      setProgMsg('Loading PDF…')
+      setProgMsg('Loading PDF in browser…')
       const pdfjs       = getPdfjs()
       const arrayBuffer = await file.arrayBuffer()
       const pdfDoc      = await pdfjs.getDocument({ data: arrayBuffer }).promise
       const totalPages  = pdfDoc.numPages
 
-      setProgMsg(`Preparing ${totalPages} page${totalPages > 1 ? 's' : ''}…`)
+      setProgMsg(`Reading ${totalPages} page${totalPages > 1 ? 's' : ''} on-device…`)
 
-      const pageResults = []   // [{page, text}]
-      let   usedClientOcr = true
-
-      if (OCR_API_KEY) {
-        // ── Tier 1: OCR.space — client-side, parallel in batches ──────
-        // Process 3 pages at a time to avoid rate limits
-        const BATCH = 3
-        for (let start = 1; start <= totalPages; start += BATCH) {
-          if (abortRef.current) break
-          const batch = []
-          for (let p = start; p < start + BATCH && p <= totalPages; p++) {
-            batch.push(p)
-          }
-
-          setProgMsg(`OCR: pages ${start}–${Math.min(start + BATCH - 1, totalPages)} of ${totalPages}`)
-          setProgress(Math.round((start / totalPages) * 85))
-
-          // Render + OCR all pages in batch in parallel
-          const results = await Promise.allSettled(
-            batch.map(async (pageNum) => {
-              const jpeg = await renderPageToJpeg(pdfDoc, pageNum, 2.0, 0.82)
-              const text = await ocrSpacePage(jpeg, ocrLang, OCR_API_KEY)
-              return { page: pageNum, text }
-            })
-          )
-
-          for (const r of results) {
-            if (r.status === 'fulfilled') {
-              pageResults.push(r.value)
-            } else {
-              // OCR.space failed for this page — mark for server fallback
-              console.warn('OCR.space failed:', r.reason?.message)
-              usedClientOcr = false
-              break
-            }
-          }
-
-          if (!usedClientOcr) break
-
-          // Small delay between batches to respect rate limits
-          if (start + BATCH <= totalPages) {
-            await new Promise(r => setTimeout(r, 300))
-          }
+      const textChunks = []
+      for (let p = 1; p <= totalPages; p++) {
+        if (abortRef.current) break
+        setProgress(Math.round((p / totalPages) * 90))
+        setProgMsg(`Extracting text from page ${p} of ${totalPages}…`)
+        const page = await pdfDoc.getPage(p)
+        const content = await page.getTextContent()
+        const pageText = content.items.map(item => item.str).join(' ')
+        if (pageText.trim()) {
+          textChunks.push(`--- Page ${p} ---\n${pageText.trim()}`)
         }
-      } else {
-        usedClientOcr = false
       }
 
       await pdfDoc.destroy()
-
-      // ── Step 2: Send results to backend ───────────────────────────
-      setProgMsg(usedClientOcr ? 'Building result…' : 'Running server OCR fallback…')
-      setProgress(90)
-
-      const form = new FormData()
-      form.append('file',        file)
-      form.append('language',    language)
-      form.append('output_mode', outputMode)
-      form.append('page_texts',  usedClientOcr ? JSON.stringify(pageResults) : '')
-
-      const response = await axios.post('/api/tools/ocr', form, {
-        responseType: outputMode === 'text' ? 'json' : 'blob',
-        validateStatus: null,
-        timeout: 120000,
-      })
-
       setProgress(100)
       setProgMsg('Done!')
 
-      if (response.status !== 200) {
-        const txt = outputMode === 'text'
-          ? JSON.stringify(response.data)
-          : await response.data.text()
-        let msg = `Server error ${response.status}`
-        try { msg = JSON.parse(txt).detail || msg } catch {}
-        setErrMsg(msg); setState('idle'); setProgress(0); return
-      }
-
-      if (outputMode === 'text') {
-        setExtractedText(response.data.text || '')
+      if (textChunks.length > 0) {
+        setExtractedText(textChunks.join('\n\n'))
         setState('done')
       } else {
-        downloadBlob(response.data, 'ocr_searchable.pdf')
-        setState('done')
+        setErrMsg('No selectable text found in this PDF. Pure on-device OCR for scanned images is scheduled for the upcoming release.')
+        setState('idle')
       }
-
-      setTimeout(() => { setState('idle'); setProgress(0); setProgMsg('') }, 4000)
-
     } catch (e) {
-      setErrMsg('OCR failed: ' + e.message)
+      setErrMsg('Extraction error: ' + e.message)
       setState('idle'); setProgress(0); setProgMsg('')
     }
   }
