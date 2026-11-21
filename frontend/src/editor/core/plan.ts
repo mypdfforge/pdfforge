@@ -9,7 +9,7 @@ import { layoutTable } from './table.ts'
 
 const sameStyle = (a: TextStyle, b: TextStyle) => JSON.stringify(a) === JSON.stringify(b)
 export const isChanged = (e: TextElement) =>
-  e.created || e.deleted || e.text !== e.originalText || !sameStyle(e.style, e.originalStyle) || e.x !== e.origX || e.baseline !== e.origBaseline || e.wrap
+  e.created || e.deleted || e.text !== e.originalText || !sameStyle(e.style, e.originalStyle) || e.x !== e.origX || e.baseline !== e.origBaseline || e.wrap || !!e.list
 
 export function drawsForLines(lines: Line[], s: TextStyle): Draw[] {
   const out: Draw[] = []
@@ -53,7 +53,7 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
     else removeOps(el, el.page)
     const s = styled(el.style)
     const wrap = el.wrap || !!doc.flow?.enabled
-    pages[sh.page].draws.push(...drawsForLines(layoutElement({ ...el, style: s, wrap, maxW: Math.max(20, el.maxW), baseline: sh.baseline }, m).lines, s))
+    pages[sh.page].draws.push(...drawsForLines(layoutElement({ ...el, style: s, wrap, maxW: Math.max(20, el.maxW), baseline: sh.baseline }, m, doc).lines, s))
   }
 
   for (const rp of res.repeats) {
@@ -127,7 +127,7 @@ export function buildPlan(doc: DocState, m: Measurer): Plan {
       else for (const op of e.ops) pg.edits.push({ idx: op, action: 'remove' })
     }
     if (e.deleted) continue
-    pg.draws.push(...drawsForLines(layoutElement(e, m).lines, e.style))
+    pg.draws.push(...drawsForLines(layoutElement(e, m, doc).lines, e.style))
   }
   return { pages }
 }

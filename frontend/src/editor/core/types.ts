@@ -24,6 +24,17 @@ export type TextElement = {
   cover: RGB | null // set only when the user explicitly accepts "cover & replace" for a locked element
   mappedFont: string; fidelity: Fidelity; fontNote: string | null
   deleted: boolean; created: boolean
+  list?: ListInfo | null
+}
+
+export type ListKind = 'bullet' | 'number'
+
+export type ListInfo = {
+  kind: ListKind
+  marker: string            // '●' | '•' | '1.' — as shown/edited in the text
+  indent: number            // pt from element x to body x (hanging indent)
+  start: number             // first ordinal (numbered lists)
+  externalId: string | null // companion glyph element kept alive to DRAW the marker
 }
 
 export type Role = 'heading' | 'paragraph' | 'bullet'
@@ -41,7 +52,7 @@ export type Squeeze = {
   sizeDelta: number    // pt added to every font size (negative = shrink). 0 = no redraw of unedited text.
 }
 
-export type FlowSettings = { enabled: boolean; squeeze: Squeeze | null }
+export type FlowSettings = { enabled: boolean; squeeze: Squeeze | null; bodySize?: number; pitchRatio?: number }
 
 export type GraphicRule = {
   id: string; page: number

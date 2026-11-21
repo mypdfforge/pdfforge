@@ -67,6 +67,7 @@ export function FormatBar({ store, target, style, tool, setTool, onApplyAll, mat
   const set = (patch, label) => store.setStyle(patch, label)
   const s = style || { family: 'Helvetica', size: 11, bold: false, italic: false, underline: false, strike: false, color: [0, 0, 0], highlight: null, align: 'left', lineHeight: 1.2, charSpacing: 0, wordSpacing: 0 }
   const kind = target?.kind
+  const el = target?.kind === 'el' ? store.doc.els[target.id] : null
   const listState = store.listState?.(target) ?? { bullet: false, numbered: false }
   return (
     <div className="pe-bar fmt" role="toolbar" aria-label="Text formatting">
@@ -91,6 +92,12 @@ export function FormatBar({ store, target, style, tool, setTool, onApplyAll, mat
       ))}
       <div className="pe-sep" />
       <Btn icon={<List size={15} />} label="Bulleted list" on={listState.bullet} disabled={off} onClick={() => store.toggleBullet(target)} />
+      {listState.bullet && target?.kind === 'el' && (
+        <select className="pe-sel" aria-label="Bullet style" value={el?.list?.marker ?? '•'}
+          onChange={(e) => store.setListMarker(target.id, e.target.value)} title="Bullet style">
+          {['•', '●', '▪', '◦', '·', '-', '*'].map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
+      )}
       <Btn icon={<ListOrdered size={15} />} label="Numbered list" on={listState.numbered} disabled={off} onClick={() => store.toggleNumber(target)} />
       <select className="pe-sel" aria-label="Line spacing" disabled={off} value={String(s.lineHeight)} onChange={(e) => set({ lineHeight: parseFloat(e.target.value) }, 'Line spacing')} title="Line spacing">
         {[1, 1.2, 1.5, 2].map((v) => <option key={v} value={v}>Line {v}</option>)}

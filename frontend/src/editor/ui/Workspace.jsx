@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore, useCallback } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, useCallback } from 'react'
 import { TopBar, FormatBar } from './Toolbar.jsx'
 import Inspector from './Inspector.jsx'
 import { ExportDialog, FindDialog, VersionsDialog } from './Dialogs.jsx'
 import { rectToCss, cssToPdf } from '../core/geometry.ts'
-import { wrapText } from '../core/layout.ts'
+import { wrapText, layoutElement } from '../core/layout.ts'
 import { saveDoc, addVersion, isStorageError } from '../core/projects.ts'
 import { FONT_CSS, hex, sampleBackground } from '../ui-util.js'
+import { parseMarker, applyList, stripList, hasAnyMarker, markerWidth } from '../core/lists.ts'
 
 const useStore = (s) => useSyncExternalStore(s.subscribe, s.getVersion)
 
@@ -23,117 +24,121 @@ function useVisible(ref, margin = '900px') {
 function TextEditor({ store, doc, target, rect, pageBox, zoom, onDone }) {
   const isBlock = target.kind === 'block'
   const obj = isBlock ? doc.blocks.find((b) => b.id === target.id) : doc.els[target.id]
-  const orig = isBlock
-    ? store.doc.blocks?.find((b) => b.id === target.id)?.text
-    : store.doc.els[target.id]?.text
-  const rawText = orig ?? obj.text
-  const companion = !isBlock && store.findCompanionBulletAnchor ? store.findCompanionBulletAnchor(obj.id) : null
-  const initialText = (companion && !/^\s*[-•–*▪◦·●]/.test(rawText))
-    ? `${companion.text.trim()} ${rawText}`
-    : rawText
-  const [val, setVal] = useState(initialText)
-  const ref = useRef(null), done = useRef(false), deb = useRef(0)
-  useEffect(() => { ref.current?.focus(); ref.current?.select() }, [])
+  const [val, setVal] = useState(obj.text)
+  const [list, setList] = useState(isBlock ? null : (obj.list ?? null))
+  const ref = useRef(null), done = useRef(false), deb = useRef(0), caret = useRef(null)
   const s = obj.style
-  const editRect = useMemo(() => {
-    if (companion && !/^\s*[-•–*▪◦·●]/.test(rawText)) {
-      const extra = Math.max(0, rect.x - companion.origBox.x)
-      return { ...rect, x: companion.origBox.x, w: rect.w + extra }
+  const css = rectToCss(pageBox, zoom, rect)
+  const regionW = (isBlock ? obj.width : Math.max(obj.maxW, rect.w)) * zoom
+  const wrap = isBlock || obj.wrap || !!list || !!doc.flow?.enabled
+  const lh = (store.m ? (s.size * zoom * (s.lineHeight !== obj.originalStyle?.lineHeight
+    ? s.lineHeight : (doc.flow?.pitchRatio ?? s.lineHeight))) : s.size * zoom * s.lineHeight)
+
+  useEffect(() => { ref.current?.focus(); ref.current?.select() }, [])
+  useLayoutEffect(() => {
+    if (caret.current != null && ref.current) {
+      ref.current.selectionStart = ref.current.selectionEnd = caret.current
+      caret.current = null
     }
-    return rect
-  }, [rect, companion, rawText])
-  const css = rectToCss(pageBox, zoom, editRect)
-  const wrap = isBlock || obj.wrap || !!doc.flow?.enabled
-  const regionW = (isBlock ? obj.width : Math.max(obj.maxW, editRect.w)) * zoom
+  }, [val])
+
+  const push = (next, nextList = list, pos = null) => {
+    caret.current = pos
+    setVal(next); setList(nextList)
+    clearTimeout(deb.current)
+    if (!isBlock) deb.current = setTimeout(() => store.setPreview(obj.id, next, nextList), 120)
+  }
+
+  /** Bounds of the logical line under the caret. */
+  const lineAt = (text, pos) => {
+    const start = text.lastIndexOf('\n', pos - 1) + 1
+    let end = text.indexOf('\n', pos); if (end < 0) end = text.length
+    return { start, end, line: text.slice(start, end) }
+  }
 
   const onChange = (e) => {
-    let v = e.target.value
-    if (v.endsWith('- ') || v.endsWith('* ') || v.includes('\n- ') || v.includes('\n* ')) {
-      const bChar = store.detectMatchingBullet?.(obj.page) || '•'
-      v = v.replace(/(^|\n)[-*]\s/g, `$1${bChar} `)
+    const next = e.target.value, pos = e.target.selectionStart
+    if (!isBlock && !list) {
+      const { start, line } = lineAt(next, pos)
+      const m = /^(\s*)([-*●•▪◦·]|\d+[.)])\s$/.exec(line)      // user just typed "- " / "1. "
+      if (m) {
+        const kind = /^\d/.test(m[2]) ? 'number' : 'bullet'
+        const marker = kind === 'number' ? '1.' : (m[2] === '-' || m[2] === '*' ? store.detectMatchingBullet(obj.page, obj.id) : m[2])
+        const indent = markerWidth(marker, s, store.m)
+        const body = next.slice(start + m[0].length)
+        const rest = next.slice(0, start)
+        const info = { kind, marker, indent, start: 1, externalId: null }
+        const rebuilt = rest + (kind === 'number' ? '1. ' : `${marker} `) + body
+        push(rebuilt, info, rebuilt.length - body.length)
+        return
+      }
     }
-    setVal(v)
-    clearTimeout(deb.current)
-    deb.current = setTimeout(() => store.setPreview({ kind: target.kind, id: target.id }, v), 120)
+    push(next, list, null)
+    caret.current = null
   }
+
+  const insert = (text, at) => push(val.slice(0, at) + text + val.slice(at), list, at + text.length)
+
+  const onKeyDown = (e) => {
+    e.stopPropagation()
+    if (e.key === 'Escape') return cancel()
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    const ta = ref.current, pos = ta.selectionStart
+    const { start, end, line } = lineAt(val, pos)
+
+    if (e.shiftKey) { insert('\n', pos); return }              // soft break → continuation, indented
+
+    const p = parseMarker(line)
+    if (list && p) {
+      if (!p.body.trim()) {                                    // empty item → clear marker, unindent
+        const next = val.slice(0, start) + val.slice(end)
+        const stillList = hasAnyMarker(next)
+        push(next, stillList ? list : null, start)
+        return
+      }
+      const suffix = /\d+([.)])/.exec(p.marker)?.[1] ?? '.'
+      const nextMarker = list.kind === 'number'
+        ? `${(parseInt(p.marker, 10) || 1) + 1}${suffix} `
+        : `${p.marker} `
+      insert('\n' + nextMarker, end)
+      return
+    }
+    if (list) {                                                // continuation line → new item
+      const marker = list.kind === 'number' ? `${(list.start || 1) + val.split('\n').length}. ` : `${list.marker} `
+      insert('\n' + marker, end)
+      return
+    }
+    commit()                                                   // plain text: Enter applies (unchanged)
+  }
+
   const commit = () => {
     if (done.current) return; done.current = true
     clearTimeout(deb.current); store.clearPreview()
-    const committed = isBlock
-      ? store.doc.blocks?.find((b) => b.id === target.id)?.text
-      : store.doc.els[target.id]?.text
-    if (val !== committed) {
-      if (isBlock) store.setBlockText(obj.id, val)
-      else store.setText(obj.id, val)
-    }
+    if (isBlock) { if (val !== obj.text) store.setBlockText(obj.id, val) }
+    else if (val !== obj.text || JSON.stringify(list) !== JSON.stringify(obj.list ?? null))
+      store.setTextWithList(obj.id, val, list)
     onDone()
   }
   const cancel = () => { done.current = true; clearTimeout(deb.current); store.clearPreview(); onDone() }
 
   const lineCount = useMemo(() => {
     if (!wrap) return val.split('\n').length
-    return wrapText(val, Math.max(10, regionW / zoom), s, store.m).length
-  }, [val, wrap, regionW, zoom, s, store.m])
-  const lh = s.size * zoom * s.lineHeight
+    const probe = { ...obj, text: val, list, wrap: true, maxW: regionW / zoom }
+    return layoutElement(probe, store.m, doc).lines.length
+  }, [val, list, wrap, regionW, zoom, obj, store.m, doc])
+
   const width = wrap ? regionW : Math.max(regionW, css.width + 24)
   const measure = store.m.width(val.split('\n').reduce((a, b) => (b.length > a.length ? b : a), ''), s)
   const over = !wrap && !isBlock && measure > obj.maxW + 0.5
 
   return (
     <>
-      <textarea ref={ref} className={`pe-edit${wrap ? ' wrap' : ''}`} aria-label="Edit text" data-testid="text-editor" value={val} wrap={wrap ? 'soft' : 'off'}
-        onChange={onChange} onBlur={commit}
-        onKeyDown={(e) => {
-          e.stopPropagation()
-          if (e.key === 'Escape') cancel()
-          else if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault(); commit()
-          } else if (e.key === 'Enter' && e.shiftKey) {
-            const ta = ref.current
-            if (!ta) return
-            const pos = ta.selectionStart
-            const before = val.slice(0, pos)
-            const after = val.slice(ta.selectionEnd)
-            const curLine = before.split('\n').pop() || ''
-            const bulletMatch = curLine.match(/^(\s*)([-•–*▪◦·●])\s*/)
-            const numberMatch = curLine.match(/^(\s*)(\d+)([.)])\s*/)
-            if (bulletMatch) {
-              if (curLine.trim() === bulletMatch[2]) {
-                e.preventDefault()
-                const lineStart = pos - curLine.length
-                const nVal = val.slice(0, lineStart) + after
-                setVal(nVal)
-                setTimeout(() => { if (ref.current) ref.current.selectionStart = ref.current.selectionEnd = lineStart }, 0)
-                return
-              }
-              e.preventDefault()
-              const ins = `\n${bulletMatch[1]}${bulletMatch[2]} `
-              const nVal = before + ins + after
-              setVal(nVal)
-              setTimeout(() => { if (ref.current) ref.current.selectionStart = ref.current.selectionEnd = pos + ins.length }, 0)
-              store.setPreview({ kind: target.kind, id: target.id }, nVal)
-            } else if (numberMatch) {
-              if (curLine.trim() === `${numberMatch[2]}${numberMatch[3]}`) {
-                e.preventDefault()
-                const lineStart = pos - curLine.length
-                const nVal = val.slice(0, lineStart) + after
-                setVal(nVal)
-                setTimeout(() => { if (ref.current) ref.current.selectionStart = ref.current.selectionEnd = lineStart }, 0)
-                return
-              }
-              e.preventDefault()
-              const nextNum = parseInt(numberMatch[2], 10) + 1
-              const ins = `\n${numberMatch[1]}${nextNum}${numberMatch[3]} `
-              const nVal = before + ins + after
-              setVal(nVal)
-              setTimeout(() => { if (ref.current) ref.current.selectionStart = ref.current.selectionEnd = pos + ins.length }, 0)
-              store.setPreview({ kind: target.kind, id: target.id }, nVal)
-            }
-          }
-        }}
+      <textarea ref={ref} className={`pe-edit${wrap ? ' wrap' : ''}`} value={val} wrap={wrap ? 'soft' : 'off'}
+        onChange={onChange} onBlur={commit} onKeyDown={onKeyDown} aria-label="Edit text" data-testid="text-editor"
         style={{ left: css.left - 2, top: css.top - 2, width, height: Math.max(css.height, lineCount * lh) + 4, fontFamily: FONT_CSS[s.family], fontSize: s.size * zoom, lineHeight: `${lh}px`, fontWeight: s.bold ? 700 : 400, fontStyle: s.italic ? 'italic' : 'normal', color: hex(s.color), textAlign: s.align === 'justify' ? 'left' : s.align, letterSpacing: s.charSpacing * zoom, textDecoration: [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean).join(' ') || 'none' }} />
       <div className={`pe-hint${over ? ' bad' : ''}`} style={{ left: css.left, top: css.top + Math.max(css.height, lineCount * lh) + 8 }}>
-        {over ? `Wider than its region by ${Math.round(measure - obj.maxW)} pt: it will be flagged` : 'Enter to apply · Shift+Enter new line · Esc to cancel'}
+        {over ? `Wider than its region by ${Math.round(measure - obj.maxW)} pt: it will be flagged` : 'Enter to apply · Shift+Enter soft break · Esc to cancel'}
       </div>
     </>
   )
@@ -160,7 +165,12 @@ function PageView({ session, store, doc, index, zoom, boxOf, overlays, issues, l
     const id = store.addText(Math.min(index, doc.pages.length - 1), x, y)
     setTool(null); setEditing({ kind: 'el', id })
   }
-  const items = overlays[index] || []
+  const markerIds = useMemo(() => {
+    const s = new Set()
+    for (const id of doc.order) { const e = doc.els[id]; if (e?.list?.externalId) s.add(e.list.externalId) }
+    return s
+  }, [doc])
+  const items = (overlays[index] || []).filter((o) => !markerIds.has(o.id))
   return (
     <div ref={wrap} className={`pe-page${pp.src === null ? ' added' : ''}${tool === 'add' ? ' tool-add' : ''}`} data-page={index} data-testid={`page-${index}`}
       style={{ width: pp.w * zoom, height: pp.h * zoom }} onMouseDown={onPageDown}>

@@ -1,7 +1,7 @@
 // Editor store: immutable document operations + undo/redo history. Framework-agnostic (React subscribes via useSyncExternalStore).
-import type { DocState, TextElement, TextStyle, Block, Role, RGB, Squeeze } from './types.ts'
+import type { DocState, TextElement, TextStyle, Block, Role, RGB, Squeeze, ListInfo, ListKind } from './types.ts'
 import type { Measurer } from './fonts.ts'
-import { elementIssues } from './layout.ts'
+import { elementIssues, layoutElement } from './layout.ts'
 import type { Issue } from './layout.ts'
 import { reconstruct, layoutFlow, flowWarnings } from './reflow.ts'
 import { isChanged } from './plan.ts'
@@ -10,6 +10,10 @@ import type { CascadeResult } from './flow.ts'
 import { intersects } from './geometry.ts'
 import type { Rect } from './geometry.ts'
 import { findSections } from './sections.ts'
+import {
+  companionOf, detectMatchingBullet, applyList, stripList, parseMarker,
+  hasAnyMarker, markerWidth, renumberLists, derivePitchRatio, isMarkerOnly, exportMarker,
+} from './lists.ts'
 
 export type Target = { kind: 'el' | 'block'; id: string }
 const HISTORY_LIMIT = 100
@@ -27,7 +31,7 @@ export class EditorStore {
   m: Measurer
   private listeners = new Set<() => void>()
   private issueCache: { doc: DocState; value: IssueReport } | null = null
-  private preview: { target: Target; text: string } | null = null
+  private preview: { target: Target; text: string; list: ListInfo | null } | null = null
   private flowCache: { doc: DocState; value: CascadeResult } | null = null
   lastLabel = ''
 
@@ -59,7 +63,11 @@ export class EditorStore {
   }
   select(t: Target | null) { this.selection = t; this.emit() }
 
-  setPreview(target: Target, text: string) { this.preview = { target, text }; this.emit() }
+  setPreview(targetOrId: Target | string, text: string, list: ListInfo | null = null) {
+    const target: Target = typeof targetOrId === 'string' ? { kind: 'el', id: targetOrId } : targetOrId
+    this.preview = { target, text, list }
+    this.emit()
+  }
   clearPreview() { if (this.preview) { this.preview = null; this.emit() } }
 
   effectiveDoc(): DocState {
@@ -68,30 +76,8 @@ export class EditorStore {
     const d = this.doc
     if (p.target.kind === 'el') {
       const e = d.els[p.target.id]
-      if (!e || e.text === p.text) return d
-      const els = { ...d.els, [p.target.id]: { ...e, text: p.text } }
-      const bulletMarkerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s+/
-      if (bulletMarkerRegex.test(p.text)) {
-        const bulletGlyphRegex = /^\s*[-•–*▪◦·●]\s*$/
-        for (const otherId of d.order) {
-          if (otherId === p.target.id) continue
-          const other = els[otherId]
-          if (!other || other.deleted || other.page !== e.page) continue
-          if (Math.abs(other.origBaseline - e.origBaseline) < 2) {
-            if (other.origX < e.origX && e.origX - (other.origX + other.origBox.w) < 35) {
-              if (bulletGlyphRegex.test(other.text)) {
-                els[otherId] = { ...other, deleted: true }
-                const origX = other.origX
-                const extraW = e.origX - origX
-                const origBox = { ...e.origBox, x: origX, w: e.origBox.w + extraW }
-                els[p.target.id] = { ...e, text: p.text, origX, x: origX, origBox, maxW: Math.max(e.maxW, origBox.w) }
-                break
-              }
-            }
-          }
-        }
-      }
-      return { ...d, els }
+      if (!e || (e.text === p.text && e.list === p.list)) return d
+      return { ...d, els: { ...d.els, [p.target.id]: { ...e, text: p.text, list: p.list } } }
     }
     return d.blocks ? { ...d, blocks: d.blocks.map((b) => (b.id === p.target.id ? { ...b, text: p.text, edited: true } : b)) } : d
   }
@@ -142,34 +128,11 @@ export class EditorStore {
   }
   private editable(e: TextElement) { return !e.locked || !!e.cover || e.created }
   setText(id: string, text: string) {
-    return this.commit('Edit text', (d) => {
-      const e = d.els[id]
-      if (!e || !this.editable(e) || e.text === text) return d
-      const els = { ...d.els }
-      const bulletMarkerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s+/
-      if (bulletMarkerRegex.test(text)) {
-        const bulletGlyphRegex = /^\s*[-•–*▪◦·●]\s*$/
-        for (const otherId of d.order) {
-          if (otherId === id) continue
-          const other = els[otherId]
-          if (!other || other.deleted || other.page !== e.page) continue
-          if (Math.abs(other.origBaseline - e.origBaseline) < 2) {
-            if (other.origX < e.origX && e.origX - (other.origX + other.origBox.w) < 35) {
-              if (bulletGlyphRegex.test(other.text)) {
-                els[otherId] = { ...other, deleted: true }
-                const origX = other.origX
-                const extraW = e.origX - origX
-                const origBox = { ...e.origBox, x: origX, w: e.origBox.w + extraW }
-                els[id] = { ...e, text, origX, x: origX, origBox, maxW: Math.max(e.maxW, origBox.w), wrap: d.flow?.enabled ? true : e.wrap }
-                return { ...d, els }
-              }
-            }
-          }
-        }
-      }
-      els[id] = { ...e, text, wrap: d.flow?.enabled ? true : e.wrap }
-      return { ...d, els }
-    })
+    const e = this.doc.els[id]
+    if (e?.list || hasAnyMarker(text)) {
+      return this.setTextWithList(id, text, e?.list ?? null)
+    }
+    return this.commit('Edit text', (d) => this.patchEl(d, id, (el) => (!this.editable(el) || el.text === text ? el : { ...el, text, wrap: d.flow?.enabled ? true : el.wrap })))
   }
   setStyle(patch: Partial<TextStyle>, label = 'Format') {
     const s = this.selection; if (!s) return false
@@ -181,10 +144,26 @@ export class EditorStore {
   deleteSelected() {
     const s = this.selection; if (!s) return false
     if (s.kind === 'block') return this.commit('Delete paragraph', (d) => ({ ...d, blocks: d.blocks!.map((b) => (b.id === s.id ? { ...b, included: false } : b)), els: this.markDeleted(d, d.blocks!.find((b) => b.id === s.id)!.lineIds) }))
-    return this.commit('Delete text', (d) => this.patchEl(d, s.id, (e) => (this.editable(e) ? { ...e, deleted: true } : e)))
+    return this.commit('Delete text', (d) => {
+      const e = d.els[s.id]; if (!e || !this.editable(e)) return d
+      const els = { ...d.els, [s.id]: { ...e, deleted: true } }
+      this.deleteCompanions(d, e, els, true)
+      return this.finishList({ ...d, els })
+    })
   }
   private markDeleted(d: DocState, ids: string[]) { const els = { ...d.els }; for (const i of ids) if (!els[i].locked) els[i] = { ...els[i], deleted: true }; return els }
-  restoreDeleted(id: string) { return this.commit('Restore text', (d) => this.patchEl(d, id, (e) => (e.deleted ? { ...e, deleted: false } : e))) }
+  restoreDeleted(id: string) {
+    return this.commit('Restore text', (d) => {
+      const e = d.els[id]; if (!e?.deleted) return d
+      const els = { ...d.els, [id]: { ...e, deleted: false } }
+      this.deleteCompanions(d, e, els, false)
+      return this.finishList({ ...d, els })
+    })
+  }
+  private deleteCompanions(d: DocState, e: TextElement, els: Record<string, TextElement>, deleted: boolean) {
+    const ids = [e.list?.externalId, companionOf(d, e)?.id].filter(Boolean) as string[]
+    for (const cid of ids) { const a = els[cid]; if (a && !a.locked) els[cid] = { ...a, deleted } }
+  }
   addText(page: number, x: number, baseline: number, text = 'New text') {
     const d0 = this.doc
     const base = d0.order.map((k) => d0.els[k]).find((e) => e.page === page && !e.locked)?.style
@@ -417,182 +396,138 @@ export class EditorStore {
     })
   }
 
-  findCompanionBulletAnchor(elId: string): TextElement | null {
-    const d = this.effectiveDoc()
-    const el = d.els[elId]
-    if (!el || el.deleted) return null
-    const bulletGlyphRegex = /^\s*[-•–*▪◦·●]\s*$/
-    for (const otherId of d.order) {
-      if (otherId === elId) continue
-      const other = d.els[otherId]
-      if (!other || other.deleted || other.page !== el.page) continue
-      if (Math.abs(other.origBaseline - el.origBaseline) < 2) {
-        if (other.origX < el.origX && el.origX - (other.origX + other.origBox.w) < 35) {
-          if (bulletGlyphRegex.test(other.text)) return other
-        }
-      }
-    }
-    return null
+  listKindOf(id: string): ListKind | null {
+    const e = this.doc.els[id]
+    if (!e) return null
+    if (e.list) return e.list.kind
+    const c = companionOf(this.doc, e)
+    if (c) return /^\d/.test(c.text.trim()) ? 'number' : 'bullet'
+    const p = parseMarker(e.text.split('\n')[0] ?? '')
+    return p ? p.kind : null
   }
 
-  listState(target: { kind: 'el' | 'block'; id: string } | null): { bullet: boolean; numbered: boolean } {
+  listState(target: Target | null): { bullet: boolean; numbered: boolean } {
     if (!target) return { bullet: false, numbered: false }
-    const d = this.effectiveDoc()
-    const isBlock = target.kind === 'block'
-    const obj = isBlock ? d.blocks?.find((b) => b.id === target.id) : d.els[target.id]
-    if (!obj || !obj.text.trim()) return { bullet: false, numbered: false }
-    const firstLine = obj.text.split('\n')[0]
-    const hasCompanion = !isBlock && !!this.findCompanionBulletAnchor(target.id)
+    const kind = this.listKindOf(target.id)
     return {
-      bullet: hasCompanion || /^\s*[-•–*▪◦·●]\s*/.test(firstLine),
-      numbered: /^\s*\d+[.)]\s*/.test(firstLine)
+      bullet: kind === 'bullet',
+      numbered: kind === 'number',
     }
   }
 
-  detectMatchingBullet(page?: number): string {
-    const d = this.effectiveDoc()
-    const counts = new Map<string, number>()
-    const regex = /^\s*([●•▪◦–\-*·])/
-    const els = Object.values(d.els)
-    const pageEls = page !== undefined ? els.filter((e) => e.page === page) : els
+  detectMatchingBullet(page?: number, nearId?: string) { return detectMatchingBullet(this.doc, page, nearId) }
 
-    for (const el of pageEls) {
-      for (const line of el.text.split('\n')) {
-        const m = line.match(regex)
-        if (m) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
-      }
-    }
-    if (!counts.size && page !== undefined) {
-      for (const el of els) {
-        for (const line of el.text.split('\n')) {
-          const m = line.match(regex)
-          if (m) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1)
-        }
-      }
-    }
-    let bestChar = '•', maxCount = 0
-    for (const [char, count] of counts.entries()) {
-      if (count > maxCount) { maxCount = count; bestChar = char }
-    }
-    return bestChar
+  toggleBullet(targetOrId: Target | string | null) {
+    const id = typeof targetOrId === 'string' ? targetOrId : targetOrId?.id
+    if (!id) return false
+    return this.toggleList(id, 'bullet')
   }
 
-  toggleBullet(target: { kind: 'el' | 'block'; id: string } | null) {
-    if (!target) return
-    const d = this.effectiveDoc()
-    const isBlock = target.kind === 'block'
-    const obj = isBlock ? d.blocks?.find((b) => b.id === target.id) : d.els[target.id]
-    if (!obj) return
-    const text = obj.text
-    const bulletChar = this.detectMatchingBullet((obj as any).page)
-    const markerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s*/
-    const bulletRegex = /^\s*[-•–*▪◦·●]\s*/
-    const lines = text.split('\n')
+  toggleNumber(targetOrId: Target | string | null) {
+    const id = typeof targetOrId === 'string' ? targetOrId : targetOrId?.id
+    if (!id) return false
+    return this.toggleList(id, 'number')
+  }
 
-    const companion = !isBlock ? this.findCompanionBulletAnchor(target.id) : null
-    const hasCompanion = !!companion
-    const allBulleted = lines.every((l) => l.trim().length === 0 || bulletRegex.test(l))
-    const isCurrentlyBullet = hasCompanion || allBulleted
+  toggleList(id: string, kind: ListKind) {
+    const cur = this.listKindOf(id)
+    return this.commitList(cur === kind ? `Remove ${kind} list` : `${kind === 'bullet' ? 'Bulleted' : 'Numbered'} list`,
+      (d) => this.applyListTo(d, id, cur === kind ? null : kind))
+  }
 
-    let newText = ''
-    if (isCurrentlyBullet) {
-      newText = lines.map((l) => l.replace(bulletRegex, '')).join('\n')
-      if (hasCompanion) {
-        this.commit('Remove bullet list', (curDoc) => {
-          const els = { ...curDoc.els }
-          const comp = els[companion!.id]
-          const curEl = els[target.id]
-          if (comp) els[companion!.id] = { ...comp, deleted: true }
-          if (curEl) {
-            const origX = comp ? comp.origX : curEl.origX
-            const extraW = curEl.origX - origX
-            const origBox = { ...curEl.origBox, x: origX, w: curEl.origBox.w + extraW }
-            els[target.id] = { ...curEl, text: newText, origX, x: origX, origBox, maxW: Math.max(curEl.maxW, origBox.w) }
-          }
-          return { ...curDoc, els }
-        })
-        return
+  setListMarker(id: string, marker: string) {
+    return this.commitList('Bullet style', (d) => {
+      const e = d.els[id]; if (!e?.list || e.list.kind !== 'bullet') return d
+      const els = { ...d.els }
+      if (e.list.externalId) { const a = els[e.list.externalId]; if (a) els[a.id] = { ...a, deleted: true } }
+      const indent = markerWidth(marker, e.style, this.m)
+      const ne: TextElement = { ...e, text: applyList(e.text, 'bullet', marker), list: { ...e.list, marker, indent, externalId: null } }
+      els[id] = ne
+      return { ...d, els }
+    })
+  }
+
+  setTextWithList(id: string, text: string, list: ListInfo | null) {
+    this.clearPreview()
+    return this.commitList('Edit text', (d) => {
+      const e = d.els[id]; if (!e || !this.editable(e)) return d
+      const els = { ...d.els }
+      let ne: TextElement = { ...e, text }
+      const want = list && hasAnyMarker(text) ? list : null
+      if (!want && e.list?.externalId) { const a = els[e.list.externalId]; if (a) els[a.id] = { ...a, deleted: true } }
+      if (!want && !e.list) {
+        const c = companionOf(d, e)
+        if (c && hasAnyMarker(text)) return this.applyListTo(d, id, parseMarker(text.split('\n')[0])!.kind)
+      }
+      ne.list = want ? { ...want } : null
+      if (ne.list?.kind === 'number') {
+        const suffix = /\d+([.)])/.exec(ne.list.marker)?.[1] ?? '.'
+        ne.text = applyList(text, 'number', ne.list.marker, ne.list.start || 1, suffix)
+      }
+      els[id] = ne
+      return this.finishList({ ...d, els })
+    })
+  }
+
+  private commitList(label: string, fn: (d: DocState) => DocState) {
+    return this.commit(label, (d) => {
+      const next = fn(d)
+      return next === d ? d : this.finishList(next)
+    })
+  }
+
+  private finishList(d: DocState): DocState {
+    const pitchRatio = d.flow?.pitchRatio ?? derivePitchRatio(d)
+    const patch = renumberLists(d)
+    const els = patch ? { ...d.els, ...patch } : d.els
+    return { ...d, els, flow: { ...(d.flow ?? { enabled: false, squeeze: null }), pitchRatio } }
+  }
+
+  private applyListTo(d: DocState, id: string, kind: ListKind | null): DocState {
+    const e = d.els[id]
+    if (!e || !this.editable(e)) return d
+    const els = { ...d.els }
+    const comp = companionOf(d, e)
+    let ne: TextElement = { ...e }
+
+    if (kind === null) {
+      if (e.list?.externalId) { const a = els[e.list.externalId]; if (a) els[a.id] = { ...a, deleted: true } }
+      if (comp && !comp.deleted) els[comp.id] = { ...comp, deleted: true }
+      ne = { ...ne, text: stripList(ne.text), list: null }
+      els[id] = ne
+      return { ...d, els }
+    }
+
+    let marker = kind === 'number' ? '1.' : this.detectMatchingBullet(e.page, id)
+    let indent = e.list?.indent ?? 0
+    let externalId: string | null = null
+
+    if (comp) {
+      const delta = Math.max(0, e.origX - comp.origX)
+      indent = Math.max(6, delta)
+      ne.x = comp.origX; ne.origX = comp.origX
+      ne.origBox = { ...e.origBox, x: comp.origX, w: e.origBox.w + delta }
+      ne.maxW = e.maxW + delta
+      const glyph = comp.text.trim()
+      if (kind === 'bullet') {
+        marker = glyph
+        const encodable = this.m.canEncode(ne.style.family, glyph).length === 0
+        if (!encodable && !comp.locked) { externalId = comp.id; els[comp.id] = { ...comp, deleted: false } }
+        else els[comp.id] = { ...comp, deleted: true }
+      } else {
+        els[comp.id] = { ...comp, deleted: true }
       }
     } else {
-      newText = lines.map((l) => {
-        const clean = l.replace(markerRegex, '')
-        return `${bulletChar} ${clean}`
-      }).join('\n')
-      if (hasCompanion) {
-        this.commit('Add bullet list', (curDoc) => {
-          const els = { ...curDoc.els }
-          const comp = els[companion!.id]
-          const curEl = els[target.id]
-          if (comp) els[companion!.id] = { ...comp, deleted: true }
-          if (curEl) {
-            const origX = comp ? comp.origX : curEl.origX
-            const extraW = curEl.origX - origX
-            const origBox = { ...curEl.origBox, x: origX, w: curEl.origBox.w + extraW }
-            els[target.id] = { ...curEl, text: newText, origX, x: origX, origBox, maxW: Math.max(curEl.maxW, origBox.w), wrap: curDoc.flow?.enabled ? true : curEl.wrap }
-          }
-          return { ...curDoc, els }
-        })
-        return
-      }
-    }
-    if (isBlock) this.setBlockText(target.id, newText)
-    else this.setText(target.id, newText)
-  }
-
-  toggleNumber(target: { kind: 'el' | 'block'; id: string } | null) {
-    if (!target) return
-    const d = this.effectiveDoc()
-    const isBlock = target.kind === 'block'
-    const obj = isBlock ? d.blocks?.find((b) => b.id === target.id) : d.els[target.id]
-    if (!obj) return
-    const text = obj.text
-    const numberRegex = /^\s*(\d+)[.)]\s*/
-    const markerRegex = /^\s*([-•–*▪◦·●]|\d+[.)])\s*/
-    const lines = text.split('\n')
-
-    const companion = !isBlock ? this.findCompanionBulletAnchor(target.id) : null
-    const allNumbered = lines.every((l) => l.trim().length === 0 || numberRegex.test(l))
-    let newText = ''
-    if (allNumbered) {
-      newText = lines.map((l) => l.replace(numberRegex, '')).join('\n')
-    } else {
-      let startNum = 1
-      if (!isBlock) {
-        const orderIdx = d.order.indexOf(target.id)
-        if (orderIdx > 0) {
-          const prevEl = d.els[d.order[orderIdx - 1]]
-          if (prevEl && prevEl.page === (obj as any).page) {
-            const lastLine = prevEl.text.trim().split('\n').pop() || ''
-            const prevMatch = lastLine.match(/^\s*(\d+)[.)]\s*/)
-            if (prevMatch) startNum = parseInt(prevMatch[1], 10) + 1
-          }
-        }
-      }
-      newText = lines.map((l, i) => {
-        const clean = l.replace(markerRegex, '')
-        return `${startNum + i}. ${clean}`
-      }).join('\n')
+      indent = indent || markerWidth(marker, ne.style, this.m)
+      if (kind === 'bullet' && exportMarker(marker, ne.style.family, this.m).substituted)
+        marker = exportMarker(marker, ne.style.family, this.m).glyph
     }
 
-    if (companion) {
-      this.commit(allNumbered ? 'Remove numbered list' : 'Add numbered list', (curDoc) => {
-        const els = { ...curDoc.els }
-        const comp = els[companion.id]
-        const curEl = els[target.id]
-        if (comp) els[companion.id] = { ...comp, deleted: true }
-        if (curEl) {
-          const origX = comp ? comp.origX : curEl.origX
-          const extraW = curEl.origX - origX
-          const origBox = { ...curEl.origBox, x: origX, w: curEl.origBox.w + extraW }
-          els[target.id] = { ...curEl, text: newText, origX, x: origX, origBox, maxW: Math.max(curEl.maxW, origBox.w), wrap: curDoc.flow?.enabled ? true : curEl.wrap }
-        }
-        return { ...curDoc, els }
-      })
-      return
-    }
-
-    if (isBlock) this.setBlockText(target.id, newText)
-    else this.setText(target.id, newText)
+    ne.wrap = true
+    ne.list = { kind, marker, indent, start: 1, externalId }
+    ne.text = applyList(ne.text, kind, marker, 1, /\d+([.)])/.exec(marker)?.[1] ?? '.')
+    els[id] = ne
+    return { ...d, els }
   }
 }
 export type IssueReport = { byId: Record<string, Issue[]>; all: Issue[]; flow: string[]; pageCount: number }
