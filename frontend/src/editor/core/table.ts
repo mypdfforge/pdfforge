@@ -2,8 +2,12 @@
 import type { DocState, TextElement, FlowObject, Rect, TableCell, TableModel } from './types.ts'
 import type { Measurer } from './fonts.ts'
 import { wrapText, placeLines } from './layout.ts'
+import type { Tok } from './objects.ts'
 
 export type { TableCell, TableModel }
+
+/** Path-construction and paint operators: the only instructions a table may remove when it redraws its borders. */
+const SHAPE_OPS = new Set(['m', 'l', 'c', 'v', 'y', 'h', 're', 'S', 's', 'f', 'F', 'f*', 'B', 'B*', 'b', 'b*'])
 
 const cluster = (vals: number[], tol: number) => {
   const s = [...vals].sort((a, b) => a - b), out: number[] = []
@@ -15,7 +19,7 @@ const cluster = (vals: number[], tol: number) => {
 }
 
 /** Ruling-line grid detection. Requires real intersections, so stray rules don't become tables. */
-export function detectTables(objs: FlowObject[], els: TextElement[], page: number): TableModel[] {
+export function detectTables(objs: FlowObject[], els: TextElement[], page: number, toks?: Tok[]): TableModel[] {
   const H = objs.filter((o) => o.page === page && o.rect.h <= 3 && o.rect.w >= 24)
   const V = objs.filter((o) => o.page === page && o.rect.w <= 3 && o.rect.h >= 12)
   if (H.length < 2 || V.length < 2) return []
@@ -50,7 +54,8 @@ export function detectTables(objs: FlowObject[], els: TextElement[], page: numbe
   return [{
     id: `t${page}_${Math.round(rect.x)}_${Math.round(rect.y)}`,
     page, rect, xs, ys, cells,
-    ruleOps: [...H, ...V].flatMap((o) => o.ops),
+    // An object's ops also hold every instruction since the previous paint, including cell text (BT/Tj/ET). Keep shapes only.
+    ruleOps: [...new Set([...H, ...V].flatMap((o) => o.ops))].filter((i) => !toks || SHAPE_OPS.has(toks[i]?.op ?? '')),
     ruleColor: H[0].color,
     headerRows: 1, padX: 4, padY: 3, confidence: 'high'
   }]

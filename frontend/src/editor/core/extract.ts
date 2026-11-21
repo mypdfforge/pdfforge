@@ -130,7 +130,7 @@ export async function extractDocument(pdf: any, analyses: (i: number) => Promise
       const pageObjs = scanObjects(toks, tempDoc, i)
       objects.push(...pageObjs)
       const pageEls = order.filter((k) => els[k].page === i).map((k) => els[k])
-      const pageTables = detectTables(pageObjs, pageEls, i)
+      const pageTables = detectTables(pageObjs, pageEls, i, toks)
       tables.push(...pageTables)
     }
   }

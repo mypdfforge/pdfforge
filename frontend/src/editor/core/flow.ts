@@ -31,7 +31,9 @@ const SPAN_RATIO = 0.6         // box wider than this fraction of content width 
 const MIN_LANE_MASS = 6        // chars; below this a "lane" is noise (page numbers…)
 const DEFAULT_TOP_MARGIN = 54  // matches reflow.ts default for appended pages
 const MAX_EXTRA_PAGES = 5      // safe cap: never runaway to hundreds of phantom pages
-const FURN_BAND = 36           // pt from the page edge: short text in here is header/footer furniture, it never flows
+const FURN_BAND = 36           // pt from the page edge: short text in here is always header/footer furniture
+const FOOT_ZONE = 0.12         // bottom share of the page where short text after a clear gap is footer furniture
+const FOOT_PAD = 8             // pt kept free between body text and the footer
 
 const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : 0 }
 const sameLook = (a: TextStyle, b: TextStyle) =>
@@ -195,6 +197,30 @@ type Row = {
   object?: FlowObject | null
 }
 
+/**
+ * Page furniture never flows. Footer: short text in the bottom edge band, or in the bottom FOOT_ZONE after a clear gap
+ * (plus anything stacked under it), provided nothing but furniture lies beneath. Header: short text in the top edge band.
+ * shortcut: no cross-page repetition check; add one if body text near the bottom gets pinned.
+ */
+function markFurniture(rows: Row[], pm: PageModel) {
+  const top = pm.y0 + pm.height, zone = pm.y0 + FOOT_ZONE * pm.height
+  const short = (r: Row) => !!r.anchor && !r.tableId && r.anchor.text.length < 80
+  for (const r of rows) if (short(r) && r.origBottom > top - FURN_BAND) r.pinnedFurniture = true
+  const seen: Row[] = []
+  for (const r of [...rows].sort((a, b) => b.origTop - a.origTop)) {
+    const sz = r.anchor?.style.size ?? 10
+    const inBand = r.origTop < pm.y0 + FURN_BAND
+    if (short(r) && !r.pinnedFurniture && (inBand || r.origTop < zone)) {
+      const up = seen.filter((p) => p.origBottom > r.origTop + 0.3 * sz)          // strictly above: not the same line
+      const near = up.reduce<Row | null>((a, p) => (!a || p.origBottom < a.origBottom ? p : a), null)
+      if (inBand || (near ? near.origBottom - r.origTop >= 1.8 * sz || near.pinnedFurniture : false)) r.pinnedFurniture = true
+    }
+    if (!r.pinnedFurniture && seen.some((p) => p.pinnedFurniture && p.origTop < zone && p.origBottom > r.origTop + 0.3 * sz))
+      for (const p of seen) if (p.pinnedFurniture && p.origTop < zone && p.origTop >= pm.y0 + FURN_BAND) p.pinnedFurniture = false   // body lies below: not a footer
+    seen.push(r)
+  }
+}
+
 function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, keyOf: (li: number) => number, tableElMap?: Map<string, TableRegion>): Row[] {
   const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index && (!e.locked || e.created))
   const rows: Row[] = []
@@ -206,19 +232,19 @@ function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, ke
     else {
       const t = doc.tables?.find((tbl) => tbl.page === pm.index && tbl.cells.some((c) => c.elIds.includes(e.id)))
       const tableId = t ? t.id : (tableElMap?.has(e.id) ? `tr_${pm.index}_${Math.round(tableElMap.get(e.id)!.top)}` : null)
-      const furniture = !tableId && e.text.length < 80 && (e.origBox.y + e.origBox.h < pm.y0 + FURN_BAND || e.origBox.y > pm.y0 + pm.height - FURN_BAND)
       rows.push({
         anchor: e, followers: [], lane, page: pm.index,
         origTop: e.origBox.y + e.origBox.h, origBottom: e.origBox.y,
         deleted: e.deleted, keepWithNext: false, group: -1, groupLast: false,
         tableId,
         keepTogetherId: tableId,
-        pinnedFurniture: furniture,
+        pinnedFurniture: false,
         object: null,
       })
     }
   }
   rows.forEach((r) => r.followers.sort((a, b) => a.origX - b.origX))
+  markFurniture(rows, pm)
 
   // Part B4: push one Row per inline object
   const tRules = tableRuleSet(doc, pm.index)   // table borders are redrawn by the table, not flowed as loose rows
@@ -325,7 +351,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     const base = Math.min(extracted ?? (pm.y0 + 54), pm.y0 + 36)
     let foot = -Infinity                                  // footer furniture of the matching source page
     for (const r of allRows) if (r.pinnedFurniture && !r.deleted && r.page === Math.min(p, srcCount - 1) && r.origTop < pm.y0 + pm.height / 2) foot = Math.max(foot, r.origTop)
-    return foot > -Infinity ? Math.max(base, foot + 8) : base
+    return foot > -Infinity ? Math.max(base, foot + FOOT_PAD) : base
   }
   const pageDims = (p: number) => doc.pages[Math.min(p, srcCount - 1)]
   let maxPage = srcCount - 1
@@ -715,6 +741,21 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     }
     const pm = doc.pages[Math.min(sh.page, srcCount - 1)]
     if (pm.images || pm.paints > 3) warnings.push(`Page ${sh.page + 1} has images/graphics that Live Flow cannot detect; check moved text visually.`)
+  }
+
+  // Table cells that are not flow rows (locked text) travel with their row, so text and grid stay in lockstep.
+  for (const t of doc.tables ?? []) {
+    for (let r = 0; r < t.ys.length - 1; r++) {
+      const ids = t.cells.filter((c) => c.r === r).flatMap((c) => c.elIds).filter((id) => doc.els[id] && !doc.els[id].deleted)
+      const ref = ids.map((id) => shifts.get(id)).find((s) => s && !doc.els[ids.find((i) => shifts.get(i) === s)!].locked)
+      if (!ref) continue
+      for (const id of ids) {
+        const e = doc.els[id]
+        if (!e.locked || e.cover || e.created || shifts.has(id)) continue
+        shifts.set(id, { baseline: e.origBaseline + ref.dy, page: ref.page, dy: ref.dy })
+        rects.set(id, { ...e.origBox, y: e.origBox.y + ref.dy })
+      }
+    }
   }
 
   // Anchored objects: copy dy and page from their anchor text element

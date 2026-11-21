@@ -43,7 +43,11 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
       for (const c of parts) pages[c.page].draws.push(...drawsForLines(c.lines, s))
       continue
     }
-    if (el.locked && !el.cover) continue
+    if (el.locked && !el.cover) {                      // cannot be re-drawn, but an untouched run can still travel (byte-identical)
+      if (!changed && el.movable && sh.page === el.page && Math.abs(sh.dy) >= 0.01) for (const op of el.ops) pages[el.page].edits.push({ idx: op, action: 'move', dy: sh.dy })
+      else if (!changed && Math.abs(sh.dy) >= 0.01) res.warnings.push(`Locked text on page ${el.page + 1} could not follow its table.`)
+      continue
+    }
     if (!changed && !metricsTouched && Math.abs(sh.dy) < 0.01 && sh.page === el.page) continue
     if (!changed && !metricsTouched && sh.page === el.page && el.movable) {
       for (const op of el.ops) pages[el.page].edits.push({ idx: op, action: 'move', dy: sh.dy }) // original font, byte-identical
