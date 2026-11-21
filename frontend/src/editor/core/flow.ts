@@ -8,7 +8,7 @@ import { layoutElement, placeLines, descenderOf, countFittingLines, wrapForFlow 
 import type { Line } from './layout.ts'
 import { intersects } from './geometry.ts'
 import { isChanged } from './plan.ts'
-import { layoutTable } from './table.ts'
+import { layoutTable, tableRuleSet, isTableRule } from './table.ts'
 
 export type FlowShift = { baseline: number; page: number; dy: number } // dy = baseline - origBaseline
 export type LaneBox = { page: number; x0: number; x1: number; index?: number }
@@ -31,6 +31,7 @@ const SPAN_RATIO = 0.6         // box wider than this fraction of content width 
 const MIN_LANE_MASS = 6        // chars; below this a "lane" is noise (page numbers…)
 const DEFAULT_TOP_MARGIN = 54  // matches reflow.ts default for appended pages
 const MAX_EXTRA_PAGES = 5      // safe cap: never runaway to hundreds of phantom pages
+const FURN_BAND = 36           // pt from the page edge: short text in here is header/footer furniture, it never flows
 
 const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : 0 }
 const sameLook = (a: TextStyle, b: TextStyle) =>
@@ -103,6 +104,24 @@ export function findFlowLanes(els: TextElement[], pm: PageModel): { lanes: Array
     for (const [id, li] of laneOf) if (li >= 0) laneOf.set(id, 0)
   }
   return { lanes, laneOf }
+}
+
+function tableCellIds(doc: DocState, page: number): Set<string> {
+  const s = new Set<string>()
+  for (const t of doc.tables ?? []) if (t.page === page) for (const c of t.cells) c.elIds.forEach((i) => s.add(i))
+  return s
+}
+
+/** A ruled table is one flow unit: it lives in the lane it mostly covers (spanner if it crosses a gutter),
+ *  so every column of a row moves together and its own column gaps never become lanes. */
+function assignTableLanes(doc: DocState, page: number, lanes: Array<{ x0: number; x1: number }>, laneOf: Map<string, number>) {
+  for (const t of doc.tables ?? []) {
+    if (t.page !== page) continue
+    let best = -1, ov = 0
+    lanes.forEach((l, i) => { const o = Math.min(l.x1, t.rect.x + t.rect.w) - Math.max(l.x0, t.rect.x); if (o > ov) { ov = o; best = i } })
+    const lane = best >= 0 && ov >= 0.6 * t.rect.w ? best : -1
+    for (const c of t.cells) for (const id of c.elIds) laneOf.set(id, lane)
+  }
 }
 
 export type TableRegion = {
@@ -187,13 +206,14 @@ function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, ke
     else {
       const t = doc.tables?.find((tbl) => tbl.page === pm.index && tbl.cells.some((c) => c.elIds.includes(e.id)))
       const tableId = t ? t.id : (tableElMap?.has(e.id) ? `tr_${pm.index}_${Math.round(tableElMap.get(e.id)!.top)}` : null)
+      const furniture = !tableId && e.text.length < 80 && (e.origBox.y + e.origBox.h < pm.y0 + FURN_BAND || e.origBox.y > pm.y0 + pm.height - FURN_BAND)
       rows.push({
         anchor: e, followers: [], lane, page: pm.index,
         origTop: e.origBox.y + e.origBox.h, origBottom: e.origBox.y,
         deleted: e.deleted, keepWithNext: false, group: -1, groupLast: false,
         tableId,
         keepTogetherId: tableId,
-        pinnedFurniture: false,
+        pinnedFurniture: furniture,
         object: null,
       })
     }
@@ -201,7 +221,8 @@ function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, ke
   rows.forEach((r) => r.followers.sort((a, b) => a.origX - b.origX))
 
   // Part B4: push one Row per inline object
-  for (const o of (doc.objects ?? []).filter((x) => x.page === pm.index && x.flow === 'inline' && !x.locked)) {
+  const tRules = tableRuleSet(doc, pm.index)   // table borders are redrawn by the table, not flowed as loose rows
+  for (const o of (doc.objects ?? []).filter((x) => x.page === pm.index && x.flow === 'inline' && !x.locked && !isTableRule(x, tRules))) {
     rows.push({
       anchor: null,
       object: o,
@@ -232,7 +253,7 @@ function annotate(rows: Row[], body: number): Map<number, number> {
     list.sort((a, b) => a.page - b.page || b.origTop - a.origTop)
     let prev: Row | null = null, cur = -1
     for (const r of list) {
-      if (!r.anchor) { prev = null; continue }
+      if (!r.anchor || r.pinnedFurniture) { prev = null; continue }
       const e = r.anchor
       const bullet = MARKER.test(e.text)
       const heading = (e.style.size > body * 1.12 || (e.style.bold && e.text.length < 60 && !bullet)) && e.style.size >= body
@@ -301,7 +322,10 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
   const bottomOf = (p: number) => {
     const pm = doc.pages[Math.min(p, srcCount - 1)]
     const extracted = doc.contentBottom[Math.min(p, srcCount - 1)]
-    return Math.min(extracted ?? (pm.y0 + 54), pm.y0 + 36)
+    const base = Math.min(extracted ?? (pm.y0 + 54), pm.y0 + 36)
+    let foot = -Infinity                                  // footer furniture of the matching source page
+    for (const r of allRows) if (r.pinnedFurniture && !r.deleted && r.page === Math.min(p, srcCount - 1) && r.origTop < pm.y0 + pm.height / 2) foot = Math.max(foot, r.origTop)
+    return foot > -Infinity ? Math.max(base, foot + 8) : base
   }
   const pageDims = (p: number) => doc.pages[Math.min(p, srcCount - 1)]
   let maxPage = srcCount - 1
@@ -352,7 +376,9 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
   }
   for (const pm of doc.pages) {
     const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index)
-    const { lanes, laneOf } = findFlowLanes(els, pm)
+    const tIds = tableCellIds(doc, pm.index)
+    const { lanes, laneOf } = findFlowLanes(tIds.size ? els.filter((e) => !tIds.has(e.id)) : els, pm)
+    assignTableLanes(doc, pm.index, lanes, laneOf)
     lanes.forEach((l, i) => lanesOut.push({ page: pm.index, index: i, ...l }))
     allRows.push(...buildRows(doc, pm, laneOf, keyOfPage(pm, lanes), tableElMap))
   }
@@ -377,7 +403,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     let st = states.get(lane)
     if (!st) {
       const gaps: number[] = []
-      const rs = allRows.filter((r) => r.lane === lane)
+      const rs = allRows.filter((r) => r.lane === lane && !r.pinnedFurniture)
       for (let i = 1; i < rs.length; i++) if (rs[i].page === rs[i - 1].page) gaps.push(Math.max(0, rs[i - 1].origBottom - rs[i].origTop))
       st = { flowPage: firstPage, cursor: null, carried: false, prevOrigBottom: null, prevOrigPage: firstPage, medianGap: median(gaps) || 6, placed: [] }
       states.set(lane, st)
@@ -470,7 +496,10 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     }
 
     const placed = take > 0 ? placeLines(texts.slice(from, from + take), a.x, baseline, effW, s, m, alignW) : null
-    let bottom = placed ? placed.rect.y : top - asc - descenderOf(s)
+    // Row bottom uses the ORIGINAL descent so unedited rows keep their exact pitch (no per-row drift against borders).
+    const origDesc = (a.origBaseline - a.origBox.y) * (s.size / (a.originalStyle.size || s.size))
+    const descFix = a.created ? 0 : origDesc - 0.22 * s.size
+    let bottom = placed ? placed.rect.y - descFix : top - asc - descenderOf(s)
     const rect = placed?.rect ?? { x: a.x, y: bottom, w: effW, h: Math.max(1, top - bottom) }
 
     if (!r.deleted && take > 0) {
@@ -486,7 +515,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
         const fp = layoutElement({ ...f, style: styleOf(f.style), baseline: fb }, m)
         shifts.set(f.id, { baseline: fb, page, dy: fb - f.origBaseline })
         rects.set(f.id, fp.rect)
-        bottom = Math.min(bottom, fp.rect.y)
+        bottom = Math.min(bottom, fp.rect.y - (f.created ? 0 : (f.origBaseline - f.origBox.y) * (f.style.size / (f.originalStyle.size || f.style.size)) - 0.22 * f.style.size))
       }
     }
     maxPage = Math.max(maxPage, page)
@@ -605,6 +634,16 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
   }
 
   for (const r of allRows) {
+    // ---- header/footer furniture: stays put, outside every lane ----
+    if (r.pinnedFurniture) {
+      for (const e of [r.anchor!, ...r.followers]) {
+        if (e.deleted) continue
+        shifts.set(e.id, { baseline: e.baseline, page: e.page, dy: e.baseline - e.origBaseline })
+        rects.set(e.id, isChanged(e) ? layoutElement(e, m).rect : e.origBox)
+      }
+      maxPage = Math.max(maxPage, r.page)
+      continue
+    }
     // ---- spanner: full-width barrier across all lanes ----
     if (r.lane < 0) {
       const laneStates = [...states.values()]
@@ -690,3 +729,4 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
 
   return { shifts, rects, pageBox, pageCount: pageBox.length, lanes: lanesOut, warnings: [...new Set(warnings)], chunks, repeats, objectShifts }
 }
+

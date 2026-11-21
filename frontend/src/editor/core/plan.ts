@@ -5,7 +5,7 @@ import { layoutElement } from './layout.ts'
 import type { Line } from './layout.ts'
 import { reflowPlan } from './reflow.ts'
 import { cascadeVerticalShift } from './flow.ts'
-import { layoutTable } from './table.ts'
+import { flowedGrid, tableRuleSet, isTableRule } from './table.ts'
 
 const sameStyle = (a: TextStyle, b: TextStyle) => JSON.stringify(a) === JSON.stringify(b)
 export const isChanged = (e: TextElement) =>
@@ -73,6 +73,7 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
 
   // Part B4: Objects (images, rules, vectors)
   for (const o of doc.objects ?? []) {
+    if (isTableRule(o, tableRuleSet(doc, o.page))) continue       // owned by Part C
     const sh = res.objectShifts?.get(o.id) ?? (o.anchorId ? res.shifts.get(o.anchorId) : undefined)
     if (!sh || (Math.abs(sh.dy) < 0.01 && sh.page === o.page)) continue
     if (o.locked) { res.warnings.push(`"${o.kind}" on page ${o.page + 1} could not move: ${o.locked}`); continue }
@@ -86,28 +87,17 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
     }
   }
 
-  // Part C: Tables in cascade plan (remove old ruleOps, redraw crisp grid at new rowYs)
+  // Part C: tables. Borders are redrawn from where the cascade actually put the cell text.
   for (const t of doc.tables ?? []) {
-    const firstCellId = t.cells[0]?.elIds[0]
-    const sh = firstCellId ? res.shifts.get(firstCellId) : undefined
-    if (!sh || (Math.abs(sh.dy) < 0.01 && sh.page === t.page)) continue
-
-    for (const op of t.ruleOps) {
-      if (pages[t.page]) pages[t.page].edits.push({ idx: op, action: 'remove' })
-    }
-
-    const targetPage = sh.page
-    const top = t.rect.y + t.rect.h + sh.dy
-    const placed = layoutTable(t, doc, m, top)
-    const dest = pages[targetPage]
-    if (dest) {
-      const x0 = t.xs[0], x1 = t.xs[t.xs.length - 1], w = x1 - x0
-      for (const y of placed.rowYs) {
-        dest.draws.push({ kind: 'rect', x: x0, y: y - 0.5, w, h: 1, color: t.ruleColor })
-      }
-      for (const x of t.xs) {
-        dest.draws.push({ kind: 'rect', x: x - 0.5, y: placed.bottom, w: 1, h: placed.height, color: t.ruleColor })
-      }
+    const segs = flowedGrid(t, doc, res)
+    if (!segs) continue
+    for (const op of t.ruleOps) pages[t.page]?.edits.push({ idx: op, action: 'remove' })
+    const x0 = t.xs[0], w = t.xs[t.xs.length - 1] - x0
+    for (const g of segs) {
+      const dest = pages[g.page]; if (!dest) continue
+      const bottom = g.ys[g.ys.length - 1]
+      for (const y of g.ys) dest.draws.push({ kind: 'rect', x: x0, y: y - 0.5, w, h: 1, color: t.ruleColor })
+      for (const x of t.xs) dest.draws.push({ kind: 'rect', x: x - 0.5, y: bottom, w: 1, h: g.ys[0] - bottom, color: t.ruleColor })
     }
   }
   return { pages }
@@ -131,3 +121,4 @@ export function buildPlan(doc: DocState, m: Measurer): Plan {
   }
   return { pages }
 }
+

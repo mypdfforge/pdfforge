@@ -90,3 +90,53 @@ export function layoutTable(t: TableModel, doc: DocState, m: Measurer, top: numb
   }
   return { top, bottom: rowYs[rowYs.length - 1], height: top - rowYs[rowYs.length - 1], rowYs, cellLines }
 }
+
+
+/** Paint-op indices of a table's ruling lines on `page`. The table redraws these itself; the generic object pass must not touch them. */
+export function tableRuleSet(doc: DocState, page: number): Set<number> {
+  const s = new Set<number>()
+  for (const t of doc.tables ?? []) if (t.page === page) for (const i of t.ruleOps) s.add(i)
+  return s
+}
+export const isTableRule = (o: FlowObject, rules: Set<number>) => rules.has(o.ops[o.ops.length - 1])
+
+export type TableFlow = { shifts: Map<string, { dy: number; page: number }>; rects: Map<string, Rect> }
+export type GridSeg = { page: number; ys: number[] }
+
+/**
+ * Border grid that follows where the cascade really put the cell text: rows that grew push the rows below,
+ * rows that paginate start a new segment on the next page. null = the table did not move or change.
+ * shortcut: the repeated header row gets no borders on continuation pages, add if tables split often.
+ */
+export function flowedGrid(t: TableModel, doc: DocState, res: TableFlow): GridSeg[] | null {
+  const n = t.ys.length - 1
+  type Row = { dyTop: number; dyLow: number; page: number; low: number }
+  const rows: Array<Row | null> = []
+  for (let r = 0; r < n; r++) {
+    const els = t.cells.filter((c) => c.r === r).flatMap((c) => c.elIds).map((id) => doc.els[id]).filter((e) => e && !e.deleted && res.shifts.has(e.id))
+    if (!els.length) { rows.push(null); continue }
+    const top = els.reduce((a, b) => (b.origBox.y + b.origBox.h > a.origBox.y + a.origBox.h ? b : a))
+    const lowEl = els.reduce((a, b) => (b.origBox.y < a.origBox.y ? b : a))
+    const padBelow = Math.max(0, Math.min(t.padY, lowEl.origBox.y - t.ys[r + 1])) // never demand more padding than the original had
+    const st = res.shifts.get(top.id)!
+    rows.push({ dyTop: st.dy, dyLow: res.shifts.get(lowEl.id)!.dy, page: st.page, low: Math.min(...els.map((e) => res.rects.get(e.id)?.y ?? Infinity)) - padBelow })
+  }
+  if (rows.every((x) => !x)) return null
+  const R: Row[] = []
+  for (let i = 0; i < n; i++) {
+    const x = rows[i]
+    if (x) R.push(x)
+    else { const q = R[i - 1] ?? rows.find(Boolean)!; R.push({ ...q, dyTop: q.dyLow, low: Infinity }) }   // empty row rides the row above
+  }
+  const topY = (r: number) => t.ys[r] + R[r].dyTop
+  const botY = (r: number) => Math.min(t.ys[r + 1] + (r + 1 < n && R[r + 1].page === R[r].page ? R[r + 1].dyTop : R[r].dyLow), R[r].low)
+  const segs: GridSeg[] = []
+  let moved = false
+  for (let r = 0; r < n; r++) {
+    let g = segs[segs.length - 1]
+    if (!g || g.page !== R[r].page) { g = { page: R[r].page, ys: [topY(r)] }; segs.push(g) }
+    g.ys.push(Math.min(botY(r), g.ys[g.ys.length - 1] - 6))
+    if (R[r].page !== t.page || Math.abs(g.ys[g.ys.length - 2] - t.ys[r]) > 0.05 || Math.abs(g.ys[g.ys.length - 1] - t.ys[r + 1]) > 0.05) moved = true
+  }
+  return moved ? segs : null
+}
