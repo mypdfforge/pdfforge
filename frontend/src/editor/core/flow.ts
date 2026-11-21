@@ -4,12 +4,11 @@
 // PDF points, bottom-left origin. No engine/Plan changes required to consume this.
 import type { DocState, TextElement, TextStyle, PageModel, Rect, FlowObject, TableModel } from './types.ts'
 import type { Measurer } from './fonts.ts'
-import { layoutElement, placeLines, descenderOf, countFittingLines, wrapForFlow, sliceLines, rectOfLines, pitchOf } from './layout.ts'
+import { layoutElement, placeLines, descenderOf, countFittingLines, wrapForFlow } from './layout.ts'
 import type { Line } from './layout.ts'
 import { intersects } from './geometry.ts'
 import { isChanged } from './plan.ts'
 import { layoutTable } from './table.ts'
-import { parseMarker, isMarkerOnly, companionOf } from './lists.ts'
 
 export type FlowShift = { baseline: number; page: number; dy: number } // dy = baseline - origBaseline
 export type LaneBox = { page: number; x0: number; x1: number; index?: number }
@@ -26,7 +25,7 @@ export type CascadeResult = {
   objectShifts: Map<string, { page: number; dy: number; dx: number }>
 }
 
-const MARKER = /^\s*([-•–*▪◦·●]|\d+[.)])(?:\s+|$)/
+const MARKER = /^\s*([-•–*▪◦·]|\d+[.)])\s+/
 const GUTTER_MIN = 12          // pt of empty vertical projection that separates columns
 const SPAN_RATIO = 0.6         // box wider than this fraction of content width => spanner
 const MIN_LANE_MASS = 6        // chars; below this a "lane" is noise (page numbers…)
@@ -165,14 +164,12 @@ export function findTableRegions(els: TextElement[], page: number): TableRegion[
 
 type Row = {
   anchor: TextElement | null; followers: TextElement[]
-  marker: TextElement | null   // standalone glyph that rides the anchor's FIRST line
   lane: number                 // global lane key; -1 = spanner
   page: number                 // original source page
   origTop: number; origBottom: number
   deleted: boolean
   keepWithNext: boolean
   group: number; groupLast: boolean
-  bullet?: boolean
   tableId?: string | null
   keepTogetherId?: string | null
   pinnedFurniture?: boolean
@@ -186,16 +183,12 @@ function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, ke
     const lane = keyOf(laneOf.get(e.id) ?? -1)
     const r = rows.find((q) => q.anchor && q.lane === lane &&
       Math.abs(q.anchor.origBaseline - e.origBaseline) < 0.35 * Math.max(e.style.size, q.anchor.style.size))
-    if (r) {
-      if (e.deleted) continue
-      // A lone glyph is decoration, never the flow line and never a right-hand follower.
-      if (isMarkerOnly(e.text) && e.origX < r.anchor!.origX) { r.marker = e; continue }
-      r.followers.push(e)
-    } else {
+    if (r) { if (!e.deleted) r.followers.push(e) }
+    else {
       const t = doc.tables?.find((tbl) => tbl.page === pm.index && tbl.cells.some((c) => c.elIds.includes(e.id)))
       const tableId = t ? t.id : (tableElMap?.has(e.id) ? `tr_${pm.index}_${Math.round(tableElMap.get(e.id)!.top)}` : null)
       rows.push({
-        anchor: e, marker: null, followers: [], lane, page: pm.index,
+        anchor: e, followers: [], lane, page: pm.index,
         origTop: e.origBox.y + e.origBox.h, origBottom: e.origBox.y,
         deleted: e.deleted, keepWithNext: false, group: -1, groupLast: false,
         tableId,
@@ -205,25 +198,12 @@ function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, ke
       })
     }
   }
-  // Second pass: the leftmost element may itself have been the glyph.
-  for (const r of rows) {
-    if (r.deleted || !r.anchor) continue
-    if (isMarkerOnly(r.anchor.text) && r.followers.length) {
-      r.marker = r.anchor
-      r.anchor = r.followers.shift()!
-      r.origTop = r.anchor.origBox.y + r.anchor.origBox.h
-      r.origBottom = r.anchor.origBox.y
-    }
-    const ext = r.anchor.list?.externalId ? doc.els[r.anchor.list.externalId] : null
-    if (ext && !ext.deleted) { r.marker = ext; r.followers = r.followers.filter((f) => f.id !== ext.id) }
-    r.followers.sort((a, b) => a.origX - b.origX)
-  }
+  rows.forEach((r) => r.followers.sort((a, b) => a.origX - b.origX))
 
   // Part B4: push one Row per inline object
   for (const o of (doc.objects ?? []).filter((x) => x.page === pm.index && x.flow === 'inline' && !x.locked)) {
     rows.push({
       anchor: null,
-      marker: null,
       object: o,
       followers: [],
       lane: keyOf(laneOf.get(o.id) ?? -1),
@@ -254,12 +234,11 @@ function annotate(rows: Row[], body: number): Map<number, number> {
     for (const r of list) {
       if (!r.anchor) { prev = null; continue }
       const e = r.anchor
-      const bullet = !!r.marker || !!e.list || parseMarker(e.text) !== null
-      r.bullet = bullet
-      const heading = !bullet && (e.style.size > body * 1.12 || (e.style.bold && e.text.length < 60)) && e.style.size >= body
-      r.keepWithNext = heading && !bullet
+      const bullet = MARKER.test(e.text)
+      const heading = (e.style.size > body * 1.12 || (e.style.bold && e.text.length < 60 && !bullet)) && e.style.size >= body
+      r.keepWithNext = heading
       const gap = prev ? prev.origBottom - r.origTop : 0
-      const join = !prev && prev !== null ? false : !!prev && !!prev.anchor && prev.page === r.page && !heading && !prev.keepWithNext && !bullet && !prev.bullet &&
+      const join = !prev && prev !== null ? false : !!prev && !!prev.anchor && prev.page === r.page && !heading && !prev.keepWithNext && !bullet &&
         sameLook(e.style, prev.anchor.style) && gap > 0.9 * e.style.size && gap < 1.7 * e.style.size &&
         Math.abs(e.origX - prev.anchor.origX) < 0.8 * e.style.size
       if (!join) cur = g++
@@ -276,7 +255,7 @@ function annotate(rows: Row[], body: number): Map<number, number> {
 
 type PlacedRow = {
   row: Row; page: number; top: number; bottom: number; baseline: number
-  lines: Line[]; all: Line[]; from: number; rect: Rect
+  texts: string[]; lines: Line[]; from: number; rect: Rect
 }
 type LaneState = {
   flowPage: number; cursor: number | null; carried: boolean
@@ -455,7 +434,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       maxPage = Math.max(maxPage, page)
       return {
         row: r, page, top, bottom: o.rect.y + dy, baseline: top,
-        lines: [], all: [], from: 0, rect: { ...o.rect, y: o.rect.y + dy }
+        texts: [], lines: [], from: 0, rect: { ...o.rect, y: o.rect.y + dy }
       }
     }
     const a = r.anchor!
@@ -463,15 +442,14 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
     const asc = r.origTop - a.origBaseline
     const manual = a.baseline - a.origBaseline
     const baseline = top - asc + manual
+    const rowDy = baseline - a.baseline
 
-    // The marker sits LEFT of the anchor: it must never shrink the wrap width.
     const fLeft = r.followers.length ? Math.min(...r.followers.map((f) => f.origBox.x)) : Infinity
     const effW = Math.max(20, Math.min(a.maxW, fLeft - a.x - 4))
+    const alignW = Math.max(effW, a.origBox.w)
 
-    const full = r.deleted ? null
-      : layoutElement({ ...a, style: s, wrap: true, maxW: effW, baseline }, m, doc)
-    const all = full?.lines ?? []
-    const take = Math.max(0, Math.min(count, all.length - from))
+    const texts = r.deleted ? [] : wrapForFlow(a, effW, s, m)
+    const take = Math.max(0, Math.min(count, texts.length - from))
 
     // FIX 2 — pin an untouched table cell ONLY on its own page and only if it has not
     // been pushed. `page > a.page` means the table has paginated: it must move, not pin.
@@ -488,35 +466,31 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
         rects.set(f.id, f.origBox)
       }
       maxPage = Math.max(maxPage, page)
-      return { row: r, page, top: r.origTop, bottom: a.origBox.y, baseline: a.origBaseline, lines: [], all, from: 0, rect: a.origBox }
+      return { row: r, page, top: r.origTop, bottom: a.origBox.y, baseline: a.origBaseline, texts, lines: [], from: 0, rect: a.origBox }
     }
 
-    const firstBaseline = baseline - (all.length ? all[from].baseline - all[0].baseline : 0)
-    const placedLines = take > 0 ? sliceLines(all, from, take, firstBaseline) : []
-    const rect = placedLines.length ? rectOfLines(placedLines, s) : { x: a.x, y: top - asc, w: effW, h: asc }
-    let bottom = rect.y
+    const placed = take > 0 ? placeLines(texts.slice(from, from + take), a.x, baseline, effW, s, m, alignW) : null
+    let bottom = placed ? placed.rect.y : top - asc - descenderOf(s)
+    const rect = placed?.rect ?? { x: a.x, y: bottom, w: effW, h: Math.max(1, top - bottom) }
 
-    if (!r.deleted && take > 0 && (from === 0 || !shifts.has(a.id))) {
-      shifts.set(a.id, { baseline: placedLines[0].baseline, page, dy: placedLines[0].baseline - a.origBaseline })
-      rects.set(a.id, rect)
+    if (!r.deleted && take > 0) {
+      // A split element anchors its overlay/edit target at the FIRST chunk only.
+      if (from === 0 || !shifts.has(a.id)) {
+        shifts.set(a.id, { baseline, page, dy: baseline - a.origBaseline })
+        rects.set(a.id, rect)
+      }
     }
     if (from === 0) {                                   // satellites ride the first line, never a continuation
-      const rowDy = baseline - a.baseline
-      if (r.marker) {                                   // glyph keeps its own x and embedded font
-        const mb = r.marker.baseline + rowDy
-        shifts.set(r.marker.id, { baseline: mb, page, dy: mb - r.marker.origBaseline })
-        rects.set(r.marker.id, { ...r.marker.origBox, y: r.marker.origBox.y + rowDy })
-      }
       for (const f of r.followers) {
         const fb = f.baseline + rowDy
-        const fp = layoutElement({ ...f, style: styleOf(f.style), baseline: fb }, m, doc)
+        const fp = layoutElement({ ...f, style: styleOf(f.style), baseline: fb }, m)
         shifts.set(f.id, { baseline: fb, page, dy: fb - f.origBaseline })
         rects.set(f.id, fp.rect)
         bottom = Math.min(bottom, fp.rect.y)
       }
     }
     maxPage = Math.max(maxPage, page)
-    return { row: r, page, top, bottom, baseline, lines: placedLines, all, from, rect }
+    return { row: r, page, top, bottom, baseline, texts, lines: placed?.lines ?? [], from, rect }
   }
 
   const pushChunk = (r: Row, rec: PlacedRow) => {
@@ -542,7 +516,7 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       }
 
       // ---- (a) FIX 4: split a multi-line element across the boundary ----
-      const total = rec.all.length, avail = total - rec.from
+      const total = rec.texts.length, avail = total - rec.from
       if (avail > 1 && (!r.tableId || r.tableId === null)) {
         const s = styleOf(r.anchor!.style)
         const fit = countFittingLines(rec.lines, s, limit)

@@ -6,7 +6,7 @@ import type { Line } from './layout.ts'
 import { drawsForLines, isChanged } from './plan.ts'
 import { verticalOverlap } from './geometry.ts'
 
-const MARKER = /^\s*([-•–*▪◦·●]|\d+[.)])\s+/
+const MARKER = /^\s*([-•–*▪◦·]|\d+[.)])\s+/
 const median = (a: number[]) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : 0 }
 const sameLook = (a: TextStyle, b: TextStyle) => a.family === b.family && a.bold === b.bold && a.italic === b.italic && Math.abs(a.size - b.size) < 0.3 && a.color.every((c, i) => Math.abs(c - b.color[i]) < 0.02)
 
