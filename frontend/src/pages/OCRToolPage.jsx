@@ -3,6 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
 import { Upload, Loader2, CheckCircle, AlertCircle, FileText, Search, X } from 'lucide-react'
 import { downloadBlob } from '../utils/api'
+import { getPaddleOCREngine, processPageOcr, buildSearchablePdf } from '../utils/paddleOcr'
 
 /**
  * OCR Strategy — 3 tiers, all designed to minimise server RAM:
@@ -136,34 +137,72 @@ export default function OCRToolPage({
       const pdfDoc      = await pdfjs.getDocument({ data: arrayBuffer }).promise
       const totalPages  = pdfDoc.numPages
 
-      setProgMsg(`Reading ${totalPages} page${totalPages > 1 ? 's' : ''} on-device…`)
+      setProgMsg('Initializing PaddleOCR engine…')
+      const ocrEngine = await getPaddleOCREngine((p) => {
+        setProgMsg(p.label || 'Loading neural models…')
+        setProgress(Math.min(25, Math.round((p.loaded / (p.total || 1)) * 25)))
+      })
 
       const textChunks = []
+      const pagesOcrResults = []
+
       for (let p = 1; p <= totalPages; p++) {
         if (abortRef.current) break
-        setProgress(Math.round((p / totalPages) * 90))
-        setProgMsg(`Extracting text from page ${p} of ${totalPages}…`)
+        const pageProgress = 25 + Math.round(((p - 1) / totalPages) * 65)
+        setProgress(pageProgress)
+        setProgMsg(`Running PaddleOCR on page ${p} of ${totalPages}…`)
+
         const page = await pdfDoc.getPage(p)
-        const content = await page.getTextContent()
-        const pageText = content.items.map(item => item.str).join(' ')
-        if (pageText.trim()) {
-          textChunks.push(`--- Page ${p} ---\n${pageText.trim()}`)
+        const viewport = page.getViewport({ scale: 1.5 })
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.floor(viewport.width)
+        canvas.height = Math.floor(viewport.height)
+        const ctx = canvas.getContext('2d')
+        await page.render({ canvasContext: ctx, viewport }).promise
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        page.cleanup()
+
+        const pageResult = await processPageOcr(ocrEngine, imageData)
+        pagesOcrResults.push(pageResult)
+
+        if (pageResult.text && pageResult.text.trim()) {
+          textChunks.push(`--- Page ${p} ---\n${pageResult.text.trim()}`)
+        } else {
+          textChunks.push(`--- Page ${p} ---\n(No text detected)`)
         }
+
+        // Allow UI to breathe and update progress smoothly
+        await new Promise(r => setTimeout(r, 10))
       }
 
       await pdfDoc.destroy()
-      setProgress(100)
-      setProgMsg('Done!')
 
-      if (textChunks.length > 0) {
-        setExtractedText(textChunks.join('\n\n'))
-        setState('done')
-      } else {
-        setErrMsg('No selectable text found in this PDF. Pure on-device OCR for scanned images is scheduled for the upcoming release.')
+      if (abortRef.current) {
         setState('idle')
+        setProgMsg('')
+        return
       }
+
+      const allText = textChunks.join('\n\n')
+      setExtractedText(allText)
+
+      if (outputMode === 'searchable') {
+        setProgMsg('Generating Searchable PDF with invisible text layer…')
+        setProgress(95)
+        const searchableBytes = await buildSearchablePdf(arrayBuffer, pagesOcrResults)
+        const downloadName = file.name.replace(/\.pdf$/i, '') + '_searchable.pdf'
+        downloadBlob(searchableBytes, downloadName, 'application/pdf')
+        setProgMsg('Searchable PDF downloaded!')
+      } else {
+        setProgMsg('Text extracted!')
+      }
+
+      setProgress(100)
+      setState('done')
     } catch (e) {
-      setErrMsg('Extraction error: ' + e.message)
+      console.error('OCR Error:', e)
+      setErrMsg('OCR processing error: ' + (e.message || String(e)))
       setState('idle'); setProgress(0); setProgMsg('')
     }
   }
