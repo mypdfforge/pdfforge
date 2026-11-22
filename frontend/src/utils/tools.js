@@ -43,7 +43,7 @@ export const TOOLS = [
   { id:'stamp',        icon:Stamp,         label:'Stamp',            desc:'Add APPROVED, DRAFT or CONFIDENTIAL stamps.',     category:'enhance',  runs:'browser' },
   { id:'sign',         icon:PenLine,       label:'Sign PDF',         desc:'Draw, type or upload a signature and place it.',  category:'enhance',  runs:'browser' },
   { id:'findreplace',  icon:Replace,       label:'Find & replace',   desc:'Search and replace text across the PDF.',         category:'enhance',  runs:'browser' },
-  { id:'ocr',          icon:ScanText,      label:'OCR',              desc:'Make scanned PDFs searchable or extract text.',   category:'enhance',  runs:'server' },
+  { id:'ocr',          icon:ScanText,      label:'OCR',              desc:'Make scanned PDFs searchable or extract text.',   category:'enhance',  runs:'browser' },
   { id:'translate',    icon:Languages,     label:'Translate PDF',    desc:'Translate a PDF into another language.',          category:'enhance',  runs:'server' },
   { id:'protect',      icon:Lock,          label:'Protect PDF',      desc:'Add a password to a PDF.',                        category:'security', runs:'browser' },
   { id:'unlock',       icon:Unlock,        label:'Unlock PDF',       desc:'Remove password protection.',                     category:'security', runs:'browser' },

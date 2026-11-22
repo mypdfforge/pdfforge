@@ -334,12 +334,29 @@ export default function OCRToolPage({
             </div>
           )}
 
-          <button onClick={apply} disabled={!file || state === 'loading'}
-            style={{ padding: '12px', background: state === 'done' ? 'var(--green)' : 'var(--accent)', color: '#fff', border: 'none', borderRadius: '10px', cursor: !file ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 4px 16px rgba(234,88,12,0.25)', opacity: !file ? 0.5 : 1 }}>
+          <button
+            onClick={state === 'done' ? (outputMode === 'searchable' ? downloadSearchablePdf : downloadText) : apply}
+            disabled={!file || state === 'loading'}
+            style={{
+              padding: '12px',
+              background: state === 'done' ? 'var(--green)' : 'var(--accent)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '10px',
+              cursor: !file ? 'not-allowed' : 'pointer',
+              fontWeight: 700,
+              fontSize: '14px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              boxShadow: state === 'done' ? '0 4px 16px rgba(34,197,94,0.3)' : '0 4px 16px rgba(234,88,12,0.25)',
+              opacity: !file ? 0.5 : 1
+            }}>
             {state === 'loading'
               ? <><Loader2 size={15} className="spin" />Processing…</>
               : state === 'done'
-              ? <><CheckCircle size={15} />{outputMode === 'text' ? 'Text Extracted!' : 'Ready!'}</>
+              ? <><Download size={15} />{outputMode === 'searchable' ? 'Download Searchable PDF' : 'Download .txt'}</>
               : <><Search size={15} />Run OCR</>}
           </button>
         </div>

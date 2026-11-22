@@ -16,6 +16,7 @@ const STANDALONE = {
   rotate:    lazy(() => import('./pages/RotateToolPage')),
   organize:  lazy(() => import('./pages/OrganizePDFPage')),
   sign:      lazy(() => import('./pages/SignPDFPage')),
+  // PaddleOCR engine (100% in-browser)
   ocr:       lazy(() => import('./pages/OCRToolPage')),
   translate: lazy(() => import('./pages/TranslateToolPage')),
   redact:    lazy(() => import('./pages/RedactToolPage')),
