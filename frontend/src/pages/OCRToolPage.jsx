@@ -157,10 +157,11 @@ export default function OCRToolPage({
 
     try {
       setProgMsg('Loading PDF in browser…')
-      const pdfjs       = getPdfjs()
-      const arrayBuffer = await file.arrayBuffer()
-      const pdfDoc      = await pdfjs.getDocument({ data: arrayBuffer }).promise
-      const totalPages  = pdfDoc.numPages
+      const pdfjs            = getPdfjs()
+      const originalPdfBytes = new Uint8Array(await file.arrayBuffer())
+      const pdfjsData        = originalPdfBytes.slice() // Clone so PDF.js worker transfer does not detach originalPdfBytes
+      const pdfDoc           = await pdfjs.getDocument({ data: pdfjsData }).promise
+      const totalPages       = pdfDoc.numPages
 
       setProgMsg('Initializing PaddleOCR engine…')
       const ocrEngine = await getPaddleOCREngine((p) => {
@@ -215,7 +216,7 @@ export default function OCRToolPage({
       if (outputMode === 'searchable') {
         setProgMsg('Generating Searchable PDF with invisible text layer…')
         setProgress(95)
-        const searchableBytes = await buildSearchablePdf(arrayBuffer, pagesOcrResults)
+        const searchableBytes = await buildSearchablePdf(originalPdfBytes, pagesOcrResults)
         setSearchablePdfBytes(searchableBytes)
         const blob = new Blob([searchableBytes], { type: 'application/pdf' })
         const url = URL.createObjectURL(blob)
