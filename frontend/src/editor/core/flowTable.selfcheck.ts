@@ -157,6 +157,11 @@ const interiorVDraws = drawsP.filter((d) => d.kind === 'rect' && d.w === 1 && Ma
 assert.equal(interiorVDraws.length, 1, 'only row 1 gets interior vertical line')
 assert.ok(interiorVDraws[0].h < 40, 'interior line does not span full table height')
 
+// Check fill translation: fill op is translated in-stream, not removed or covering text
+const editsP = pMerged.pages[0].edits as any[]
+assert.ok(editsP.some((e) => e.idx === 60 && e.action === 'translate'), 'fill translated in-stream')
+assert.ok(!editsP.some((e) => e.idx === 60 && e.action === 'remove'), 'fill not removed')
+
 // ---- Bug 6: Inline styled runs across lane cuts remain grouped in same row ----
 const run1 = el('run1', '8. Multi-Colored Runs: Red', 72, 400, 150)
 const run2 = el('run2', 'Green Blue Purple Amber', 226, 400, 150) // immediately adjacent

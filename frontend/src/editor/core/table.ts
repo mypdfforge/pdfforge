@@ -8,6 +8,7 @@ export type { TableCell, TableModel, TableFill }
 
 /** Path-construction and paint operators: the only instructions a table may remove when it redraws its borders. */
 const SHAPE_OPS = new Set(['m', 'l', 'c', 'v', 'y', 'h', 're', 'S', 's', 'f', 'F', 'f*', 'B', 'B*', 'b', 'b*'])
+const PATH = new Set(['m', 'l', 'c', 'v', 'y', 'h', 're'])
 
 const cluster = (vals: number[], tol: number) => {
   const s = [...vals].sort((a, b) => a - b), out: number[] = []
@@ -77,13 +78,20 @@ export function detectTables(objs: FlowObject[], els: TextElement[], page: numbe
         if (dist < bestDist) { bestDist = dist; bestR = r }
       }
       if (bestR >= 0 && bestDist < (ys[bestR] - ys[bestR + 1]) * 0.75) {
+        const last = o.ops[o.ops.length - 1]
+        let from = toks ? last : (o.ops[0] ?? last)
+        if (toks) {
+          for (let k = o.ops.length - 2; k >= 0 && o.ops[k] === from - 1 && PATH.has(toks[o.ops[k]]?.op ?? ''); k--) from = o.ops[k]
+        }
         fills.push({
           x0: o.rect.x, x1: o.rect.x + o.rect.w,
           y0: o.rect.y, y1: o.rect.y + o.rect.h,
           color: o.color, rowIdx: bestR,
-          ops: o.ops, translatable: o.translatable
+          ops: o.ops,
+          translatable: toks ? true : o.translatable,
+          from, span: last - from + 1
         })
-        fillOps.push(...o.ops)
+        for (let op = from; op <= last; op++) fillOps.push(op)
       }
     }
   }

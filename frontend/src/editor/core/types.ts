@@ -66,7 +66,7 @@ export type FlowObject = {
 }
 
 export type TableCell = { r: number; c: number; elIds: string[]; rect: Rect }
-export type TableFill = { x0: number; x1: number; y0: number; y1: number; color: RGB; rowIdx: number; ops: number[]; translatable: boolean }
+export type TableFill = { x0: number; x1: number; y0: number; y1: number; color: RGB; rowIdx: number; ops: number[]; translatable: boolean; from: number; span: number }
 export type TableModel = {
   id: string
   page: number

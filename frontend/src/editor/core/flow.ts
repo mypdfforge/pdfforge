@@ -237,9 +237,9 @@ function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, ke
       if (q.lane === lane) return true
 
       // If lane differs due to global page gutters, allow adjacent inline runs to group into the same row
-      if (!inTable && !isTableCell(q.anchor.id) && !tableElMap?.has(e.id) && !tableElMap?.has(q.anchor.id)) {
+      if (!inTable && !isTableCell(q.anchor.id)) {
         const right = Math.max(q.anchor.origBox.x + q.anchor.origBox.w, ...q.followers.map((f) => f.origBox.x + f.origBox.w))
-        if (e.origBox.x >= right - 4 && e.origBox.x - right <= 36) {
+        if (e.origBox.x >= right - 4 && e.origBox.x - right < GUTTER_MIN) {
           laneOf.set(e.id, laneOf.get(q.anchor.id) ?? -1)
           return true
         }

@@ -108,9 +108,9 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
         if (f.rowIdx >= 0 && f.rowIdx < g.ys.length - 1) {
           const fTop = g.ys[f.rowIdx], fBot = g.ys[f.rowIdx + 1]
           const dy = fTop - t.ys[f.rowIdx]
-          if (f.translatable && f.ops?.length && g.page === t.page) {
-            pages[t.page]?.edits.push({ idx: f.ops[0], action: 'translate', dx: 0, dy, span: f.ops.length })
-            for (const op of f.ops) translatedOps.add(op)
+          if (f.translatable && g.page === t.page) {
+            pages[t.page]?.edits.push({ idx: f.from, action: 'translate', dx: 0, dy, span: f.span })
+            for (let i = f.from; i < f.from + f.span; i++) translatedOps.add(i)
           } else {
             // Redraw fill before text in draws
             dest.draws.unshift({ kind: 'rect', x: f.x0, y: fBot, w: f.x1 - f.x0, h: fTop - fBot, color: f.color })
