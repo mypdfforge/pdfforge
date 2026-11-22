@@ -31,31 +31,32 @@ export async function extractDocument(pdf: any, analyses: (i: number) => Promise
       const st = tc.styles?.[it.fontName] ?? {}
       items.push({ str: it.str, x: e, y: f, w: it.width, size: Math.hypot(c, d) || Math.abs(d) || 10, font: it.fontName, skew: Math.abs(b) > 0.01 || Math.abs(c) > 0.01 || a < 0, asc: st.ascent ?? 0.8, desc: st.descent ?? -0.2 })
     }
-    // match item -> drawing instruction (by baseline + horizontal containment)
-    const opOf = (it: Item) => {
-      let best = -1, bx = -1e9
+    // match item -> all drawing instructions covered by this item (by baseline + horizontal span)
+    const opsOf = (it: Item): number[] => {
+      const matches: number[] = []
       an.ops.forEach((o, k) => {
         if (Math.abs(o.y - it.y) > 1.2) return
-        const lo = Math.min(o.x, o.x2) - 1.5, hi = Math.max(o.x, o.x2) + 1.5
-        if (it.x >= lo && it.x <= hi && o.x <= it.x + 1.5 && o.x > bx) { best = k; bx = o.x }
+        if (o.x >= it.x - 2 && o.x <= it.x + it.w + 2) matches.push(k)
       })
-      return best
+      return matches
     }
-    const rows: Array<{ it: Item; op: number }[]> = []
-    const sorted = items.map((it) => ({ it, op: opOf(it) })).sort((p, q) => q.it.y - p.it.y || p.it.x - q.it.x)
+    type ItemWithOps = { it: Item; ops: number[] }
+    const rows: ItemWithOps[][] = []
+    const sorted: ItemWithOps[] = items.map((it) => ({ it, ops: opsOf(it) })).sort((p, q) => q.it.y - p.it.y || p.it.x - q.it.x)
     for (const p of sorted) {
       const row = rows.find((r) => Math.abs(r[0].it.y - p.it.y) < 0.35 * p.it.size)
       row ? row.push(p) : rows.push([p])
     }
-    type Run = { parts: typeof sorted; key: string }
+    type Run = { parts: ItemWithOps[]; key: string }
     const runs: Run[] = []
     for (const row of rows) {
       row.sort((p, q) => p.it.x - q.it.x)
       let cur: Run | null = null
       for (const p of row) {
-        const op = p.op >= 0 ? an.ops[p.op] : null
+        const primaryOp = p.ops.length > 0 ? p.ops[0] : -1
+        const op = primaryOp >= 0 ? an.ops[primaryOp] : null
         const key = op ? `${op.fontRes}|${p.it.size.toFixed(1)}|${op.color?.map((c) => c.toFixed(2)).join(',') ?? 'x'}|${op.tc}|${op.tw}` : `unmatched|${runs.length}`
-        const last: typeof sorted[number] | undefined = cur?.parts[cur.parts.length - 1]
+        const last: ItemWithOps | undefined = cur?.parts[cur.parts.length - 1]
         const gap = last ? p.it.x - (last.it.x + last.it.w) : 0
         if (cur && cur.key === key && !key.startsWith('unmatched') && gap <= 1.2 * p.it.size) cur.parts.push(p)
         else { cur = { parts: [p], key }; runs.push(cur) }
@@ -63,7 +64,7 @@ export async function extractDocument(pdf: any, analyses: (i: number) => Promise
     }
     // an instruction that feeds more than one run cannot be removed for just one of them
     const opRuns = new Map<number, Set<Run>>()
-    runs.forEach((r) => r.parts.forEach((p) => { if (p.op >= 0) (opRuns.get(p.op) ?? opRuns.set(p.op, new Set()).get(p.op)!).add(r) }))
+    runs.forEach((r) => r.parts.forEach((p) => { p.ops.forEach((opK) => (opRuns.get(opK) ?? opRuns.set(opK, new Set()).get(opK)!).add(r)) }))
     let n = 0
     for (const r of runs) {
       const first = r.parts[0], lastP = r.parts[r.parts.length - 1]
@@ -72,14 +73,15 @@ export async function extractDocument(pdf: any, analyses: (i: number) => Promise
         if (k) { const prev = r.parts[k - 1]; const gap = p.it.x - (prev.it.x + prev.it.w); if (gap > 0.12 * p.it.size && !/\s$/.test(text) && !/^\s/.test(p.it.str)) text += ' ' }
         text += p.it.str
       })
-      const opK = [...new Set(r.parts.map((p) => p.op).filter((k) => k >= 0))]
-      const op0 = first.op >= 0 ? an.ops[first.op] : null
+      const opK = [...new Set(r.parts.flatMap((p) => p.ops))]
+      const primaryOp = opK.length > 0 ? opK[0] : -1
+      const op0 = primaryOp >= 0 ? an.ops[primaryOp] : null
       const info = op0 ? an.fonts[op0.fontRes] ?? null : null
       const mapped = mapFont(info)
       let locked: string | null = null
       if (!pm.editable) locked = pm.reason
       else if (first.it.skew) locked = 'Rotated or mirrored text cannot be edited.'
-      else if (r.parts.some((p) => p.op < 0)) locked = 'This text is drawn inside a form, pattern or unsupported structure.'
+      else if (r.parts.some((p) => p.ops.length === 0)) locked = 'This text is drawn inside a form, pattern or unsupported structure.'
       else if (opK.some((k) => (opRuns.get(k)?.size ?? 0) > 1)) locked = 'This text shares a drawing instruction with neighbouring text.'
       else if (opK.some((k) => an.ops[k].tr === 3)) locked = 'Invisible text layer (scanned/OCR) — edit the image-based page instead.'
       const size = Math.round(first.it.size * 100) / 100
