@@ -5,9 +5,39 @@
  */
 
 import { init } from 'esearch-ocr'
-import * as ort from 'onnxruntime-web'
 
 let ocrEnginePromise = null
+let ortPromise = null
+
+async function getOrt() {
+  if (typeof window !== 'undefined' && window.ort) return window.ort
+  if (ortPromise) return ortPromise
+
+  ortPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-ort="cdn"]')
+    if (existing) {
+      existing.addEventListener('load', () => resolve(window.ort))
+      existing.addEventListener('error', () => reject(new Error('Failed to load onnxruntime-web')))
+      return
+    }
+
+    const script = document.createElement('script')
+    script.setAttribute('data-ort', 'cdn')
+    script.src = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js'
+    script.async = true
+    script.onload = () => {
+      if (window.ort) {
+        resolve(window.ort)
+      } else {
+        reject(new Error('window.ort not found after loading script'))
+      }
+    }
+    script.onerror = () => reject(new Error('Failed to load ONNX Runtime Web from CDN'))
+    document.head.appendChild(script)
+  })
+
+  return ortPromise
+}
 
 // Helper to fetch model with caching in CacheStorage
 async function fetchWithCache(url, onProgress, stepLabel) {
@@ -81,9 +111,10 @@ export async function getPaddleOCREngine(onProgress) {
   if (ocrEnginePromise) return ocrEnginePromise
 
   ocrEnginePromise = (async () => {
-    // Configure ONNX Runtime Web WASM paths
+    if (onProgress) onProgress({ loaded: 0, total: 100, label: 'Loading ONNX Runtime engine…' })
+    const ort = await getOrt()
+
     if (ort?.env?.wasm) {
-      ort.env.wasm.wasmPaths = '/wasm/'
       ort.env.wasm.numThreads = Math.min(4, typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 2) : 2)
     }
 
