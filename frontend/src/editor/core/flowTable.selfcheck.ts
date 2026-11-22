@@ -112,4 +112,15 @@ const f2 = edit(build(72, [el('foot', 'Page 1', 290, 45, 40)]), 'intro', 'x'.rep
 const r2 = foot(f2)
 assert.ok(r2.pageCount >= 2)
 for (const [id, rc] of r2.rects) if (id !== 'foot' && r2.shifts.get(id)!.page === 0) assert.ok(rc.y >= 53 + 8 - 0.01, `${id} dips into footer: ${rc.y}`)
+// ---- Bug 4: 1-row × 2-column stroked box detected and moved with header expansion ----
+const boxObj = { id: 'box', page: 0, kind: 'vector' as const, rect: { x: 72, y: 560, w: 260, h: 90 }, ops: [50], color: [0, 0, 0] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+const divRule = { id: 'div', page: 0, kind: 'rule' as const, rect: { x: 202, y: 560, w: 1, h: 90 }, ops: [51], color: [0, 0, 0] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+const c1 = el('col1', 'Column 1 text', 80, 620, 100)
+const c2 = el('col2', 'Column 2 text', 210, 620, 100)
+const boxTables = detectTables([boxObj, divRule], [c1, c2], 0)
+assert.equal(boxTables.length, 1, '1-row 2-col box detected as table')
+assert.equal(boxTables[0].cells.length, 2, '2 cells in box')
+assert.deepEqual(boxTables[0].cells[0].elIds, ['col1'])
+assert.deepEqual(boxTables[0].cells[1].elIds, ['col2'])
+
 console.log('flowTable selfcheck: ok')

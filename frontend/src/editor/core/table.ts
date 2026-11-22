@@ -18,19 +18,30 @@ const cluster = (vals: number[], tol: number) => {
   return out
 }
 
-/** Ruling-line grid detection. Requires real intersections, so stray rules don't become tables. */
+/** Ruling-line & bordered box grid detection. */
 export function detectTables(objs: FlowObject[], els: TextElement[], page: number, toks?: Tok[]): TableModel[] {
-  const H = objs.filter((o) => o.page === page && o.rect.h <= 3 && o.rect.w >= 24)
-  const V = objs.filter((o) => o.page === page && o.rect.w <= 3 && o.rect.h >= 12)
+  const H: Array<{ rect: Rect; ops: number[]; color: [number, number, number] }> = objs.filter((o) => o.page === page && o.rect.h <= 3 && o.rect.w >= 24)
+  const V: Array<{ rect: Rect; ops: number[]; color: [number, number, number] }> = objs.filter((o) => o.page === page && o.rect.w <= 3 && o.rect.h >= 12)
+
+  // Decompose bordered box rectangles (e.g. 2-column callouts, single-row bordered tables) into candidate border rules
+  for (const o of objs) {
+    if (o.page === page && (o.kind === 'vector' || o.kind === 'rule') && o.rect.w >= 36 && o.rect.h >= 14) {
+      H.push({ rect: { x: o.rect.x, y: o.rect.y + o.rect.h - 1, w: o.rect.w, h: 2 }, ops: o.ops, color: o.color })
+      H.push({ rect: { x: o.rect.x, y: o.rect.y, w: o.rect.w, h: 2 }, ops: o.ops, color: o.color })
+      V.push({ rect: { x: o.rect.x, y: o.rect.y, w: 2, h: o.rect.h }, ops: o.ops, color: o.color })
+      V.push({ rect: { x: o.rect.x + o.rect.w - 1, y: o.rect.y, w: 2, h: o.rect.h }, ops: o.ops, color: o.color })
+    }
+  }
+
   if (H.length < 2 || V.length < 2) return []
 
-  const xs = cluster(V.map((v) => v.rect.x + v.rect.w / 2), 2.5)
-  const ys = cluster(H.map((h) => h.rect.y + h.rect.h / 2), 2.5).sort((a, b) => b - a)
+  const xs = cluster(V.map((v) => v.rect.x + v.rect.w / 2), 3)
+  const ys = cluster(H.map((h) => h.rect.y + h.rect.h / 2), 3).sort((a, b) => b - a)
   if (xs.length < 2 || ys.length < 2) return []
 
   const hit = (x: number, y: number) =>
-    V.some((v) => Math.abs(v.rect.x + v.rect.w / 2 - x) < 3 && v.rect.y - 2 <= y && v.rect.y + v.rect.h + 2 >= y) &&
-    H.some((h) => Math.abs(h.rect.y + h.rect.h / 2 - y) < 3 && h.rect.x - 2 <= x && h.rect.x + h.rect.w + 2 >= x)
+    V.some((v) => Math.abs(v.rect.x + v.rect.w / 2 - x) < 3.5 && v.rect.y - 2 <= y && v.rect.y + v.rect.h + 2 >= y) &&
+    H.some((h) => Math.abs(h.rect.y + h.rect.h / 2 - y) < 3.5 && h.rect.x - 2 <= x && h.rect.x + h.rect.w + 2 >= x)
 
   let corners = 0
   for (const x of xs) {
@@ -45,9 +56,9 @@ export function detectTables(objs: FlowObject[], els: TextElement[], page: numbe
   for (let r = 0; r < ys.length - 1; r++) {
     for (let c = 0; c < xs.length - 1; c++) {
       const cell: Rect = { x: xs[c], y: ys[r + 1], w: xs[c + 1] - xs[c], h: ys[r] - ys[r + 1] }
-      const ids = els.filter((e) => e.page === page && !e.deleted && !e.locked &&
-        e.origBox.x + e.origBox.w / 2 > cell.x && e.origBox.x + e.origBox.w / 2 < cell.x + cell.w &&
-        e.origBox.y + e.origBox.h / 2 > cell.y && e.origBox.y + e.origBox.h / 2 < cell.y + cell.h).map((e) => e.id)
+      const ids = els.filter((e) => e.page === page && !e.deleted &&
+        e.origBox.x + e.origBox.w / 2 >= cell.x - 2 && e.origBox.x + e.origBox.w / 2 <= cell.x + cell.w + 2 &&
+        e.origBox.y + e.origBox.h / 2 >= cell.y - 2 && e.origBox.y + e.origBox.h / 2 <= cell.y + cell.h + 2).map((e) => e.id)
       cells.push({ r, c, elIds: ids, rect: cell })
     }
   }

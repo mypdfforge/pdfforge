@@ -686,6 +686,9 @@ export function cascadeVerticalShift(doc: DocState, m: Measurer): CascadeResult 
       const repState = laneStates[0] ?? stateOf(0, page)
       const last = flowRow(r, repState, top, page)
       const finalPage = repState.flowPage
+      for (const l of lanesOut.filter((l) => l.page === r.page)) {
+        stateOf(l.index, r.page)
+      }
       for (const [, st] of states) {
         if (st.flowPage < finalPage) { st.flowPage = finalPage; st.carried = true; st.cursor = last.bottom; st.placed = [] }
         else if (st.flowPage === finalPage) st.cursor = Math.min(st.cursor ?? Infinity, last.bottom)

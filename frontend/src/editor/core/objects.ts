@@ -67,6 +67,9 @@ export function scanObjects(toks: Tok[], doc: DocState, page: number, idxOf: (t:
         } else if (path.length === 2 && Math.abs(path[0][1] - path[1][1]) < 0.5 && lw <= 3) {
           const [x1, y1] = apply(ctm, path[0][0], path[0][1]), [x2] = apply(ctm, path[1][0], path[1][1])
           emit('rule', { x: Math.min(x1, x2), y: y1 - lw / 2, w: Math.abs(x2 - x1), h: lw }, [...ops, i], col)
+        } else if (path.length === 2 && Math.abs(path[0][0] - path[1][0]) < 0.5 && lw <= 3) {
+          const [x1, y1] = apply(ctm, path[0][0], path[0][1]), [, y2] = apply(ctm, path[1][0], path[1][1])
+          emit('rule', { x: x1 - lw / 2, y: Math.min(y1, y2), w: lw, h: Math.abs(y2 - y1) }, [...ops, i], col)
         } else if (path.length > 2) {
           let b: Rect | null = null
           for (const [px, py] of path) {
