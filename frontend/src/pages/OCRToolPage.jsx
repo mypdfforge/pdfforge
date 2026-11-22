@@ -1,7 +1,7 @@
-import React, { useState, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TopBar from '../components/TopBar'
-import { Upload, Loader2, CheckCircle, AlertCircle, FileText, Search, X } from 'lucide-react'
+import { Upload, Loader2, CheckCircle, AlertCircle, FileText, Search, X, Download, Copy, Eye } from 'lucide-react'
 import { downloadBlob } from '../utils/api'
 import { getPaddleOCREngine, processPageOcr, buildSearchablePdf } from '../utils/paddleOcr'
 
@@ -108,19 +108,44 @@ export default function OCRToolPage({
   onBack, dark, onToggleTheme, onGoHome,
   showCategories, activeCategory, onCategoryChange, search, onSearch
 }) {
-  const [file,          setFile]          = useState(null)
-  const [language,      setLanguage]      = useState('eng')
-  const [outputMode,    setOutputMode]    = useState('searchable')
-  const [state,         setState]         = useState('idle')
-  const [errMsg,        setErrMsg]        = useState('')
-  const [extractedText, setExtractedText] = useState('')
-  const [progress,      setProgress]      = useState(0)
-  const [progMsg,       setProgMsg]       = useState('')
+  const [file,               setFile]               = useState(null)
+  const [language,           setLanguage]           = useState('eng')
+  const [outputMode,         setOutputMode]         = useState('searchable')
+  const [state,              setState]              = useState('idle')
+  const [errMsg,             setErrMsg]             = useState('')
+  const [extractedText,      setExtractedText]      = useState('')
+  const [searchablePdfUrl,   setSearchablePdfUrl]   = useState(null)
+  const [searchablePdfBytes, setSearchablePdfBytes] = useState(null)
+  const [activeTab,          setActiveTab]          = useState('pdf')
+  const [progress,           setProgress]           = useState(0)
+  const [progMsg,            setProgMsg]            = useState('')
   const abortRef = useRef(false)
 
+  const clearResults = useCallback(() => {
+    if (searchablePdfUrl) {
+      try { URL.revokeObjectURL(searchablePdfUrl) } catch (e) {}
+    }
+    setSearchablePdfUrl(null)
+    setSearchablePdfBytes(null)
+    setExtractedText('')
+    setErrMsg('')
+    setState('idle')
+    setProgress(0)
+    setProgMsg('')
+  }, [searchablePdfUrl])
+
+  useEffect(() => {
+    return () => {
+      if (searchablePdfUrl) {
+        try { URL.revokeObjectURL(searchablePdfUrl) } catch (e) {}
+      }
+    }
+  }, [searchablePdfUrl])
+
   const onDrop = useCallback(a => {
-    setFile(a[0]); setErrMsg(''); setExtractedText('')
-  }, [])
+    clearResults()
+    setFile(a[0])
+  }, [clearResults])
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop, accept: { 'application/pdf': ['.pdf'] }, maxFiles: 1,
   })
@@ -191,10 +216,17 @@ export default function OCRToolPage({
         setProgMsg('Generating Searchable PDF with invisible text layer…')
         setProgress(95)
         const searchableBytes = await buildSearchablePdf(arrayBuffer, pagesOcrResults)
+        setSearchablePdfBytes(searchableBytes)
+        const blob = new Blob([searchableBytes], { type: 'application/pdf' })
+        const url = URL.createObjectURL(blob)
+        setSearchablePdfUrl(url)
+        setActiveTab('pdf')
+
         const downloadName = file.name.replace(/\.pdf$/i, '') + '_searchable.pdf'
         downloadBlob(searchableBytes, downloadName, 'application/pdf')
         setProgMsg('Searchable PDF downloaded!')
       } else {
+        setActiveTab('text')
         setProgMsg('Text extracted!')
       }
 
@@ -210,7 +242,12 @@ export default function OCRToolPage({
   const copyText     = () => navigator.clipboard.writeText(extractedText)
   const downloadText = () => {
     const blob = new Blob([extractedText], { type: 'text/plain' })
-    downloadBlob(blob, 'extracted_text.txt', 'text/plain')
+    downloadBlob(blob, (file ? file.name.replace(/\.pdf$/i, '') : 'extracted_text') + '.txt', 'text/plain')
+  }
+  const downloadSearchablePdf = () => {
+    if (!searchablePdfBytes || !file) return
+    const downloadName = file.name.replace(/\.pdf$/i, '') + '_searchable.pdf'
+    downloadBlob(searchablePdfBytes, downloadName, 'application/pdf')
   }
 
   return (
@@ -240,7 +277,7 @@ export default function OCRToolPage({
                 <FileText size={14} color="var(--brand)" style={{ flexShrink:0 }} />
                 <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{file.name}</span>
               </span>
-              <button onClick={() => { setFile(null); setExtractedText('') }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding:'2px', display:'flex', alignItems:'center' }} aria-label="Remove file"><X size={14} /></button>
+              <button onClick={() => { clearResults(); setFile(null) }} style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', padding:'2px', display:'flex', alignItems:'center' }} aria-label="Remove file"><X size={14} /></button>
             </div>
           )}
 
@@ -302,36 +339,97 @@ export default function OCRToolPage({
             {state === 'loading'
               ? <><Loader2 size={15} className="spin" />Processing…</>
               : state === 'done'
-              ? <><CheckCircle size={15} />{outputMode === 'text' ? 'Text Extracted!' : 'Downloaded!'}</>
+              ? <><CheckCircle size={15} />{outputMode === 'text' ? 'Text Extracted!' : 'Ready!'}</>
               : <><Search size={15} />Run OCR</>}
           </button>
         </div>
 
         {/* ── Right Panel ── */}
-        <div style={{ flex: 1, background: 'var(--bg3)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px', overflowY: 'auto' }}>
-          {extractedText ? (
-            <div style={{ width: '100%', maxWidth: '720px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <p style={{ fontSize: '13px', color: 'var(--text2)', fontWeight: 600 }}>Extracted Text</p>
-                <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ flex: 1, background: 'var(--bg3)', display: 'flex', flexDirection: 'column', padding: (extractedText || searchablePdfUrl) ? '18px 24px' : '32px', overflowY: 'auto' }}>
+          {extractedText || searchablePdfUrl ? (
+            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {/* Toolbar */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                {/* Tabs */}
+                <div style={{ display: 'flex', background: 'var(--bg2)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                  {searchablePdfUrl && (
+                    <button
+                      onClick={() => setActiveTab('pdf')}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
+                        border: 'none', cursor: 'pointer',
+                        background: activeTab === 'pdf' ? 'var(--accent)' : 'transparent',
+                        color: activeTab === 'pdf' ? '#fff' : 'var(--text2)',
+                      }}>
+                      <Eye size={13} /> Searchable PDF Preview
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setActiveTab('text')}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '6px',
+                      padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600,
+                      border: 'none', cursor: 'pointer',
+                      background: activeTab === 'text' ? 'var(--accent)' : 'transparent',
+                      color: activeTab === 'text' ? '#fff' : 'var(--text2)',
+                    }}>
+                    <FileText size={13} /> Extracted Text View
+                  </button>
+                </div>
+
+                {/* Download Actions */}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  {searchablePdfBytes && (
+                    <button onClick={downloadSearchablePdf}
+                      style={{
+                        padding: '7px 16px', borderRadius: '8px', border: 'none',
+                        background: 'var(--accent)', color: '#fff', cursor: 'pointer',
+                        fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px',
+                        boxShadow: '0 2px 8px rgba(234,88,12,0.25)',
+                      }}>
+                      <Download size={14} /> Download Searchable PDF
+                    </button>
+                  )}
                   <button onClick={copyText}
-                    style={{ padding: '6px 14px', borderRadius: '7px', border: '1px solid var(--border)', background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
-                    Copy
+                    style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text2)', cursor: 'pointer', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Copy size={13} /> Copy Text
                   </button>
                   <button onClick={downloadText}
-                    style={{ padding: '6px 14px', borderRadius: '7px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
-                    Download .txt
+                    style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text2)', cursor: 'pointer', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Download size={13} /> Download .txt
                   </button>
                 </div>
               </div>
-              <textarea readOnly value={extractedText}
-                style={{ width: '100%', height: '60vh', background: 'var(--bg2)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '10px', padding: '16px', fontSize: '13px', lineHeight: 1.7, resize: 'none', outline: 'none', fontFamily: 'monospace' }} />
+
+              {/* View content */}
+              {activeTab === 'pdf' && searchablePdfUrl ? (
+                <div style={{ flex: 1, minHeight: '520px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: '10px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                  <iframe
+                    src={searchablePdfUrl}
+                    title="Searchable PDF Preview"
+                    style={{ width: '100%', height: '100%', minHeight: 'calc(100vh - 160px)', border: 'none' }}
+                  />
+                </div>
+              ) : (
+                <textarea
+                  readOnly
+                  value={extractedText}
+                  style={{
+                    flex: 1, minHeight: 'calc(100vh - 160px)',
+                    background: 'var(--bg2)', color: 'var(--text)',
+                    border: '1px solid var(--border)', borderRadius: '10px',
+                    padding: '16px', fontSize: '13px', lineHeight: 1.7,
+                    resize: 'none', outline: 'none', fontFamily: 'monospace'
+                  }}
+                />
+              )}
             </div>
           ) : (
-            <div style={{ textAlign: 'center', color: 'var(--text3)' }}>
+            <div style={{ textAlign: 'center', color: 'var(--text3)', margin: 'auto' }}>
               <div style={{ fontSize: '52px', marginBottom: '14px', opacity: 0.25 }}>⌕</div>
               <p style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text2)' }}>Upload a scanned PDF to get started</p>
-              <p style={{ fontSize: '13px', marginTop: '6px' }}>OCR runs in your browser — faster and uses no server RAM</p>
+              <p style={{ fontSize: '13px', marginTop: '6px' }}>PaddleOCR runs in your browser — faster and uses no server RAM</p>
             </div>
           )}
         </div>
