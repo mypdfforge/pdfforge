@@ -91,17 +91,56 @@ export function cascadePlan(doc: DocState, m: Measurer): Plan {
     }
   }
 
-  // Part C: tables. Borders are redrawn from where the cascade actually put the cell text.
+  // Part C: tables. Borders and fills are redrawn or translated from where the cascade actually put the cell text.
   for (const t of doc.tables ?? []) {
     const segs = flowedGrid(t, doc, res)
     if (!segs) continue
-    for (const op of t.ruleOps) pages[t.page]?.edits.push({ idx: op, action: 'remove' })
+    const translatedOps = new Set<number>()
+    const merged = new Set(t.mergedRows ?? [])
     const x0 = t.xs[0], w = t.xs[t.xs.length - 1] - x0
+
     for (const g of segs) {
       const dest = pages[g.page]; if (!dest) continue
       const bottom = g.ys[g.ys.length - 1]
+
+      // 1. Shaded backgrounds (fills): translate in-stream if on same page, or redraw before text if moved
+      for (const f of t.fills ?? []) {
+        if (f.rowIdx >= 0 && f.rowIdx < g.ys.length - 1) {
+          const fTop = g.ys[f.rowIdx], fBot = g.ys[f.rowIdx + 1]
+          const dy = fTop - t.ys[f.rowIdx]
+          if (f.translatable && f.ops?.length && g.page === t.page) {
+            pages[t.page]?.edits.push({ idx: f.ops[0], action: 'translate', dx: 0, dy, span: f.ops.length })
+            for (const op of f.ops) translatedOps.add(op)
+          } else {
+            // Redraw fill before text in draws
+            dest.draws.unshift({ kind: 'rect', x: f.x0, y: fBot, w: f.x1 - f.x0, h: fTop - fBot, color: f.color })
+          }
+        }
+      }
+
+      // 2. Horizontal grid lines
       for (const y of g.ys) dest.draws.push({ kind: 'rect', x: x0, y: y - 0.5, w, h: 1, color: t.ruleColor })
-      for (const x of t.xs) dest.draws.push({ kind: 'rect', x: x - 0.5, y: bottom, w: 1, h: g.ys[0] - bottom, color: t.ruleColor })
+
+      // 3. Vertical grid lines: outer borders are full-height; interior dividers skip merged rows
+      for (let i = 0; i < t.xs.length; i++) {
+        const x = t.xs[i]
+        const isOuter = (i === 0 || i === t.xs.length - 1)
+        if (isOuter) {
+          dest.draws.push({ kind: 'rect', x: x - 0.5, y: bottom, w: 1, h: g.ys[0] - bottom, color: t.ruleColor })
+        } else {
+          for (let r = 0; r < g.ys.length - 1; r++) {
+            if (!merged.has(r)) {
+              const rTop = g.ys[r], rBot = g.ys[r + 1]
+              dest.draws.push({ kind: 'rect', x: x - 0.5, y: rBot, w: 1, h: rTop - rBot, color: t.ruleColor })
+            }
+          }
+        }
+      }
+    }
+
+    // Remove old vector ops that were not translated in place
+    for (const op of t.ruleOps) {
+      if (!translatedOps.has(op)) pages[t.page]?.edits.push({ idx: op, action: 'remove' })
     }
   }
   return { pages }

@@ -224,10 +224,29 @@ function markFurniture(rows: Row[], pm: PageModel) {
 function buildRows(doc: DocState, pm: PageModel, laneOf: Map<string, number>, keyOf: (li: number) => number, tableElMap?: Map<string, TableRegion>): Row[] {
   const els = doc.order.map((id) => doc.els[id]).filter((e) => e.page === pm.index && (!e.locked || e.created))
   const rows: Row[] = []
+  const isTableCell = (id: string) => doc.tables?.some((t) => t.page === pm.index && t.cells.some((c) => c.elIds.includes(id)))
+
   for (const e of [...els].sort((a, b) => b.origBaseline - a.origBaseline || a.origX - b.origX)) {
     const lane = keyOf(laneOf.get(e.id) ?? -1)
-    const r = rows.find((q) => q.anchor && q.lane === lane &&
-      Math.abs(q.anchor.origBaseline - e.origBaseline) < 0.35 * Math.max(e.style.size, q.anchor.style.size))
+    const inTable = isTableCell(e.id)
+
+    const r = rows.find((q) => {
+      if (!q.anchor) return false
+      const sameBaseline = Math.abs(q.anchor.origBaseline - e.origBaseline) < 0.35 * Math.max(e.style.size, q.anchor.style.size)
+      if (!sameBaseline) return false
+      if (q.lane === lane) return true
+
+      // If lane differs due to global page gutters, allow adjacent inline runs to group into the same row
+      if (!inTable && !isTableCell(q.anchor.id) && !tableElMap?.has(e.id) && !tableElMap?.has(q.anchor.id)) {
+        const right = Math.max(q.anchor.origBox.x + q.anchor.origBox.w, ...q.followers.map((f) => f.origBox.x + f.origBox.w))
+        if (e.origBox.x >= right - 4 && e.origBox.x - right <= 36) {
+          laneOf.set(e.id, laneOf.get(q.anchor.id) ?? -1)
+          return true
+        }
+      }
+      return false
+    })
+
     if (r) { if (!e.deleted) r.followers.push(e) }
     else {
       const t = doc.tables?.find((tbl) => tbl.page === pm.index && tbl.cells.some((c) => c.elIds.includes(e.id)))

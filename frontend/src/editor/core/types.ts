@@ -66,6 +66,7 @@ export type FlowObject = {
 }
 
 export type TableCell = { r: number; c: number; elIds: string[]; rect: Rect }
+export type TableFill = { x0: number; x1: number; y0: number; y1: number; color: RGB; rowIdx: number; ops: number[]; translatable: boolean }
 export type TableModel = {
   id: string
   page: number
@@ -79,6 +80,8 @@ export type TableModel = {
   padX: number
   padY: number
   confidence: 'high' | 'low'       // low = borderless guess, needs user confirmation
+  fills?: TableFill[]              // shaded cell backgrounds (e.g. navy header, zebra stripes)
+  mergedRows?: number[]            // rows with colspans/no interior vertical dividers
 }
 
 export type DocState = {

@@ -123,4 +123,53 @@ assert.equal(boxTables[0].cells.length, 2, '2 cells in box')
 assert.deepEqual(boxTables[0].cells[0].elIds, ['col1'])
 assert.deepEqual(boxTables[0].cells[1].elIds, ['col2'])
 
+// ---- Bug 5: Merged header row and filled background rectangle ----
+const bgFill = { id: 'fill0', page: 0, kind: 'vector' as const, rect: { x: 72, y: 620, w: 260, h: 30 }, ops: [60], color: [0.1, 0.2, 0.3] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+const topH = { id: 'h0', page: 0, kind: 'rule' as const, rect: { x: 72, y: 650, w: 260, h: 2 }, ops: [61], color: [0, 0, 0] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+const midH = { id: 'h1', page: 0, kind: 'rule' as const, rect: { x: 72, y: 620, w: 260, h: 2 }, ops: [62], color: [0, 0, 0] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+const botH = { id: 'h2', page: 0, kind: 'rule' as const, rect: { x: 72, y: 590, w: 260, h: 2 }, ops: [63], color: [0, 0, 0] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+const leftV = { id: 'v0', page: 0, kind: 'rule' as const, rect: { x: 72, y: 590, w: 2, h: 60 }, ops: [64], color: [0, 0, 0] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+const rightV = { id: 'v1', page: 0, kind: 'rule' as const, rect: { x: 332, y: 590, w: 2, h: 60 }, ops: [65], color: [0, 0, 0] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+// Interior vertical line ONLY spans row 1 (y: 590 to 620), NOT row 0 (y: 620 to 650)
+const midV = { id: 'vmid', page: 0, kind: 'rule' as const, rect: { x: 202, y: 590, w: 2, h: 30 }, ops: [66], color: [0, 0, 0] as any, flow: 'inline' as const, anchorId: null, keepTogetherId: null, translatable: true, locked: null }
+
+const headEl = el('headText', 'ENTERPRISE MATRIX', 80, 630, 240)
+const row1Left = el('r1c1', 'Role A', 80, 600, 100)
+const row1Right = el('r1c2', 'Role B', 210, 600, 100)
+const mergedTables = detectTables([bgFill, topH, midH, botH, leftV, rightV, midV], [headEl, row1Left, row1Right], 0)
+assert.equal(mergedTables.length, 1)
+assert.deepEqual(mergedTables[0].mergedRows, [0], 'row 0 detected as merged row')
+assert.equal(mergedTables[0].fills?.length, 1, 'fills detected')
+assert.equal(mergedTables[0].fills?.[0].rowIdx, 0, 'fill mapped to row 0')
+
+// Verify cascadePlan does not draw interior vertical line across row 0
+const docMerged: DocState = {
+  ...base,
+  els: { ...base.els, intro: el('intro', 'Intro', 72, 700, 200), headText: headEl, r1c1: row1Left, r1c2: row1Right },
+  order: ['intro', 'headText', 'r1c1', 'r1c2'],
+  tables: mergedTables
+}
+const docMergedMoved = edit(docMerged, 'intro', 'x'.repeat(400))
+const pMerged = cascadePlan(docMergedMoved, M)
+const drawsP = pMerged.pages[0].draws as any[]
+// Check vertical line at x = 202.5: should only have height corresponding to row 1, never cutting through row 0
+const interiorVDraws = drawsP.filter((d) => d.kind === 'rect' && d.w === 1 && Math.abs(d.x - 202.5) < 0.5)
+assert.equal(interiorVDraws.length, 1, 'only row 1 gets interior vertical line')
+assert.ok(interiorVDraws[0].h < 40, 'interior line does not span full table height')
+
+// ---- Bug 6: Inline styled runs across lane cuts remain grouped in same row ----
+const run1 = el('run1', '8. Multi-Colored Runs: Red', 72, 400, 150)
+const run2 = el('run2', 'Green Blue Purple Amber', 226, 400, 150) // immediately adjacent
+const docRuns: DocState = {
+  ...base,
+  els: { ...base.els, intro: el('intro', 'Intro', 72, 700, 200), run1, run2 },
+  order: ['intro', 'run1', 'run2'],
+  tables: []
+}
+const docRunsMoved = edit(docRuns, 'intro', 'x'.repeat(300))
+const shiftRun1 = cascadeVerticalShift(docRunsMoved, M).shifts.get('run1')!
+const shiftRun2 = cascadeVerticalShift(docRunsMoved, M).shifts.get('run2')!
+near(shiftRun1.dy, shiftRun2.dy, 0.01)
+near(shiftRun1.baseline, shiftRun2.baseline, 0.01)
+
 console.log('flowTable selfcheck: ok')

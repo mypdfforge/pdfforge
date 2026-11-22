@@ -1,10 +1,10 @@
 // core/table.ts
-import type { DocState, TextElement, FlowObject, Rect, TableCell, TableModel } from './types.ts'
+import type { DocState, TextElement, FlowObject, Rect, TableCell, TableModel, TableFill } from './types.ts'
 import type { Measurer } from './fonts.ts'
 import { wrapText, placeLines } from './layout.ts'
 import type { Tok } from './objects.ts'
 
-export type { TableCell, TableModel }
+export type { TableCell, TableModel, TableFill }
 
 /** Path-construction and paint operators: the only instructions a table may remove when it redraws its borders. */
 const SHAPE_OPS = new Set(['m', 'l', 'c', 'v', 'y', 'h', 're', 'S', 's', 'f', 'F', 'f*', 'B', 'B*', 'b', 'b*'])
@@ -62,13 +62,53 @@ export function detectTables(objs: FlowObject[], els: TextElement[], page: numbe
       cells.push({ r, c, elIds: ids, rect: cell })
     }
   }
+
+  const fills: TableFill[] = []
+  const fillOps: number[] = []
+  for (const o of objs) {
+    if (o.page === page && (o.kind === 'vector' || o.kind === 'rule') && o.rect.h >= 6 && o.rect.w >= 20 &&
+        o.rect.x >= rect.x - 4 && o.rect.x + o.rect.w <= rect.x + rect.w + 4 &&
+        o.rect.y >= rect.y - 4 && o.rect.y + o.rect.h <= rect.y + rect.h + 4) {
+      const ymid = o.rect.y + o.rect.h / 2
+      let bestR = -1, bestDist = Infinity
+      for (let r = 0; r < ys.length - 1; r++) {
+        const rowMid = (ys[r] + ys[r + 1]) / 2
+        const dist = Math.abs(rowMid - ymid)
+        if (dist < bestDist) { bestDist = dist; bestR = r }
+      }
+      if (bestR >= 0 && bestDist < (ys[bestR] - ys[bestR + 1]) * 0.75) {
+        fills.push({
+          x0: o.rect.x, x1: o.rect.x + o.rect.w,
+          y0: o.rect.y, y1: o.rect.y + o.rect.h,
+          color: o.color, rowIdx: bestR,
+          ops: o.ops, translatable: o.translatable
+        })
+        fillOps.push(...o.ops)
+      }
+    }
+  }
+
+  // Detect rows with no interior vertical dividers (merged header / colspan rows)
+  const mergedRows: number[] = []
+  const interiorVs = V.filter((v) => {
+    const vx = v.rect.x + v.rect.w / 2
+    return vx > xs[0] + 4 && vx < xs[xs.length - 1] - 4
+  })
+  for (let r = 0; r < ys.length - 1; r++) {
+    const ymid = (ys[r] + ys[r + 1]) / 2
+    const hasInteriorDivider = interiorVs.some((v) => v.rect.y - 2 <= ymid && v.rect.y + v.rect.h + 2 >= ymid)
+    if (!hasInteriorDivider) mergedRows.push(r)
+  }
+
   return [{
     id: `t${page}_${Math.round(rect.x)}_${Math.round(rect.y)}`,
     page, rect, xs, ys, cells,
     // An object's ops also hold every instruction since the previous paint, including cell text (BT/Tj/ET). Keep shapes only.
-    ruleOps: [...new Set([...H, ...V].flatMap((o) => o.ops))].filter((i) => !toks || SHAPE_OPS.has(toks[i]?.op ?? '')),
+    ruleOps: [...new Set([...H, ...V].flatMap((o) => o.ops).concat(fillOps))].filter((i) => !toks || SHAPE_OPS.has(toks[i]?.op ?? '')),
     ruleColor: H[0].color,
-    headerRows: 1, padX: 4, padY: 3, confidence: 'high'
+    headerRows: 1, padX: 4, padY: 3, confidence: 'high',
+    fills,
+    mergedRows
   }]
 }
 
