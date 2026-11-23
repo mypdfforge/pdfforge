@@ -15,8 +15,8 @@ Transform the client-side `pdfToWord` engine into a high-fidelity document recon
 - [x] **Phase 7: Universal Intermediate AST & Multi-Format DLA** - Unified document tree for Word, Excel, and PowerPoint.
 - [x] **Phase 8: High-Accuracy DOCX & Multi-Sheet XLSX Emitters** - Word commercial reflow and Excel multi-table accounting emitter.
 - [x] **Phase 9: PPTX Emitter & Web Worker Pipeline** - PowerPoint 2D slide vector layout and background worker processing.
-- [ ] **Phase 10: Critical Searchable PDF Pipeline Fixes** - Zero text duplication and Unicode CMap TrueType font embedding.
-- [ ] **Phase 11: Document Layout & Spatial Reconstruction** - Multi-column XY-Cut segmentation, code block indentation preservation, and header/footer masking.
+- [x] **Phase 10: Critical Searchable PDF Pipeline Fixes** - Zero text duplication and Unicode CMap TrueType font embedding.
+- [/] **Phase 11: Document Layout & Spatial Reconstruction** - Multi-column XY-Cut segmentation, code block indentation preservation, and header/footer masking.
 - [ ] **Phase 12: Enterprise Table & Semantic Reconstruction** - Tabular boundary reconstruction, PDF/UA semantic tagging, and confidence heatmaps.
 
 ---
@@ -34,7 +34,7 @@ Transform the client-side `pdfToWord` engine into a high-fidelity document recon
 **Plans**: 1 plan
 
 Plans:
-- [ ] 10-01: Duplication Elimination & Unicode TrueType Font CMap Embedding
+- [x] 10-01: Duplication Elimination & Unicode TrueType Font CMap Embedding
 
 ### Phase 11: Document Layout & Spatial Reconstruction
 **Goal**: Implement multi-column XY-Cut block segmentation, preserve whitespace/indentation in code blocks, and isolate running headers/footers.
@@ -45,6 +45,9 @@ Plans:
 2. Code blocks preserve exact character indentation and pitch using coordinate-based placement.
 3. Recurring headers and footers in top/bottom zones are masked and separated from the main content flow.
 **Plans**: 1 plan
+
+Plans:
+- [ ] 11-01: Multi-Column XY-Cut Segmentation, Code Block Pitch & Header/Footer Masking
 
 ### Phase 12: Enterprise Table & Semantic Reconstruction
 **Goal**: Reconstruct complex tables with merged cells and output PDF/UA semantic structure tags.

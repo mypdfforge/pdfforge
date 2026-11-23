@@ -15,13 +15,14 @@ progress:
 ## Current Position
 
 - **Milestone**: Milestone 3 — Enterprise-Grade Client-Side OCR & Document Layout Reconstruction Pipeline
-- **Active Phase**: Phase 10: Critical Searchable PDF Pipeline Fixes
-- **Active Plan**: `10-01-PLAN.md` (Duplication Elimination & Unicode TrueType Font CMap Embedding)
+- **Active Phase**: Phase 11: Document Layout & Spatial Reconstruction
+- **Active Plan**: `11-01-PLAN.md` (Multi-Column XY-Cut Segmentation, Code Block Pitch & Header/Footer Masking)
 - **Status**: IN_PROGRESS
 
-### Preceding Milestones Completed
+### Preceding Milestones & Phases Completed
 - **Milestone 1**: Baseline In-Browser High-Fidelity Converter
 - **Milestone 2**: Universal High-Accuracy WASM Conversion Engine (Archived: 2026-11-11)
+- **Phase 10**: Critical Searchable PDF Pipeline Fixes (Completed: 2026-11-23)
 
 ---
 

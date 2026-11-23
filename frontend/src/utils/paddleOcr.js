@@ -5,6 +5,7 @@
  */
 
 import { init } from 'esearch-ocr'
+import { reconstructPageLayout } from './ocrLayoutAnalysis.js'
 
 let ocrEnginePromise = null
 let ortPromise = null
@@ -159,26 +160,24 @@ export async function getPaddleOCREngine(onProgress) {
 export async function processPageOcr(engine, imageData) {
   const result = await engine.ocr(imageData)
 
-  // Paragraph text
-  let paragraphText = ''
-  if (result.parragraphs && result.parragraphs.length > 0) {
-    paragraphText = result.parragraphs.map(p => p.text).join('\n\n')
-  } else if (result.src && result.src.length > 0) {
-    paragraphText = result.src.map(s => s.text).join('\n')
-  }
-
   // Raw lines with exact quadrilateral bounding boxes
-  const lines = (result.src || []).map(item => ({
+  const rawLines = (result.src || []).map(item => ({
     text: item.text,
     mean: item.mean,
     box: item.box, // [[x0,y0], [x1,y1], [x2,y2], [x3,y3]]
   }))
 
+  // Reconstruct document layout, multi-column reading flow, and preserve indentation
+  const layout = reconstructPageLayout(rawLines, imageData.width, imageData.height)
+
   return {
-    text: paragraphText,
-    lines,
+    text: layout.fullText,
+    lines: layout.allLines,
     canvasWidth: imageData.width,
     canvasHeight: imageData.height,
+    headerLines: layout.headerLines,
+    footerLines: layout.footerLines,
+    bodyLines: layout.bodyLines,
   }
 }
 
