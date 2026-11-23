@@ -15,10 +15,46 @@ Transform the client-side `pdfToWord` engine into a high-fidelity document recon
 - [x] **Phase 7: Universal Intermediate AST & Multi-Format DLA** - Unified document tree for Word, Excel, and PowerPoint.
 - [x] **Phase 8: High-Accuracy DOCX & Multi-Sheet XLSX Emitters** - Word commercial reflow and Excel multi-table accounting emitter.
 - [x] **Phase 9: PPTX Emitter & Web Worker Pipeline** - PowerPoint 2D slide vector layout and background worker processing.
+- [ ] **Phase 10: Critical Searchable PDF Pipeline Fixes** - Zero text duplication and Unicode CMap TrueType font embedding.
+- [ ] **Phase 11: Document Layout & Spatial Reconstruction** - Multi-column XY-Cut segmentation, code block indentation preservation, and header/footer masking.
+- [ ] **Phase 12: Enterprise Table & Semantic Reconstruction** - Tabular boundary reconstruction, PDF/UA semantic tagging, and confidence heatmaps.
 
 ---
 
 ## Phase Details
+
+### Phase 10: Critical Searchable PDF Pipeline Fixes
+**Goal**: Eliminate text layer duplication and fix Unicode CMap encoding so that special symbols, math, sub/superscripts, and non-Latin characters render without question marks.
+**Depends on**: Existing OCR engine
+**Requirements**: OCR-DUP-01, OCR-ENC-01
+**Success Criteria**:
+1. Searchable PDF generation cleans legacy text streams or renders fresh page slates, completely preventing duplicate text upon `Ctrl+F` and copy/paste.
+2. Embedding a Unicode TrueType font via `fontkit` ensures characters like Greek, math symbols (`μ`, `σ`, `α`), subscripts (`H₂SO₄`), and superscripts (`E = mc²`) render with exact UTF-8 CMap encoding.
+3. 100% client-side execution within browser memory.
+**Plans**: 1 plan
+
+Plans:
+- [ ] 10-01: Duplication Elimination & Unicode TrueType Font CMap Embedding
+
+### Phase 11: Document Layout & Spatial Reconstruction
+**Goal**: Implement multi-column XY-Cut block segmentation, preserve whitespace/indentation in code blocks, and isolate running headers/footers.
+**Depends on**: Phase 10
+**Requirements**: OCR-LAYOUT-01, OCR-CODE-01, OCR-MASK-01
+**Success Criteria**:
+1. Multi-column documents read down columns sequentially before crossing gutter boundaries.
+2. Code blocks preserve exact character indentation and pitch using coordinate-based placement.
+3. Recurring headers and footers in top/bottom zones are masked and separated from the main content flow.
+**Plans**: 1 plan
+
+### Phase 12: Enterprise Table & Semantic Reconstruction
+**Goal**: Reconstruct complex tables with merged cells and output PDF/UA semantic structure tags.
+**Depends on**: Phase 11
+**Requirements**: OCR-TABLE-01, OCR-TAG-01, OCR-CONF-01
+**Success Criteria**:
+1. Tables with irregular columns and merged headers reconstruct cell boundaries accurately.
+2. Searchable PDFs emit structural PDF tags (`/H1`, `/P`, `/Table`, `/TR`, `/TD`).
+3. Low-confidence OCR words are flagged for quality auditing.
+**Plans**: 1 plan
 
 ### Phase 9: PPTX Emitter & Web Worker Pipeline
 **Goal**: Build an editable 2D PowerPoint slide emitter and background Web Worker pipeline consuming the Universal Document AST.

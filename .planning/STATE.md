@@ -1,41 +1,36 @@
 ---
 gsd_state_version: '1.0'
-status: milestone_archived
-current_milestone: v2.0
+status: in_progress
+current_milestone: v3.0
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 13
-  completed_plans: 13
-  percent: 100
+  total_phases: 3
+  completed_phases: 0
+  total_plans: 1
+  completed_plans: 0
+  percent: 0
 ---
 
-# Project State
+# Project State: Milestone 3 (Enterprise OCR & Layout Reconstruction Pipeline)
 
 ## Current Position
 
-Milestone: Milestone 2 (Universal High-Accuracy WASM Conversion Engine) - ARCHIVED
-Audit Status: PASSED (.planning/v2.0-MILESTONE-AUDIT.md)
-Archive Roadmap: .planning/milestones/v2.0-ROADMAP.md
-Archive Requirements: .planning/milestones/v2.0-REQUIREMENTS.md
+- **Milestone**: Milestone 3 — Enterprise-Grade Client-Side OCR & Document Layout Reconstruction Pipeline
+- **Active Phase**: Phase 10: Critical Searchable PDF Pipeline Fixes
+- **Active Plan**: `10-01-PLAN.md` (Duplication Elimination & Unicode TrueType Font CMap Embedding)
+- **Status**: IN_PROGRESS
 
-Capabilities Shipped in v2.0:
-- Word (DOCX): Continuous paragraph reflow, multi-column editorial flows, 7-level list outlines, bi-directional text (Arabic, Hebrew, Devanagari, CJK), and authentic vector-shaded tables matching Smallpdf commercial grade.
-- Excel (XLSX): AST-driven multi-sheet accounting workbook emitter with real typed floats, `=SUM()` formula compatibility, accounting formats, and vector palette styling.
-- PowerPoint (PPTX): 2D editable slide emitter with native text frames, slide tables, and vector shapes.
-- Web Worker Pipeline: Asynchronous chunked conversion preventing main UI thread blocking.
-
-Progress: [██████████] 100%
-
-## Accumulated Context
-
-### Decisions
-
-- **Strict Client-Side Priority**: Core document processing runs 100% in browser memory via WASM and JS.
-- **Universal Intermediate AST**: Format-agnostic tree decouples layout extraction from Word, Excel, and PowerPoint emitters.
-- **Dedicated Multi-Sheet XLSX Emitter**: Directly exports AST tables into formula-ready Excel workbooks with typed floats and accounting formats.
-- **Editable 2D PPTX Emitter**: Produces native slide text frames and tables rather than static raster screenshots.
-- **25-Page Stress Matrix Acceptance Benchmark**: Verification benchmark based on `test_25pages_output.pdf`.
+### Preceding Milestones Completed
+- **Milestone 1**: Baseline In-Browser High-Fidelity Converter
+- **Milestone 2**: Universal High-Accuracy WASM Conversion Engine (Archived: 2026-11-11)
 
 ---
-*Archived: 2026-11-11*
+
+## Milestone 3 Objectives
+
+Transition PDFForge from a raw OCR runner into a commercial-grade **Document Layout & Reconstruction Pipeline** competing with Adobe and iLovePDF:
+1. **Zero Text Duplication**: Strip legacy text streams or generate clean canvas-backed page slates.
+2. **True Unicode CMap Encoding**: Embed `@pdf-lib/fontkit` and TrueType fonts to eliminate `?` question marks and mojibake.
+3. **Preserved Code & Monospace Formatting**: Coordinate-based character pitch and indentation preservation.
+4. **Multi-Column XY-Cut Segmentation**: Natural reading order down column gutters before jumping across margins.
+5. **Table Structural Reconstruction**: Cell boundary detection without relying purely on visible pixel gridlines.
+6. **Recurring Zone Masking**: Isolation of running headers and footers from main document body.

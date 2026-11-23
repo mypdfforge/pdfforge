@@ -183,13 +183,92 @@ export async function processPageOcr(engine, imageData) {
 }
 
 /**
+ * Strips legacy or pre-existing invisible OCR text streams from the PDF
+ * to ensure that re-running OCR or processing pre-OCR'd documents never duplicates text.
+ */
+function stripLegacyOcrStreams(pdfDoc, decodePDFRawStream) {
+  const totalPages = pdfDoc.getPageCount()
+  for (let p = 0; p < totalPages; p++) {
+    const page = pdfDoc.getPage(p)
+    const contents = page.node.Contents()
+    if (!contents) continue
+
+    if (typeof contents.size === 'function') {
+      for (let i = contents.size() - 1; i >= 0; i--) {
+        const ref = contents.get(i)
+        const stream = pdfDoc.context.lookup(ref)
+        if (!stream) continue
+        try {
+          const dec = decodePDFRawStream(stream)
+          if (dec && typeof dec.getBytes === 'function') {
+            const raw = dec.getBytes()
+            const s = new TextDecoder('latin1').decode(raw)
+            // If this stream contains invisible OCR text operators (3 Tr, /ActualText, or transparent BT with /ca 0.0)
+            if (s.includes('3 Tr') || s.includes('/ActualText') || (s.includes('BT') && (s.includes('/ca 0.0') || s.includes('/ca 0 ')))) {
+              contents.remove(i)
+            }
+          }
+        } catch (e) {
+          // Ignore stream decode errors
+        }
+      }
+    }
+  }
+}
+
+/**
  * Builds a Searchable PDF by overlaying invisible transparent text
  * over the original scanned PDF with accurate bounding box positions.
+ * Uses fontkit and Unicode TrueType fonts (Arial & Nirmala) to ensure
+ * zero duplication and complete UTF-8 CMap encoding support.
  */
-export async function buildSearchablePdf(originalPdfBytes, pagesResults) {
-  const { PDFDocument, rgb, StandardFonts } = await import('@cantoo/pdf-lib')
+export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgress) {
+  const { PDFDocument, rgb, StandardFonts, decodePDFRawStream } = await import('@cantoo/pdf-lib')
+  const fontkit = await import('fontkit')
+
   const pdfDoc = await PDFDocument.load(originalPdfBytes, { ignoreEncryption: true })
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  pdfDoc.registerFontkit(fontkit.default || fontkit)
+
+  // 1. Strip legacy invisible OCR text streams to prevent text duplication
+  try {
+    stripLegacyOcrStreams(pdfDoc, decodePDFRawStream)
+  } catch (err) {
+    console.warn('Could not strip legacy OCR streams:', err)
+  }
+
+  // 2. Scan text for Devanagari script requirement
+  let hasDevanagari = false
+  for (const pageRes of pagesResults) {
+    for (const line of (pageRes?.lines || [])) {
+      if (/[\u0900-\u097F]/.test(line.text || '')) {
+        hasDevanagari = true
+        break
+      }
+    }
+    if (hasDevanagari) break
+  }
+
+  // 3. Load Unicode TrueType font (Arial covers Latin, Greek, Cyrillic, Arabic, Hebrew, Math, Currency)
+  let arialFont = null
+  try {
+    const arialBytes = await fetchWithCache('/wasm/docx2pdf/fonts/Arial-Regular.ttf', onProgress, 'Arial Unicode Font')
+    arialFont = await pdfDoc.embedFont(arialBytes, { subset: true })
+  } catch (err) {
+    console.warn('Failed to embed Arial Unicode font, falling back to Helvetica', err)
+    arialFont = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  }
+
+  let nirmalaFont = null
+  if (hasDevanagari) {
+    try {
+      const nirmalaBytes = await fetchWithCache('/wasm/docx2pdf/fonts/Nirmala-Regular.ttf', onProgress, 'Nirmala Devanagari Font')
+      nirmalaFont = await pdfDoc.embedFont(nirmalaBytes, { subset: true })
+    } catch (err) {
+      console.warn('Failed to embed Nirmala font:', err)
+    }
+  }
+
+  const fallbackFont = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const totalPages = pdfDoc.getPageCount()
 
   for (let p = 0; p < totalPages; p++) {
@@ -214,31 +293,46 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults) {
       const boxHeight = Math.abs(box[3][1] - box[0][1]) * scaleY
       const fontSize = Math.max(4, Math.min(boxHeight * 0.85, 36))
 
+      const isDevanagari = /[\u0900-\u097F]/.test(line.text)
+      const primaryFont = (isDevanagari && nirmalaFont) ? nirmalaFont : (arialFont || fallbackFont)
+
       try {
         pdfPage.drawText(line.text, {
           x: Math.max(0, blX),
           y: Math.max(0, blY),
           size: fontSize,
-          font,
+          font: primaryFont,
           color: rgb(0, 0, 0),
           opacity: 0, // 100% invisible but completely selectable & searchable!
         })
       } catch (err) {
-        // Some glyphs may not exist in WinAnsiEncoding; strip unsupported characters
+        // If specific glyph is missing in primary font, try fallback font
         try {
-          const sanitizedText = line.text.replace(/[^\x20-\x7E]/g, ' ')
-          if (sanitizedText.trim()) {
-            pdfPage.drawText(sanitizedText, {
-              x: Math.max(0, blX),
-              y: Math.max(0, blY),
-              size: fontSize,
-              font,
-              color: rgb(0, 0, 0),
-              opacity: 0,
-            })
+          pdfPage.drawText(line.text, {
+            x: Math.max(0, blX),
+            y: Math.max(0, blY),
+            size: fontSize,
+            font: fallbackFont,
+            color: rgb(0, 0, 0),
+            opacity: 0,
+          })
+        } catch (e2) {
+          // If fallback font also cannot encode, sanitize to ASCII safe string
+          try {
+            const sanitizedText = line.text.replace(/[^\x20-\x7E]/g, ' ')
+            if (sanitizedText.trim()) {
+              pdfPage.drawText(sanitizedText, {
+                x: Math.max(0, blX),
+                y: Math.max(0, blY),
+                size: fontSize,
+                font: fallbackFont,
+                color: rgb(0, 0, 0),
+                opacity: 0,
+              })
+            }
+          } catch (e3) {
+            // ignore
           }
-        } catch (e) {
-          // ignore glyph rendering errors for specific lines
         }
       }
     }

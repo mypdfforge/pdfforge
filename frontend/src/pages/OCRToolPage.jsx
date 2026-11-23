@@ -216,7 +216,9 @@ export default function OCRToolPage({
       if (outputMode === 'searchable') {
         setProgMsg('Generating Searchable PDF with invisible text layer…')
         setProgress(95)
-        const searchableBytes = await buildSearchablePdf(originalPdfBytes, pagesOcrResults)
+        const searchableBytes = await buildSearchablePdf(originalPdfBytes, pagesOcrResults, (p) => {
+          if (p?.label) setProgMsg(p.label)
+        })
         setSearchablePdfBytes(searchableBytes)
         const blob = new Blob([searchableBytes], { type: 'application/pdf' })
         const url = URL.createObjectURL(blob)
