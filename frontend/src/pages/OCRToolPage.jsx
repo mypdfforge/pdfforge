@@ -117,6 +117,7 @@ export default function OCRToolPage({
   const [searchablePdfUrl,   setSearchablePdfUrl]   = useState(null)
   const [searchablePdfBytes, setSearchablePdfBytes] = useState(null)
   const [activeTab,          setActiveTab]          = useState('pdf')
+  const [docConfidence,      setDocConfidence]      = useState(null)
   const [progress,           setProgress]           = useState(0)
   const [progMsg,            setProgMsg]            = useState('')
   const abortRef = useRef(false)
@@ -128,6 +129,7 @@ export default function OCRToolPage({
     setSearchablePdfUrl(null)
     setSearchablePdfBytes(null)
     setExtractedText('')
+    setDocConfidence(null)
     setErrMsg('')
     setState('idle')
     setProgress(0)
@@ -212,6 +214,11 @@ export default function OCRToolPage({
 
       const allText = textChunks.join('\n\n')
       setExtractedText(allText)
+
+      const avgConf = pagesOcrResults.length > 0
+        ? Math.round((pagesOcrResults.reduce((s, p) => s + (p.avgConfidence || 95), 0) / pagesOcrResults.length) * 10) / 10
+        : null
+      setDocConfidence(avgConf)
 
       if (outputMode === 'searchable') {
         setProgMsg('Generating Searchable PDF with invisible text layer…')
@@ -396,6 +403,18 @@ export default function OCRToolPage({
                     }}>
                     <FileText size={13} /> Extracted Text View
                   </button>
+
+                  {docConfidence != null && (
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '5px',
+                      padding: '4px 10px', borderRadius: '20px',
+                      background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.3)',
+                      color: '#10b981', fontSize: '11px', fontWeight: 700, marginLeft: '4px'
+                    }}>
+                      <CheckCircle size={12} />
+                      {docConfidence}% Confidence
+                    </span>
+                  )}
                 </div>
 
                 {/* Download Actions */}

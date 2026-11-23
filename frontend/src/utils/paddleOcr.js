@@ -178,6 +178,8 @@ export async function processPageOcr(engine, imageData) {
     headerLines: layout.headerLines,
     footerLines: layout.footerLines,
     bodyLines: layout.bodyLines,
+    avgConfidence: layout.avgConfidence,
+    lowConfidenceCount: layout.lowConfidenceCount,
   }
 }
 

@@ -259,6 +259,70 @@ function preserveIndentation(lines, charWidth) {
 }
 
 /**
+ * Formats structured body content with Markdown tables and semantic headings.
+ */
+export function formatStructuredBody(lines, medianHeight) {
+  if (!lines || lines.length === 0) return ''
+
+  // Cluster lines sharing similar vertical center into horizontal rows
+  const sorted = [...lines].sort((a, b) => a.yMin - b.yMin)
+  const rawRows = []
+  let curRow = []
+
+  for (const l of sorted) {
+    if (curRow.length === 0) {
+      curRow.push(l)
+      continue
+    }
+    const rowY = curRow.reduce((s, it) => s + it.yCenter, 0) / curRow.length
+    if (Math.abs(l.yCenter - rowY) < medianHeight * 0.55) {
+      curRow.push(l)
+    } else {
+      rawRows.push(curRow.sort((a, b) => a.xMin - b.xMin))
+      curRow = [l]
+    }
+  }
+  if (curRow.length) rawRows.push(curRow.sort((a, b) => a.xMin - b.xMin))
+
+  const output = []
+  let tableBuffer = []
+
+  const flushTable = () => {
+    if (tableBuffer.length >= 2) {
+      output.push('')
+      tableBuffer.forEach((r, idx) => {
+        output.push('| ' + r.map(c => c.text.trim()).join(' | ') + ' |')
+        if (idx === 0) {
+          output.push('| ' + r.map(() => '---').join(' | ') + ' |')
+        }
+      })
+      output.push('')
+    } else if (tableBuffer.length === 1) {
+      output.push(tableBuffer[0].map(c => c.formattedText || c.text).join(' '))
+    }
+    tableBuffer = []
+  }
+
+  for (const r of rawRows) {
+    if (r.length >= 2) {
+      tableBuffer.push(r)
+    } else {
+      flushTable()
+      const text = r[0].formattedText || r[0].text
+      // Detect major headings and section headers
+      if (r[0].height > medianHeight * 1.35 || /^Section\s+\d+:/i.test(text)) {
+        output.push(`\n## ${text}\n`)
+      } else {
+        output.push(text)
+      }
+    }
+  }
+  flushTable()
+
+  return output.join('\n')
+}
+
+/**
  * Full layout reconstruction pipeline for an OCR page.
  */
 export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight) {
@@ -269,6 +333,8 @@ export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight) {
       headerLines: [],
       footerLines: [],
       fullText: '',
+      avgConfidence: 100.0,
+      lowConfidenceCount: 0,
     }
   }
 
@@ -279,14 +345,18 @@ export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight) {
   // Combined reading order: Header -> Structured Body -> Footer
   const allLines = [...header, ...structuredBody, ...footer]
 
-  // Build clean text view
+  // Estimate median line height
+  const heights = allLines.map(l => l.height).filter(h => h > 4).sort((a, b) => a - b)
+  const medianHeight = heights.length ? heights[Math.floor(heights.length / 2)] : 14
+
+  // Build clean, semantic text view
   const textParts = []
   if (header.length > 0) {
     textParts.push(header.map(l => l.text).join(' '))
   }
 
   if (structuredBody.length > 0) {
-    textParts.push(structuredBody.map(l => l.formattedText || l.text).join('\n'))
+    textParts.push(formatStructuredBody(structuredBody, medianHeight))
   }
 
   if (footer.length > 0) {
@@ -295,11 +365,20 @@ export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight) {
 
   const fullText = textParts.join('\n\n')
 
+  // Calculate confidence scores
+  const totalCount = rawLines.length
+  const avgConfidence = totalCount > 0
+    ? Math.round((rawLines.reduce((s, l) => s + (l.mean != null ? l.mean : 0.95), 0) / totalCount) * 1000) / 10
+    : 100.0
+  const lowConfidenceCount = rawLines.filter(l => (l.mean != null ? l.mean : 1) < 0.80).length
+
   return {
     allLines,
     bodyLines: structuredBody,
     headerLines: header,
     footerLines: footer,
     fullText,
+    avgConfidence,
+    lowConfidenceCount,
   }
 }

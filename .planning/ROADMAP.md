@@ -16,8 +16,8 @@ Transform the client-side `pdfToWord` engine into a high-fidelity document recon
 - [x] **Phase 8: High-Accuracy DOCX & Multi-Sheet XLSX Emitters** - Word commercial reflow and Excel multi-table accounting emitter.
 - [x] **Phase 9: PPTX Emitter & Web Worker Pipeline** - PowerPoint 2D slide vector layout and background worker processing.
 - [x] **Phase 10: Critical Searchable PDF Pipeline Fixes** - Zero text duplication and Unicode CMap TrueType font embedding.
-- [/] **Phase 11: Document Layout & Spatial Reconstruction** - Multi-column XY-Cut segmentation, code block indentation preservation, and header/footer masking.
-- [ ] **Phase 12: Enterprise Table & Semantic Reconstruction** - Tabular boundary reconstruction, PDF/UA semantic tagging, and confidence heatmaps.
+- [x] **Phase 11: Document Layout & Spatial Reconstruction** - Multi-column XY-Cut segmentation, code block indentation preservation, and header/footer masking.
+- [x] **Phase 12: Enterprise Table & Semantic Reconstruction** - Tabular boundary reconstruction, PDF/UA semantic tagging, and confidence heatmaps.
 
 ---
 
@@ -47,7 +47,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 11-01: Multi-Column XY-Cut Segmentation, Code Block Pitch & Header/Footer Masking
+- [x] 11-01: Multi-Column XY-Cut Segmentation, Code Block Pitch & Header/Footer Masking
 
 ### Phase 12: Enterprise Table & Semantic Reconstruction
 **Goal**: Reconstruct complex tables with merged cells and output PDF/UA semantic structure tags.
@@ -58,6 +58,9 @@ Plans:
 2. Searchable PDFs emit structural PDF tags (`/H1`, `/P`, `/Table`, `/TR`, `/TD`).
 3. Low-confidence OCR words are flagged for quality auditing.
 **Plans**: 1 plan
+
+Plans:
+- [x] 12-01: Table Structure Reconstruction, Semantic Tagging & Confidence Scoring
 
 ### Phase 9: PPTX Emitter & Web Worker Pipeline
 **Goal**: Build an editable 2D PowerPoint slide emitter and background Web Worker pipeline consuming the Universal Document AST.
