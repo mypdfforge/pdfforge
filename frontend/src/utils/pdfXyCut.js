@@ -95,7 +95,7 @@ function cut(bs, medH, depth) {
 }
 /** @returns lines in reading order; unsplit lines are returned by identity. */
 export function reorderLinesByColumns(lines, { pageWidth, pageHeight, makeSubLine }) {
-  if (!lines || lines.length < 4) return lines || [];
+  if (!lines || lines.length < 2) return lines || [];
   const groups = [], owner = new Map();
   for (const l of lines) {
     const parts = segmentLine(l);

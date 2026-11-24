@@ -1,8 +1,16 @@
+import path from 'path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      'pdfjs-dist': path.resolve(__dirname, 'node_modules/pdfjs-dist'),
+      'docx': path.resolve(__dirname, 'node_modules/docx'),
+      'fflate': path.resolve(__dirname, 'node_modules/fflate'),
+    },
+  },
   define: {
     'import.meta.env.VITE_API_URL': JSON.stringify(
       process.env.VITE_API_URL || 'https://mypdfforge.onrender.com/api'
