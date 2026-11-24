@@ -15,6 +15,8 @@
  */
 import { extractPageLayout, segmentIntoColumns, mergeParagraphBlocks } from './pdfLayoutSegmenter.js'
 import { detectTableRegions } from './pdfTableDetector.js'
+import { detectTableRegionsHybrid } from './pdfRuledTables.js'
+import { stitchCrossPageTables } from './pdfTableMerge.js'
 import { extractVectorGeometry } from './pdfVectorExtractor.js'
 import * as U from './pdfToWordUtils.js'
 import { buildDocxBlob } from './docxBuild.js'
@@ -113,6 +115,8 @@ export async function convertPdfToDocx(file, opts = {}) {
     const title = (cfg.title || file.name || 'Converted PDF').replace(/\.pdf$/i, '')
     emit('build', 'Detecting tables & columns…', 70, 0, n)
     stats.images = models.reduce((s, m) => s + (m.images?.length || 0) + (m.pageImage ? 1 : 0), 0)
+    const stitched = stitchCrossPageTables(models)
+    if (stitched) warn(null, 'TABLE_STITCHED', `${stitched} table(s) continued across pages were merged.`, 'info')
     const built = await buildAndPack(models, { bodySize, title, warn, signal, cfg,
       onProgress: (i, total) => emit(i >= total ? 'pack' : 'build',
         i >= total ? 'Packaging Word document…' : `Detecting tables & columns — page ${i + 1} of ${total}…`,
@@ -178,7 +182,11 @@ async function analyzePage(pdf, pageNum, ctx) {
 
     // 4. tables / callouts / code / columns
     if (model.mode === 'rich') {
-      try { model.blocks = mergeParagraphBlocks(detectTableRegions(model.lines, pageW, model.vector)) }
+      try {
+        model.blocks = mergeParagraphBlocks(
+          detectTableRegionsHybrid(model.lines, pageW, model.vector, detectTableRegions)
+        )
+      }
       catch (e) {
         warn(pageNum, 'TABLES_FAILED', `Page ${pageNum}: table detection failed; text kept as paragraphs.`)
         model.mode = 'plain'

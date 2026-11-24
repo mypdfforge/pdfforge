@@ -1339,6 +1339,30 @@ const isNumericStr = (s) => /^[\d,.\-+$€£₹₽¥%()\s]+$/.test(String(s).tri
  * CONCATENATE, LEN, IF, basic arithmetic, and cell references like D4-E4) when cached
  * values are omitted by generation libraries.
  */
+/** Shunting-yard: + - * / ( ) and unary minus. No eval, CSP-safe. */
+function evalArithmetic(src) {
+  const toks = src.match(/\d+\.?\d*|[+\-*/()]/g) || [];
+  const out = [], ops = [], prec = { '+': 1, '-': 1, '*': 2, '/': 2, 'u': 3 };
+  let prev = null;
+  for (const t of toks) {
+    if (/^\d/.test(t)) { out.push(parseFloat(t)); prev = 'num'; continue; }
+    if (t === '(') { ops.push(t); prev = '('; continue; }
+    if (t === ')') { while (ops.length && ops[ops.length - 1] !== '(') out.push(ops.pop()); ops.pop(); prev = 'num'; continue; }
+    const op = (t === '-' && (prev === null || prev === 'op' || prev === '(')) ? 'u' : t;
+    while (ops.length && ops[ops.length - 1] !== '(' && prec[ops[ops.length - 1]] >= prec[op]) out.push(ops.pop());
+    ops.push(op); prev = 'op';
+  }
+  while (ops.length) out.push(ops.pop());
+  const st = [];
+  for (const t of out) {
+    if (typeof t === 'number') { st.push(t); continue; }
+    if (t === 'u') { st.push(-st.pop()); continue; }
+    const b = st.pop(), a = st.pop();
+    st.push(t === '+' ? a + b : t === '-' ? a - b : t === '*' ? a * b : b === 0 ? NaN : a / b);
+  }
+  return st.length === 1 && Number.isFinite(st[0]) ? st[0] : src;
+}
+
 function evaluateCellFormula(formulaStr, sheet, depth = 0) {
   if (!formulaStr || depth > 10) return ''
   let str = String(formulaStr).trim()
@@ -1501,9 +1525,7 @@ function evaluateCellFormula(formulaStr, sheet, depth = 0) {
 
     // Safely evaluate simple math expressions
     try {
-      if (/^[\d+\-*\/().\s]+$/.test(expr)) {
-        return Function('return (' + expr + ')')()
-      }
+      if (/^[\d+\-*/().\s]+$/.test(expr)) return evalArithmetic(expr);
     } catch (_) {}
 
     return expr
@@ -2227,74 +2249,37 @@ function buildPdfAXmp(title, author, creationDate) {
 <?xpacket end="w"?>`
 }
 
-/** Minimal sRGB ICC profile as Uint8Array — hand-crafted 128-byte skeleton
- *  A real PDF/A validator requires a proper ICC profile; we embed the
- *  well-known IEC 61966-2.1 sRGB data trimmed to the mandatory header fields.
- *  For production, replace with the full ~4 KB IEC 61966-2.1 profile bytes.
- */
+/** Structurally valid ICC v2 sRGB profile: 128-byte header + tag table + 10 tags. */
 function buildMinimalSrgbIcc() {
-  // 128-byte ICC profile header required fields
-  // Full sRGB profile is ~4 KB; this skeleton satisfies veraPDF's stream check
-  const header = new Uint8Array(128)
-  const dv = new DataView(header.buffer)
-
-  // Profile size (4 bytes BE at offset 0) — we'll report 128 bytes
-  dv.setUint32(0, 128, false)
-
-  // Preferred CMM type: 'appl'
-  header.set([0x61, 0x70, 0x70, 0x6C], 4)
-
-  // Profile version: 2.1.0 (PDF/A-1 requires ICC v2)
-  header.set([0x02, 0x10, 0x00, 0x00], 8)
-
-  // Profile/device class: 'mntr' (monitor)
-  header.set([0x6D, 0x6E, 0x74, 0x72], 12)
-
-  // Color space: 'RGB ' (4 bytes)
-  header.set([0x52, 0x47, 0x42, 0x20], 16)
-
-  // PCS: 'XYZ '
-  header.set([0x58, 0x59, 0x5A, 0x20], 20)
-
-  // Creation date/time (6 × 2-byte fields at offset 24)
-  const d = new Date()
-  dv.setUint16(24, d.getUTCFullYear(), false)
-  dv.setUint16(26, d.getUTCMonth() + 1, false)
-  dv.setUint16(28, d.getUTCDate(), false)
-  dv.setUint16(30, d.getUTCHours(), false)
-  dv.setUint16(32, d.getUTCMinutes(), false)
-  dv.setUint16(34, d.getUTCSeconds(), false)
-
-  // File signature: 'acsp'
-  header.set([0x61, 0x63, 0x73, 0x70], 36)
-
-  // Primary platform: 'MSFT'
-  header.set([0x4D, 0x53, 0x46, 0x54], 40)
-
-  // Profile flags: 0
-  dv.setUint32(44, 0, false)
-
-  // Device manufacturer: 'IEC '
-  header.set([0x49, 0x45, 0x43, 0x20], 48)
-
-  // Device model: 'sRGB'
-  header.set([0x73, 0x52, 0x47, 0x42], 52)
-
-  // Rendering intent: perceptual (0)
-  dv.setUint32(64, 0, false)
-
-  // PCS illuminant: D50 XYZ (0.9642, 1.0000, 0.8249)
-  dv.setUint32(68, Math.round(0.9642 * 65536), false)
-  dv.setUint32(72, Math.round(1.0000 * 65536), false)
-  dv.setUint32(76, Math.round(0.8249 * 65536), false)
-
-  // Profile creator: 'PDFf'
-  header.set([0x50, 0x44, 0x46, 0x66], 80)
-
-  // Tag count: 0 (minimal — veraPDF accepts this for OutputIntent stream)
-  dv.setUint32(128 - 4, 0, false)
-
-  return header
+  const s15 = (v) => Math.round(v * 65536);
+  const xyz = (x, y, z) => { const b = new Uint8Array(20), d = new DataView(b.buffer);
+    b.set([0x58,0x59,0x5a,0x20], 0); d.setInt32(8, s15(x)); d.setInt32(12, s15(y)); d.setInt32(16, s15(z)); return b; };
+  const para = () => { const b = new Uint8Array(32), d = new DataView(b.buffer);
+    b.set([0x70,0x61,0x72,0x61], 0); d.setUint16(8, 3);
+    [2.4, 1/1.055, 0.055/1.055, 1/12.92, 0.04045].forEach((v, i) => d.setInt32(12 + i*4, s15(v))); return b; };
+  const desc = (s) => { const a = new TextEncoder().encode(s), b = new Uint8Array(12 + a.length + 1), d = new DataView(b.buffer);
+    b.set([0x64,0x65,0x73,0x63], 0); d.setUint32(8, a.length + 1); b.set(a, 12); return b; };
+  const tags = [
+    ['desc', desc('sRGB IEC61966-2.1')], ['cprt', desc('Public Domain')],
+    ['wtpt', xyz(0.9642, 1, 0.8249)], ['bkpt', xyz(0, 0, 0)],
+    ['rXYZ', xyz(0.4360747, 0.2225045, 0.0139322)],
+    ['gXYZ', xyz(0.3850649, 0.7168786, 0.0971045)],
+    ['bXYZ', xyz(0.1430804, 0.0606169, 0.7141733)],
+    ['rTRC', para()], ['gTRC', para()], ['bTRC', para()],
+  ];
+  const pad = (n) => (4 - (n % 4)) % 4;
+  let off = 128 + 4 + tags.length * 12, total = off;
+  const entries = tags.map(([sig, data]) => { const e = { sig, data, off: total }; total += data.length + pad(data.length); return e; });
+  const buf = new Uint8Array(total), dv = new DataView(buf.buffer);
+  dv.setUint32(0, total); buf.set([0x02,0x10,0,0], 8);
+  buf.set([0x6d,0x6e,0x74,0x72], 12); buf.set([0x52,0x47,0x42,0x20], 16); buf.set([0x58,0x59,0x5a,0x20], 20);
+  buf.set([0x61,0x63,0x73,0x70], 36); buf.set([0x4d,0x53,0x46,0x54], 40);
+  dv.setInt32(68, s15(0.9642)); dv.setInt32(72, s15(1)); dv.setInt32(76, s15(0.8249));
+  dv.setUint32(128, tags.length);
+  entries.forEach((e, i) => { const p = 132 + i * 12;
+    for (let k = 0; k < 4; k++) buf[p + k] = e.sig.charCodeAt(k);
+    dv.setUint32(p + 4, e.off); dv.setUint32(p + 8, e.data.length); buf.set(e.data, e.off); });
+  return buf;
 }
 
 export async function pdfToPdfa(file, onProgress) {

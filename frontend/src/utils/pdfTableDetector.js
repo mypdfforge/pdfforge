@@ -273,6 +273,12 @@ function buildTableBlock(tableLines, pageWidth, vectorGeometry = null) {
     colEdges = clusterCoordinates(xStarts, 22);
   }
 
+  const multiRows = tableLines.filter(l => l.items?.length >= 2);
+  if (multiRows.length >= 3 && colEdges.length > 1) {
+    colEdges = colEdges.filter((e, k) => k === 0 ||
+      multiRows.filter(l => l.items.some(it => Math.abs(it.x - e) <= 14)).length / multiRows.length >= 0.7);
+  }
+
   const numCols = Math.max(colEdges.length, 1);
   const tableWidth = Math.max(maxX - minX, 100);
 

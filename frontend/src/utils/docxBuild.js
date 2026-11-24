@@ -6,7 +6,7 @@
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell,
   WidthType, BorderStyle, AlignmentType, ImageRun, ShadingType, TableLayoutType,
-  PageOrientation, VerticalAlign,
+  PageOrientation, VerticalAlign, VerticalMergeType,
 } from 'docx'
 import { wrapUnbrokenStrings } from './pdfLayoutSegmenter.js'
 import * as U from './pdfToWordUtils.js'
@@ -278,7 +278,7 @@ function buildTable(block, ctx) {
   }
   colTw = U.fitColumnWidths(colTw, needs)
 
-  const docxRows = rows.map((r) => {
+  const docxRows = rows.map((r, ri) => {
     let col = 0
     const cells = r.cells.map((c) => {
       const span = Math.max(1, c.columnSpan || 1)
@@ -292,8 +292,10 @@ function buildTable(block, ctx) {
       return new TableCell({
         width: { size: width, type: WidthType.DXA },
         columnSpan: span > 1 ? span : undefined,
+        verticalMerge: c.vMerge === 'restart' ? VerticalMergeType.RESTART
+                     : c.vMerge === 'continue' ? VerticalMergeType.CONTINUE : undefined,
         verticalAlign: VerticalAlign.CENTER,
-        shading: isHdr ? shade(hdrBg) : undefined,
+        shading: isHdr ? shade(hdrBg) : (U.normHex(c.fill) ? shade(U.normHex(c.fill)) : undefined),
         borders: allBorders(border),
         margins: { top: 70, bottom: 70, left: 110, right: 110 },
         children: [new Paragraph({
@@ -303,7 +305,7 @@ function buildTable(block, ctx) {
         })],
       })
     })
-    return new TableRow({ tableHeader: !!r.isHeader, cantSplit: true, children: cells })
+    return new TableRow({ tableHeader: !!r.isHeader || (block.repeatHeader && ri === 0), cantSplit: true, children: cells })
   })
 
   return [
