@@ -10,6 +10,7 @@ import {
 } from 'docx'
 import { wrapUnbrokenStrings } from './pdfLayoutSegmenter.js'
 import * as U from './pdfToWordUtils.js'
+import { verifyDocxBlob } from './docxVerify.js'
 
 const wrap = (t) => { try { return wrapUnbrokenStrings(t) } catch { return t } }
 const tw = (pt) => Math.round(pt * 20)
@@ -62,6 +63,18 @@ export async function buildDocxBlob(models, o) {
       blob = await packDocument(models.map((m) => buildSection(m, g, 'minimal', warn)), o.title)
     }
   }
+
+  if (blob) {
+    try {
+      const gate = await verifyDocxBlob(blob)
+      if (!gate.ok) {
+        warn(null, 'DOCX_VERIFY', 'OpenXML gate: ' + gate.violations.map((v) => v.code + ' ' + v.detail).join('; '))
+      }
+    } catch {
+      // verification error shouldn't crash production if blob is otherwise valid
+    }
+  }
+
   return { blob, packMode, modes }
 }
 
@@ -146,7 +159,7 @@ function blockPlainText(b) {
   if (b.line) return b.line.text
   if (b.lines) return b.lines.map((l) => l.text).join(' ')
   if (b.col1Lines) return [...b.col1Lines, ...(b.col2Lines || [])].map((l) => l.text).join(' ')
-  if (b.rows) return b.rows.map((r) => r.cells.map((c) => c.text).join(' | ')).join('\n')
+  if (b.rows) return b.rows.map((r) => r.cells.map((c) => c.text).join('\t')).join('\n')
   return ''
 }
 
@@ -369,10 +382,15 @@ function buildCallout(block, ctx) {
 }
 
 function buildCode(block, ctx) {
-  const paras = block.lines.map((l) => new Paragraph({
-    spacing: { after: 30, line: 240 },
-    children: runsFromText(l.text, { size: 9, code: true }).length ? runsFromText(l.text, { size: 9, code: true }) : [new TextRun({ text: '' })],
-  }))
+  const minX = Math.min(...block.lines.map((l) => l.x ?? 0))
+  const paras = block.lines.map((l) => {
+    const pad = ' '.repeat(Math.max(0, Math.round(((l.x ?? minX) - minX) / (0.55 * (l.size || 9)))))
+    const runs = runsFromText(pad + l.text, { size: 9, code: true })
+    return new Paragraph({
+      spacing: { after: 30, line: 240 },
+      children: runs.length ? runs : [new TextRun({ text: '' })],
+    })
+  })
   const totalTw = tw(ctx.geo.contentW)
   return [
     new Table({

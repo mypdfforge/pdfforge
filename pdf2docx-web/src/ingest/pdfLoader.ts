@@ -1,4 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
+// @ts-ignore - Vite query param
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import { PageIR, DocumentIR, Glyph, FontInfo, LinkObj } from '../core/pageir.js';
 import { OperatorInterpreter } from './opInterpreter.js';
 import { resolveFontDescriptor, parseFontDescriptor } from './fontMap.js';
@@ -7,8 +9,7 @@ function getPdfLib(): any {
   if (typeof window !== 'undefined' && (window as any).pdfjsLib) {
     const lib = (window as any).pdfjsLib;
     if (lib.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) {
-      lib.GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      lib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
     }
     return lib;
   }

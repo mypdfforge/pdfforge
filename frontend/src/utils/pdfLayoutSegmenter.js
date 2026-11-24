@@ -2,16 +2,13 @@
  * PDF Layout Segmenter
  * Intelligent spatial reading-order and column segmentation for client-side PDF to Word conversion.
  */
+import { normalizeText, reorderVisualToLogical, shouldInsertSpace, subSupFlags } from './pdfUnicode.js';
 
 const XML_ILLEGAL_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/g;
 
 export function sanitizeXml(str) {
   if (!str) return '';
-  return str
-    .replace(XML_ILLEGAL_RE, '')
-    .replace(/<\/?[a-zA-Z]+(\s+[^>]*)?\/?>/g, '') // strip accidental HTML tags
-    .replace(/\*{2,}/g, '') // strip raw **
-    .replace(/~{2,}/g, ''); // strip raw ~~
+  return str.replace(XML_ILLEGAL_RE, '');
 }
 
 /**
@@ -64,7 +61,7 @@ export async function extractPageLayout(page) {
   const items = [];
   for (const it of tc.items) {
     if (typeof it.str !== 'string') continue;
-    const cleanStr = sanitizeXml(it.str);
+    const cleanStr = sanitizeXml(normalizeText(it.str));
     if (!cleanStr.trim()) continue;
 
     const [a, b, c, d, e, f] = it.transform;
@@ -222,8 +219,9 @@ function groupItemsIntoLines(items) {
   lines.sort((a, b) => b.y - a.y);
   for (const line of lines) {
     line.items.sort((a, b) => a.x - b.x);
-    line.x = line.items[0].x;
-    line.xEnd = line.items[line.items.length - 1].x + line.items[line.items.length - 1].w;
+    line.items = reorderVisualToLogical(line.items);
+    line.x = Math.min(...line.items.map((i) => i.x));
+    line.xEnd = Math.max(...line.items.map((i) => i.x + i.w));
     line.width = line.xEnd - line.x;
 
     const sizes = line.items.map((i) => i.size);
@@ -242,18 +240,19 @@ function groupItemsIntoLines(items) {
     const rawSpans = [];
 
     line.items.forEach((it, idx) => {
+      const flags = subSupFlags(it.size, line.size, it.y, baselineY);
+      const isSub = flags === 'sub', isSuper = flags === 'sup';
       let prefixSpace = '';
       if (idx > 0) {
         const prev = line.items[idx - 1];
-        const gap = it.x - (prev.x + prev.w);
-        if (gap > 0.12 * it.size && !/\s$/.test(text) && !/^\s/.test(it.str)) {
+        const prevFlags = subSupFlags(prev.size, line.size, prev.y, baselineY);
+        const gap = it.x >= prev.x ? it.x - (prev.x + prev.w) : prev.x - (it.x + it.w);
+        if (shouldInsertSpace({ gapPt: gap, sizePt: it.size, prevSubSup: !!prevFlags, curSubSup: !!flags })
+            && !/\s$/.test(text) && !/^\s/.test(it.str)) {
           prefixSpace = ' ';
         }
       }
       text += prefixSpace + it.str;
-
-      const isSub = it.size <= 0.88 * line.size && (baselineY - it.y) >= 0.08 * line.size;
-      const isSuper = it.size <= 0.88 * line.size && (it.y - baselineY) >= 0.10 * line.size;
       const color = detectColor(it.str);
       const spanLang = detectLanguageAndDir(it.str);
 
