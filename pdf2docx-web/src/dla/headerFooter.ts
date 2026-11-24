@@ -33,8 +33,8 @@ export function extractHeaderFooterFurniture(
     };
   }
 
-  const topCandidates: { pageIdx: number; line: TextLine; norm: string }[] = [];
-  const bottomCandidates: { pageIdx: number; line: TextLine; norm: string }[] = [];
+  const topCandidates: { pageIdx: number; line: TextLine; norm: string; raw: string }[] = [];
+  const bottomCandidates: { pageIdx: number; line: TextLine; norm: string; raw: string }[] = [];
 
   for (let i = 0; i < pages.length; i++) {
     const { ir, lines } = pages[i];
@@ -46,9 +46,9 @@ export function extractHeaderFooterFurniture(
       const norm = normalizeFurnitureText(text);
 
       if (l.box.y1 <= topLimit) {
-        topCandidates.push({ pageIdx: i, line: l, norm });
+        topCandidates.push({ pageIdx: i, line: l, norm, raw: text });
       } else if (l.box.y0 >= bottomLimit) {
-        bottomCandidates.push({ pageIdx: i, line: l, norm });
+        bottomCandidates.push({ pageIdx: i, line: l, norm, raw: text });
       }
     }
   }
@@ -66,19 +66,21 @@ export function extractHeaderFooterFurniture(
     bottomCounts.get(c.norm)!.add(c.pageIdx);
   }
 
-  const minPages = Math.ceil(pages.length * 0.5); // appears on >= 50% of pages
+  const minPages = Math.max(2, Math.ceil(pages.length * 0.5)); // appears on >= 50% of pages (min 2)
 
   const headerNorms = new Set<string>();
-  for (const [norm, pageSet] of topCounts.entries()) {
-    if (pageSet.size >= minPages || isPageNumberText(norm)) {
-      headerNorms.add(norm);
+  for (const c of topCandidates) {
+    const pageSet = topCounts.get(c.norm);
+    if ((pageSet && pageSet.size >= minPages) || isPageNumberText(c.raw)) {
+      headerNorms.add(c.norm);
     }
   }
 
   const footerNorms = new Set<string>();
-  for (const [norm, pageSet] of bottomCounts.entries()) {
-    if (pageSet.size >= minPages || isPageNumberText(norm)) {
-      footerNorms.add(norm);
+  for (const c of bottomCandidates) {
+    const pageSet = bottomCounts.get(c.norm);
+    if ((pageSet && pageSet.size >= minPages) || isPageNumberText(c.raw)) {
+      footerNorms.add(c.norm);
     }
   }
 
@@ -122,7 +124,7 @@ function createFurnitureBlock(line: TextLine, isPageNumber: boolean): Para {
   return {
     type: 'p',
     runs: isPageNumber
-      ? [{ text: 'PAGE', font: 'Calibri', size: 9 }]
+      ? [{ text: '', font: 'Calibri', size: 9, field: 'PAGE' } as any]
       : line.segments[0]?.runs.map((r) => ({ ...r, size: 9 })) || [{ text: '' }],
     align: 'center',
   };

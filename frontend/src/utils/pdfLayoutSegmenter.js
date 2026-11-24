@@ -3,6 +3,7 @@
  * Intelligent spatial reading-order and column segmentation for client-side PDF to Word conversion.
  */
 import { normalizeText, reorderVisualToLogical, shouldInsertSpace, subSupFlags } from './pdfUnicode.js';
+import { reorderLinesByColumns } from './pdfXyCut.js';
 
 const XML_ILLEGAL_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]/g;
 
@@ -678,57 +679,18 @@ export function segmentIntoColumns(items, pageWidth) {
     li++;
   }
 
-  // Detect localized 2-column paragraph lines:
-  // Must have exactly 2 items separated by a gutter > 10pt,
-  // where both items are substantial text blocks, and neither is a table cell or TOC row.
-  const isTwoColParagraphLine = (l) => {
-    if (!l || !l.items || l.items.length !== 2) return false;
-    const [it1, it2] = l.items;
-    // In a 2-column editorial layout, Column 2 must start near or past the middle of the page
-    if (it2.x < 0.40 * pageWidth) return false;
-    const gutter = it2.x - (it1.x + it1.w);
-    if (gutter < 10) return false;
-    // Exclude Table of Contents rows where it2 is 'Page X'
-    if (/^\s*Page\s+\d+/i.test(it2.str)) return false;
-    // Exclude currency or numbers (e.g. tabular ledgers)
-    if (/^[\$€£¥]?\s*[\(+-]?\s*[\d,]+(\.\d+)?\s*%?$/.test(it2.str.trim())) return false;
-    // Both items must have reasonable text width
-    if (it1.w < 40 || it2.w < 15) return false;
-    return true;
-  };
+  const makeSubLine = (parent, items) =>
+    items.length === 1
+      ? createSubLine(parent, items[0])
+      : {
+          ...createSubLine(parent, items[0]),
+          items,
+          x: Math.min(...items.map((i) => i.x)),
+          xEnd: Math.max(...items.map((i) => i.x + (i.w || 0))),
+          text: items.map((i) => i.str).join(' '),
+        };
 
-  const orderedLines = [];
-  let i = 0;
-  while (i < normalizedLines.length) {
-    if (isTwoColParagraphLine(normalizedLines[i])) {
-      let j = i;
-      while (j < normalizedLines.length && isTwoColParagraphLine(normalizedLines[j])) {
-        j++;
-      }
-      if (j - i >= 2) {
-        // We have a localized multi-column paragraph block!
-        const colBlock = normalizedLines.slice(i, j);
-        // Flow all Column 1 lines first
-        for (const l of colBlock) {
-          const sub = createSubLine(l, l.items[0]);
-          sub.column = 1;
-          orderedLines.push(sub);
-        }
-        // Flow all Column 2 lines second
-        for (const l of colBlock) {
-          const sub = createSubLine(l, l.items[1]);
-          sub.column = 2;
-          orderedLines.push(sub);
-        }
-        i = j;
-        continue;
-      }
-    }
-    orderedLines.push(normalizedLines[i]);
-    i++;
-  }
-
-  return orderedLines;
+  return reorderLinesByColumns(normalizedLines, { pageWidth, pageHeight: 842, makeSubLine });
 }
 
 export function shouldMergeLines(cur, next) {

@@ -11,6 +11,7 @@ import {
 import { wrapUnbrokenStrings } from './pdfLayoutSegmenter.js'
 import * as U from './pdfToWordUtils.js'
 import { verifyDocxBlob } from './docxVerify.js'
+import { buildDocumentNumbering, stripMarker } from './pdfNumbering.js'
 
 const wrap = (t) => { try { return wrapUnbrokenStrings(t) } catch { return t } }
 const tw = (pt) => Math.round(pt * 20)
@@ -24,7 +25,8 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
  */
 export async function buildDocxBlob(models, o) {
   const { warn, onProgress, yieldFn, isAborted } = o
-  const g = { bodySize: o.bodySize || 11 }
+  const numbering = buildDocumentNumbering(models)
+  const g = { bodySize: o.bodySize || 11, numbering }
   g.h1 = g.bodySize * 1.45
   g.h2 = g.bodySize * 1.18
   const n = models.length
@@ -48,7 +50,7 @@ export async function buildDocxBlob(models, o) {
   await yieldFn?.(true)
   let blob = null, packMode = 'rich'
   try {
-    blob = await packDocument(sections, o.title)
+    blob = await packDocument(sections, o.title, numbering.config)
     if (!(await U.looksLikeZip(blob))) throw new Error('packed file is not a valid zip')
   } catch (e) {
     warn(null, 'PACK_FALLBACK', `Rich packaging failed (${e?.message || e}); rebuilt as plain text.`)
@@ -56,7 +58,7 @@ export async function buildDocxBlob(models, o) {
   }
   if (!blob) {
     try {
-      blob = await packDocument(models.map((m) => buildSection(m, g, 'plain', warn)), o.title)
+      blob = await packDocument(models.map((m) => buildSection(m, g, 'plain', warn)), o.title, numbering.config)
       if (!(await U.looksLikeZip(blob))) throw new Error('invalid zip')
     } catch {
       packMode = 'minimal'
@@ -127,7 +129,7 @@ function buildRichChildren(m, g, geo, warn) {
   if (m.pageImage) return [imageParagraph(m.pageImage, geo)]
 
   const alignOf = U.makeAlignmentDetector(m.lines || [], g.bodySize)
-  const ctx = { g, geo, m, alignOf, warn }
+  const ctx = { g, geo, m, alignOf, warn, numbering: g.numbering }
   const out = []
   const imgs = (m.images || []).slice().sort((a, b) => a.y - b.y)
   let ii = 0
@@ -191,13 +193,15 @@ function paragraphFromLine(line, ctx, extra = {}) {
 
   const rtl = !!line.isRTL || U.isMostlyRtl(line.text)
   const al = extra.align || alignOf(line)
-  const isList = BULLET_RE.test(line.text) || NUMBERED_RE.test(line.text)
+  const li = ctx.numbering?.map?.get(line)
+  const isList = !!li || BULLET_RE.test(line.text) || NUMBERED_RE.test(line.text)
   const indentPt = Math.max(0, (line.x ?? geo.minX) - geo.minX)
   const indent = {}
-  if (indentPt > 8 || isList) indent.left = Math.min(tw(indentPt) + (isList ? 360 : 0), Math.round(tw(geo.contentW) * 0.6))
-  if (isList) indent.hanging = 360
+  if (!li && (indentPt > 8 || isList)) indent.left = Math.min(tw(indentPt) + (isList ? 360 : 0), Math.round(tw(geo.contentW) * 0.6))
+  if (!li && isList) indent.hanging = 360
 
-  const spans = line.spans?.length ? line.spans : [{ text: line.text, size: line.size, bold: line.isBold, italic: line.isItalic }]
+  const rawSpans = line.spans?.length ? line.spans : [{ text: line.text, size: line.size, bold: line.isBold, italic: line.isItalic }]
+  const spans = li ? stripMarker(rawSpans, li.marker) : rawSpans
   const children = spans.flatMap((sp) => runsFromText(sp.text, {
     size: sp.size || size, bold: sp.bold ?? line.isBold, italic: sp.italic ?? line.isItalic,
     strike: sp.strike, underline: sp.underline, sup: sp.superScript, sub: sp.subScript,
@@ -211,6 +215,7 @@ function paragraphFromLine(line, ctx, extra = {}) {
 
   return new Paragraph({
     heading, alignment, bidirectional: rtl || undefined, keepNext: heading ? true : undefined,
+    numbering: li ? { reference: li.reference, level: li.level } : undefined,
     spacing: { after: heading ? 160 : isList ? 40 : 70, line: line.isCode ? 240 : 276 },
     indent: Object.keys(indent).length ? indent : undefined,
     children,
@@ -425,7 +430,7 @@ function imageParagraph(img, geo) {
 // ═════════════════════════════════════════════════════════════════════════════
 //  PACKAGING
 // ═════════════════════════════════════════════════════════════════════════════
-async function packDocument(sections, title) {
+async function packDocument(sections, title, numberingConfig) {
   // Heading styles: auto colour (readable in dark mode), no theme-blue.
   const headingStyle = (n, size) => ({
     id: `Heading${n}`, name: `heading ${n}`, basedOn: 'Normal', next: 'Normal', quickFormat: true,
@@ -435,6 +440,7 @@ async function packDocument(sections, title) {
   const doc = new Document({
     creator: 'PDFForge', title: U.cleanText(title),
     styles: { paragraphStyles: [headingStyle(1, 36), headingStyle(2, 28)] },
+    numbering: numberingConfig?.length ? { config: numberingConfig } : undefined,
     sections,
   })
   return Packer.toBlob(doc)

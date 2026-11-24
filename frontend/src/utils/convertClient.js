@@ -63,7 +63,8 @@ const A4 = { w: 210, h: 297 }           // portrait
 const A4L = { w: 297, h: 210 }          // landscape
 
 /** Sleep helper for chunked processing to keep UI responsive */
-const tick = () => new Promise(r => requestAnimationFrame(r))
+const tick = () => (globalThis.scheduler?.yield?.() ??
+  new Promise(r => { const mc = new MessageChannel(); mc.port1.onmessage = () => { mc.port1.close(); r(); }; mc.port2.postMessage(0); }))
 
 /** Load a file as ArrayBuffer */
 const toArrayBuffer = (file) =>
@@ -87,7 +88,11 @@ const toText = (file) =>
 //  EXISTING TOOLS (PDF → other formats) — unchanged
 // ─────────────────────────────────────────────────────────────────────────────
 
-const load = async (f) => window.pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise
+let _task = null
+const load = async (f) => {
+  _task = window.pdfjsLib.getDocument({ data: await f.arrayBuffer(), isEvalSupported: false })
+  return await _task.promise
+}
 
 const BULLET_RE = /^[\u2022\u2023\u25E6\u2043\u2219\u25AA\u25CF\-\*\u2013\u2014]\s+/
 const NUMBERED_RE = /^(\d+(\.\d+)*(\.[a-z])?)\.?\s+/i
@@ -221,7 +226,8 @@ function createParagraphFromLine(line, h1Threshold, h2Threshold, bodySize, pageM
 }
 
 export async function pdfToWord(file, onProgress) {
-  const pdf = await load(file), sections = []
+  try {
+    const pdf = await load(file), sections = []
 
   // First pass: gather font sizes across all pages to determine body font size
   const allSizes = []
@@ -443,44 +449,15 @@ export async function pdfToWord(file, onProgress) {
     }
 
     sections.push({
-      headers: {
-        default: new Header({
-          children: [
-            new Paragraph({
-              alignment: AlignmentType.RIGHT,
-              children: [
-                new TextRun({
-                  text: 'PDFForge QA Test Suite • Confidential & Automated Test Benchmark',
-                  size: 16,
-                  color: '9CA3AF',
-                }),
-              ],
-            }),
-          ],
-        }),
-      },
-      footers: {
-        default: new Footer({
-          children: [
-            new Paragraph({
-              alignment: AlignmentType.CENTER,
-              children: [
-                new TextRun({
-                  text: 'System Test Document — Page Multi-Page Stress Verification',
-                  size: 16,
-                  color: '9CA3AF',
-                }),
-              ],
-            }),
-          ],
-        }),
-      },
       children,
     })
     onProgress?.((i + 1) / pdf.numPages)
   }
 
   return { data: await Packer.toBlob(new Document({ sections })) }
+  } finally {
+    try { await _task?.destroy() } catch {}
+  }
 }
 
 export async function pdfToExcelAst(file, onProgress, options = {}) {
@@ -2540,3 +2517,6 @@ export function batchPdfToExcel(files, onProgress, opts) {
 export function batchPdfToPdfa(files, onProgress) {
   return runBatchConvert(files, pdfToPdfa, '.pdf', onProgress)
 }
+
+export { pdfToWordHiFi } from './pdfToWordHiFi.js'
+

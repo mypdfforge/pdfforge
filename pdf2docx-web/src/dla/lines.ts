@@ -18,12 +18,39 @@ export type TextLine = {
   glyphs: Glyph[];
 };
 
+const RTL = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+const LET = /\p{L}/u;
+
+function reorderRtlGlyphs(band: Glyph[]): Glyph[] {
+  const dir = band.map((g) => (LET.test(g.ch) && RTL.test(g.ch) ? 1 : LET.test(g.ch) ? 0 : -1));
+  const rtl = dir.filter((d) => d === 1).length;
+  const ltr = dir.filter((d) => d === 0).length;
+  if (rtl === 0) return band;
+  const base = rtl > ltr ? 1 : 0;
+  const lvl = dir.map((d) => (d === -1 ? (base ? 1 : 0) : base ? (d ? 1 : 2) : d ? 1 : 0));
+  let idx = band.map((_, i) => i);
+  for (let L = Math.max(...lvl); L >= 1; L--) {
+    let i = 0;
+    while (i < idx.length) {
+      if (lvl[idx[i]] >= L) {
+        let j = i;
+        while (j < idx.length && lvl[idx[j]] >= L) j++;
+        idx = [...idx.slice(0, i), ...idx.slice(i, j).reverse(), ...idx.slice(j)];
+        i = j;
+      } else i++;
+    }
+  }
+  return idx.map((k) => band[k]);
+}
+
 export function clusterGlyphsIntoLines(
   glyphs: Glyph[],
   fonts: FontInfo[] = [],
   links: LinkObj[] = [],
   strokes: Stroke[] = []
 ): TextLine[] {
+  // Drop invisible glyphs (render mode 3, flags & 4)
+  glyphs = glyphs.filter((g) => !(g.flags & 4));
   if (glyphs.length === 0) return [];
 
   // Map font key to font info
@@ -32,14 +59,28 @@ export function clusterGlyphsIntoLines(
     fontMap.set(f.key, f);
   }
 
-  // Sort glyphs: band-based by baseline then x0 so sub/superscripts stay in reading order
-  const sorted = [...glyphs].sort((a, b) => {
-    const diffY = a.baseline - b.baseline;
-    if (Math.abs(diffY) > 4.5) {
-      return diffY;
+  // Band clustering for stable, transitive baseline grouping
+  const byBaseline = [...glyphs].sort((a, b) => a.baseline - b.baseline);
+  const bands: Glyph[][] = [];
+  for (const g of byBaseline) {
+    const last = bands[bands.length - 1];
+    const ref = last ? last[0].baseline : g.baseline;
+    if (
+      last &&
+      Math.abs(g.baseline - ref) <=
+        Math.max(params.line.baselineTol * Math.max(g.size, last[0].size), 2.0)
+    ) {
+      last.push(g);
+    } else {
+      bands.push([g]);
     }
-    return a.box.x0 - b.box.x0;
-  });
+  }
+
+  const sorted: Glyph[] = [];
+  for (const band of bands) {
+    band.sort((a, b) => a.box.x0 - b.box.x0);
+    sorted.push(...reorderRtlGlyphs(band));
+  }
 
   const lines: TextLine[] = [];
   let currentGlyphs: Glyph[] = [];
@@ -50,14 +91,7 @@ export function clusterGlyphsIntoLines(
     const tol = Math.max(params.line.baselineTol * Math.max(g.size, currentSize), 4.5);
     const isSameBaseline = Math.abs(g.baseline - currentBaseline) <= tol;
 
-    // Check if there is a multi-column gutter (gap across column boundary or large gap)
-    const lastGlyph = currentGlyphs[currentGlyphs.length - 1];
-    const isColumnGutter =
-      lastGlyph &&
-      g.box.x0 - lastGlyph.box.x1 > 18.0 &&
-      (g.box.x0 >= 280.0 || g.box.x0 - lastGlyph.box.x1 > 40.0);
-
-    if (isSameBaseline && !isColumnGutter) {
+    if (isSameBaseline) {
       currentGlyphs.push(g);
       // Update baseline running average only for regular-sized glyphs
       if (Math.abs(g.size - currentSize) < 1.5) {
@@ -144,12 +178,20 @@ function buildLineFromGlyphs(
     const g = glyphs[i];
     const prev = i > 0 ? glyphs[i - 1] : null;
 
-    // Check for synthetic space
+    // Subscript / superscript check against dominant baseline
+    // In PageIR y points down: superscript has smaller y (higher), subscript has larger y (lower)
+    const yOffset = baseline - g.baseline;
+    const isSup = yOffset > 1.2 && g.size <= 0.9 * dominantSize;
+    const isSub = yOffset < -1.0 && g.size <= 0.9 * dominantSize;
+    const prevYOffset = prev ? baseline - prev.baseline : 0;
+    const prevSubSup = prev && Math.abs(prevYOffset) > 1.0 && prev.size <= 0.9 * dominantSize;
+
+    // Check for synthetic space (calibrated, suppressed around sub/superscripts)
     let prependSpace = false;
     if (prev) {
       const gap = g.box.x0 - prev.box.x1;
-      const spaceThreshold = params.word.gapEm * dominantSize;
-      if (gap > spaceThreshold && !prev.ch.endsWith(' ') && g.ch !== ' ') {
+      const spaceThreshold = 0.20 * dominantSize;
+      if (gap > spaceThreshold && !prev.ch.endsWith(' ') && g.ch !== ' ' && !isSup && !isSub && !prevSubSup) {
         prependSpace = true;
       }
     }
@@ -158,12 +200,6 @@ function buildLineFromGlyphs(
     const isBold = fontInfo?.bold || false;
     const isItalic = fontInfo?.italic || false;
     const fontFamily = fontInfo?.family || 'Arial';
-
-    // Subscript / superscript check against dominant baseline
-    // In PageIR y points down: superscript has smaller y (higher), subscript has larger y (lower)
-    const yOffset = baseline - g.baseline;
-    const isSup = yOffset > 1.2 && g.size <= 0.9 * dominantSize;
-    const isSub = yOffset < -1.0 && g.size <= 0.9 * dominantSize;
 
     // Check link containment
     let linkUrl: string | undefined;

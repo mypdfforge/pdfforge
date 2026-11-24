@@ -38,7 +38,7 @@ export function detectListMarker(text: string, markerX: number = 0, baseX: numbe
       kind: 'number',
       markerText: legalMatch[1],
       format: 'decimal',
-      level,
+      level: Math.min(8, legalMatch[1].split('.').length - 1),
     };
   }
 

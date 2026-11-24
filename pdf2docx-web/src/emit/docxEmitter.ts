@@ -80,7 +80,7 @@ export async function emitDocxBuffer(
   });
 
   const doc = new Document({
-    numbering: createNumberingConfig(),
+    numbering: createNumberingConfig(ast.numbering),
     sections,
   });
 
@@ -124,7 +124,7 @@ function emitParagraph(para: Para): Paragraph {
 
   const numbering = para.list
     ? {
-        reference: para.list.kind === 'bullet' ? 'bullet-list' : 'number-list',
+        reference: (para.list as any).id || (para.list.kind === 'bullet' ? 'bullet-list' : 'number-list'),
         level: Math.min(8, Math.max(0, para.list.level)),
       }
     : undefined;
@@ -177,7 +177,7 @@ function emitRun(run: Run): TextRun | ExternalHyperlink {
   }
 
   // Support dynamic PAGE field
-  if (text === 'PAGE') {
+  if ((run as any).field === 'PAGE') {
     return new TextRun({
       children: [PageNumber.CURRENT],
       font: fontConfig,
