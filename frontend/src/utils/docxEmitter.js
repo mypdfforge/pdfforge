@@ -1,4 +1,5 @@
 /**
+ * @deprecated PDF→Word uses docxBuild.js. Retained only for AST→DOCX debug export.
  * docxEmitter.js — High-Accuracy Word (.docx) Emitter
  * Transforms a Universal Document AST into an authentic, flowing OpenXML (.docx) document
  * with native paragraphs, tables, callouts, and vector shading.
@@ -20,6 +21,13 @@ import {
 } from 'docx';
 import { NodeType } from './documentAst.js';
 import { wrapUnbrokenStrings } from './pdfLayoutSegmenter.js';
+
+function hexLuminance(hex) {
+  if (!hex || hex.length < 6) return 0.5;
+  const num = parseInt(hex.replace('#', ''), 16);
+  const r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
 
 function mapAlign(align) {
   if (align === 'center') return AlignmentType.CENTER;
@@ -108,7 +116,7 @@ export function renderTableNode(tNode) {
       const cellTextRun = new TextRun({
         text: c.text,
         bold: isHeader || c.bold,
-        color: isHeader ? 'FFFFFF' : undefined,
+        color: isHeader ? (hexLuminance(headerBg) < 0.5 ? 'FFFFFF' : '000000') : undefined,
         size: Math.round((c.fontSize || 10) * 2),
       });
 
@@ -134,8 +142,10 @@ export function renderTableNode(tNode) {
       };
 
       if (tNode.colWidths && tNode.colWidths[cIdx]) {
+        const totalTw = 9360; // 6.5in content box
+        const sum = tNode.colWidths.reduce((a, b) => a + b, 0) || 100;
         tableCellOpts.width = {
-          size: Math.round(tNode.colWidths[cIdx] * 50),
+          size: Math.round((tNode.colWidths[cIdx] / sum) * totalTw),
           type: WidthType.DXA,
         };
       }

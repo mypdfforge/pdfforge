@@ -82,8 +82,8 @@ export async function extractPageLayout(page) {
 
     items.push({
       str: cleanStr,
-      x: e,
-      y: f,
+      x: e - vx0,
+      y: f - vy0,
       w: it.width,
       h: it.height || size,
       size,

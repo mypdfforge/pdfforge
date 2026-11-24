@@ -18,6 +18,8 @@ import {
   Footer,
   PageNumber,
   HeadingLevel,
+  VerticalMergeType,
+  TableLayoutType,
 } from 'docx';
 import { DocAST, Block, Para, Run, Table, ImageBlock, Borders, BorderDef } from '../core/ast.js';
 import { ptToTwips, ptToHalfPoints } from '../core/units.js';
@@ -47,8 +49,8 @@ export async function emitDocxBuffer(
       properties: {
         page: {
           size: {
-            width: ptToTwips(sect.page.w),
-            height: ptToTwips(sect.page.h),
+            width: ptToTwips(Math.min(sect.page.w, sect.page.h)),
+            height: ptToTwips(Math.max(sect.page.w, sect.page.h)),
             orientation: isLandscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
           },
           margin: {
@@ -153,8 +155,8 @@ function emitParagraph(para: Para): Paragraph {
 
 function emitRun(run: Run): TextRun | ExternalHyperlink {
   const text = sanitizeXmlString(run.text);
-  // Explicit color: if heading run has no color, explicitly set Navy (#1E293B); otherwise default to #000000
-  const color = run.color ? run.color.replace('#', '') : '000000';
+  // Explicit color: never force black — let Word's dark mode work
+  const color = run.color ? run.color.replace('#', '') : undefined;
   const size = Number.isFinite(run.size) && (run.size ?? 0) > 0 ? ptToHalfPoints(run.size!) : 22;
   const isRtl = isRtlText(text);
 
@@ -169,7 +171,11 @@ function emitRun(run: Run): TextRun | ExternalHyperlink {
   if (isEmoji) {
     fontConfig = 'Segoe UI Emoji';
   } else if (isCjk) {
-    fontConfig = 'SimSun';
+    fontConfig = /[\u3040-\u30FF]/.test(text)
+      ? 'Yu Gothic'
+      : /[\uAC00-\uD7AF]/.test(text)
+      ? 'Malgun Gothic'
+      : 'Microsoft YaHei';
   } else if (isHindi) {
     fontConfig = 'Nirmala UI';
   } else if (isRtl) {
@@ -248,7 +254,11 @@ function emitTable(table: Table, binaryStore: Map<string, Uint8Array>): DocxTabl
           type: WidthType.DXA,
         },
         columnSpan: cell.colSpan > 1 ? cell.colSpan : undefined,
-        rowSpan: cell.rowSpan > 1 ? cell.rowSpan : undefined,
+        verticalMerge: cell.vMergeContinue
+          ? VerticalMergeType.CONTINUE
+          : cell.rowSpan > 1
+          ? VerticalMergeType.RESTART
+          : undefined,
         verticalAlign,
         borders: cellBorders,
         margins: {
@@ -268,6 +278,7 @@ function emitTable(table: Table, binaryStore: Map<string, Uint8Array>): DocxTabl
 
     return new DocxTableRow({
       tableHeader: row.header,
+      cantSplit: true,
       children: cells,
     });
   });
@@ -282,6 +293,7 @@ function emitTable(table: Table, binaryStore: Map<string, Uint8Array>): DocxTabl
     : undefined;
 
   return new DocxTable({
+    layout: TableLayoutType.FIXED,
     width: {
       size: totalWidthTwips,
       type: WidthType.DXA,

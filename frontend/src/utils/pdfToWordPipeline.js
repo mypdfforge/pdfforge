@@ -164,12 +164,16 @@ async function analyzePage(pdf, pageNum, ctx) {
       try { items = await rawTextItems(page, vp) } catch { items = [] }
     }
     U.addToHistogram(hist, items)
-    const pageW = layout?.pageWidth ?? vp.width
 
-    // 2. reading order
+    // 2. vector geometry (table borders / box fills) — optional
+    try { model.vector = await extractVectorGeometry(page) } catch { model.vector = null }
+    model.spaceW = model.vector?.space?.width ?? (page.view ? page.view[2] - page.view[0] : vp.width)
+    model.spaceH = model.vector?.space?.height ?? (page.view ? page.view[3] - page.view[1] : vp.height)
+
+    // 3. reading order
     let lines = null
     if (layout) {
-      try { lines = segmentIntoColumns(items, pageW) } catch (e) {
+      try { lines = segmentIntoColumns(items, model.spaceW) } catch (e) {
         warn(pageNum, 'COLUMNS_FAILED', `Page ${pageNum}: column detection failed; used line grouping.`)
       }
     }
@@ -177,14 +181,11 @@ async function analyzePage(pdf, pageNum, ctx) {
     model.lines = lines.map(sanitizeLine)
     model.topDown = detectTopDown(model.lines)
 
-    // 3. vector geometry (table borders / box fills) — optional
-    try { model.vector = await extractVectorGeometry(page) } catch { model.vector = null }
-
     // 4. tables / callouts / code / columns
     if (model.mode === 'rich') {
       try {
         model.blocks = mergeParagraphBlocks(
-          detectTableRegionsHybrid(model.lines, pageW, model.vector, detectTableRegions)
+          detectTableRegionsHybrid(model.lines, model.spaceW, model.vector, detectTableRegions)
         )
       }
       catch (e) {

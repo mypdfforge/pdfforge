@@ -33,12 +33,12 @@ export function parseNumericCell(str) {
   const trimmed = str.trim();
 
   // Check for parenthetical negative: (1,250.00) or ($1,250)
-  const isParenNegative = /^\(\s*[\$€£¥]?\s*[\d,]+(\.\d+)?\s*\)$/.test(trimmed);
+  const isParenNegative = /^\(\s*[$€£¥]?\s*[\d,]+(\.\d+)?\s*\)$/.test(trimmed);
   // Check for percentage: 12.5%
   const isPercent = /^[+-]?\s*[\d,]+(\.\d+)?\s*%$/.test(trimmed);
   // Check standard numeric / currency
-  const isCurrency = /^[\$€£¥]/.test(trimmed) || /[\$€£¥]$/.test(trimmed);
-  const isGeneralNum = /^[+-]?\s*[\$€£¥]?\s*[\d,]+(\.\d+)?\s*$/.test(trimmed);
+  const isCurrency = /[$€£¥]/.test(trimmed);
+  const isGeneralNum = /^[+-]?\s*[$€£¥]?\s*[\d,]+(\.\d+)?\s*$/.test(trimmed);
 
   if (isParenNegative || isPercent || isGeneralNum) {
     let cleanStr = trimmed.replace(CURRENCY_OR_NUM_CLEAN_RE, '').replace(/[%()]/g, '');
