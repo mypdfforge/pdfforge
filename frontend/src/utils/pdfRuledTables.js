@@ -89,14 +89,47 @@ export function detectRuledTables(lines, vector) {
         if (r2 - r > 1) for (let rr = r + 1; rr < r2; rr++) for (let cc = c; cc < c2; cc++) occ.set(`${rr}:${cc}`, { span, start: c });
 
         const box = { x0: X[c], x1: X[c2], yTop, yBot: Y[r2] };
-        const inside = [];
+        const xLo = c === 0 ? box.x0 - 2 : box.x0;
+        const xHi = c2 === nC ? box.x1 + 2 : box.x1;
+        const yLo = r2 === nR ? box.yBot - 2 : box.yBot;
+        const yHi = r === 0 ? box.yTop + 2 : box.yTop;
+        const cellLines = [];
         lines.forEach((l, i) => {
-          const cx = (l.x + (l.xEnd ?? l.x + (l.w || 0))) / 2, cy = l.y;
-          if (cx >= box.x0 - 1 && cx <= box.x1 + 1 && cy <= box.yTop + 2 && cy >= box.yBot - 2) { inside.push({ l, i }); }
+          const cy = l.y;
+          if (cy > yHi || cy <= yLo) return;
+          if (Array.isArray(l.items) && l.items.length) {
+            const matched = l.items.filter((it) => {
+              const ix = it.x + (it.w || 0) / 2;
+              return ix >= xLo && ix < xHi;
+            });
+            if (matched.length) {
+              indices.add(i);
+              cellLines.push({ y: l.y, size: l.size, items: matched });
+            }
+          } else {
+            const cx = (l.x + (l.xEnd ?? l.x + (l.w || 0))) / 2;
+            if (cx >= xLo && cx < xHi) {
+              indices.add(i);
+              cellLines.push({ y: l.y, size: l.size, text: l.text });
+            }
+          }
         });
-        inside.sort((a, b) => b.l.y - a.l.y);
-        inside.forEach(o2 => indices.add(o2.i));
-        const text = inside.map(o2 => o2.l.text).join(' ').trim();
+        cellLines.sort((a, b) => b.y - a.y);
+        const text = cellLines.map((cl) => {
+          if (!cl.items) return (cl.text || '').trim();
+          let s = '';
+          cl.items.forEach((it, idx) => {
+            if (idx > 0) {
+              const prev = cl.items[idx - 1];
+              const gap = it.x >= prev.x ? it.x - (prev.x + (prev.w || 0)) : prev.x - (it.x + (it.w || 0));
+              if (gap > Math.max(1.5, 0.12 * (it.size || cl.size || 10)) && !/\s$/.test(s) && !/^\s/.test(it.str)) {
+                s += ' ';
+              }
+            }
+            s += it.str;
+          });
+          return s.trim();
+        }).filter(Boolean).join(' ').trim();
         const fill = (vector?.rects || []).find(fr => fr.fill && fr.fill !== 'FFFFFF' &&
           fr.x <= box.x0 + 4 && fr.x + fr.w >= box.x1 - 4 &&
           fr.y <= box.yBot + 4 && fr.y + fr.h >= box.yTop - 4);
@@ -105,7 +138,7 @@ export function detectRuledTables(lines, vector) {
           vMerge: r2 - r > 1 ? 'restart' : undefined,
           isHeader: r === 0, bold: r === 0,
           align: /^[(+\-€$£¥]?[\d,.]+[)%]?$/.test(text) ? 'right' : 'left',
-          fontSize: inside[0]?.l.size || 10,
+          fontSize: cellLines[0]?.size || 10,
           fill: fill?.fill || undefined,
         });
         c = c2;
@@ -136,7 +169,7 @@ export function detectTableRegionsHybrid(lines, pageWidth, vector, legacyDetect)
   const out = []; let i = 0;
   while (i < lines.length) {
     const r = byFirst.get(i);
-    if (r) { out.push(r.block); i = Math.max(...r.indices) + 1; continue; }
+    if (r) { out.push(r.block); i++; continue; }
     if (consumed.has(i)) { i++; continue; }
     let j = i; while (j < lines.length && !consumed.has(j) && !byFirst.has(j)) j++;
     out.push(...legacyDetect(lines.slice(i, j), pageWidth, vector));

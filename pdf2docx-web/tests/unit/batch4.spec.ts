@@ -78,4 +78,28 @@ describe('Batch 4: Ruled tables & cross-page continuation', () => {
     expect(m[0].blocks[0].rows.length).toBe(3)
     expect(m[1].blocks.length).toBe(0)
   })
+
+  it('assigns line.items per cell without duplicating rows whose midpoint sits on border', () => {
+    const v = mesh(
+      [[54, 680, 740], [306, 680, 740], [558, 680, 740]],
+      [[740, 54, 558], [710, 54, 558], [680, 54, 558]]
+    )
+    const row = (y: number, left: string, right: string) => ({
+      x: 59,
+      xEnd: 553, // midpoint is (59 + 553)/2 = 306, right on X[1]=306!
+      y,
+      size: 10,
+      text: `${left} ${right}`,
+      items: [
+        { str: left, x: 59, y, w: 180, size: 10 },
+        { str: right, x: 518, y, w: 35, size: 10 },
+      ],
+    }) as any
+    const r = detectRuledTables([row(724, '19. Incident Timeline', 'Page 19'), row(695, '20. Cross-Reference', 'Page 20')], v)
+    expect(r.length).toBe(1)
+    expect(r[0].block.rows[0].cells[0].text).toBe('19. Incident Timeline')
+    expect(r[0].block.rows[0].cells[1].text).toBe('Page 19')
+    expect(r[0].block.rows[1].cells[0].text).toBe('20. Cross-Reference')
+    expect(r[0].block.rows[1].cells[1].text).toBe('Page 20')
+  })
 })

@@ -80,7 +80,6 @@ async function analyzePage(pdf, pageNum, lib, hist, canCanvas) {
       if (Array.isArray(l.spans)) l.spans = l.spans.map(s => ({ ...s, text: U.cleanText(s.text) }));
       const band = l.y >= model.spaceH * 0.92 ? 'header' : l.y <= model.spaceH * 0.08 ? 'footer' : null;
       l.band = band; l.furnKey = band ? band + '|' + furnitureKey(l.text) : null;
-      delete l.items;                               // items are the memory hog
     }
     model.lines = lines;
     model.topDown = lines.length > 1 ? lines[0].y <= lines[lines.length - 1].y : true;
@@ -92,6 +91,8 @@ async function analyzePage(pdf, pageNum, lib, hist, canCanvas) {
       } catch { model.mode = 'plain'; }
     }
     if (model.mode !== 'rich') model.blocks = U.mergePlainLines(lines).map(line => ({ type: 'paragraph', line }));
+
+    for (const l of lines) delete l.items;           // release raw items AFTER table detection
 
     // Native image extraction (WS1) — no full-page rasterization.
     if (canCanvas) {
