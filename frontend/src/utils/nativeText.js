@@ -106,13 +106,17 @@ export async function extractNativeLines(page, viewport, pdfjsLib) {
   }
 
   const out = []
+  const STANDALONE_MARKER_RE = /^(?:[•◦▪▫●○■□·‣⁃*\-–—✓✔☐☑◉]|\(?\d{1,3}(?:\.\d{1,3})*[.)]?|\(?[a-zA-Z][.)]|\([ivxlc]+\))$/i
   for (const L of lines) {
     L.items.sort((a, b) => a.x - b.x)
-    // Split on big gaps (table cells on one row) so tables can be detected later.
+    // Split on big gaps (table cells on one row) so tables can be detected later,
+    // EXCEPT keep a hanging list marker attached to its immediately following text item!
     const segs = [[]]
     let end = null
     for (const it of L.items) {
-      if (end != null && it.x - end > 1.5 * L.fh) segs.push([])
+      const curSegText = segs[segs.length - 1].map(s => s.str).join('').trim()
+      const isHangingListTab = STANDALONE_MARKER_RE.test(curSegText) && (it.x - end) <= 3.8 * L.fh
+      if (end != null && it.x - end > 1.5 * L.fh && !isHangingListTab) segs.push([])
       segs[segs.length - 1].push(it)
       end = it.x + it.w
     }

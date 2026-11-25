@@ -2,11 +2,12 @@ import { describe, it, expect } from 'vitest'
 import {
   toScript, detectScript, fixFieldConfusables, normalizePunctuation, similarity,
   isFragmentOverlap, repairDescenderSplits, shouldJoinWithoutSpace, repairProtectedToken, dedupeLines,
+  repairCodeSyntax, validateJwtToken,
 } from '../ocrPostProcess.js'
 import {
   reconstructPageLayout, detectFormFields, validateCodeBrackets, reconcileDocumentHeadersFooters,
 } from '../ocrLayoutAnalysis.js'
-import { buildPageResult, evaluateQualityGates, auditPageCoverage, buildOcrDocxBlob } from '../paddleOcr.js'
+import { buildPageResult, evaluateQualityGates, auditPageCoverage, buildOcrDocxBlob, segmentTextByFont } from '../paddleOcr.js'
 import { isNativeGood } from '../nativeText.js'
 
 // line helper: text, x, y(top), width, height, source, mean
@@ -244,5 +245,66 @@ describe('DEFECT 07/10/11/12/14 layout structures & quality gates', () => {
 
     const docxBlob = await buildOcrDocxBlob([p], 'test-ocr')
     expect(docxBlob.size).toBeGreaterThan(1000)
+  })
+})
+
+describe('TASK #1-#5 Code syntax, JWT validation, per-run emoji font, detached bullets, & α/A0', () => {
+  it('#1 repairs f-string brace mismatch and call-arg trailing period', () => {
+    const broken = [
+      'def parse(pdf_bytes):',
+      '    raise SecurityValidationError(f"Disallowed payload: {detected_format)")',
+      '    return ConversionResult(',
+      '        output_size_bytes=len(pdf_bytes).',
+      '        status="ok"',
+      '    )',
+    ].join('\n')
+    const fixed = repairCodeSyntax(broken)
+    expect(fixed).toContain('{detected_format}')
+    expect(fixed).toContain('output_size_bytes=len(pdf_bytes),')
+    expect(validateCodeBrackets(fixed).balanced).toBe(true)
+  })
+
+  it('#2 validates JWT Base64URL header/payload JSON and Iz4 -> lz4', () => {
+    const validJwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig'
+    const invalidJwt = 'eyJhbGciOiJIUzI1NiJ9.not!valid!base64.sig'
+    expect(validateJwtToken(validJwt).valid).toBe(true)
+    expect(validateJwtToken(invalidJwt).valid).toBe(false)
+    expect(repairProtectedToken('compression=Iz4')).toBe('compression=lz4')
+  })
+
+  it('#3 splits mixed Latin + Emoji/Checkmark lines per font with zero dropped glyphs', () => {
+    const latin = new Set([...Array.from('CheckPassed01%:() ').map(c => c.codePointAt(0))])
+    const symbol = new Set([0x1F680, 0x1F4CA, 0x26A1, 0x2713, 0x2699])
+    const fonts = [{ key: 'arial', set: latin }, { key: 'symbol', set: symbol }]
+    const res = segmentTextByFont(fonts, '🚀 📊 ⚡ ⚙️ (Check: ✓ 100% Passed)')
+    expect(res.skipped).toBe(0)
+    expect(res.runs.some(r => r.f.key === 'symbol' && r.text.includes('🚀'))).toBe(true)
+    expect(res.runs.some(r => r.f.key === 'arial' && r.text.includes('Passed'))).toBe(true)
+  })
+
+  it('#4 re-attaches detached hanging bullet markers instead of flattening into prose', () => {
+    const ls = [
+      L('Global Infrastructure Layer', 50, 140, 180),
+      L('•', 50, 165, 10),
+      L('Primary Data Centers', 72, 165, 160),
+      L('◦', 72, 185, 10),
+      L('US-East Cluster', 94, 185, 130),
+    ]
+    const r = reconstructPageLayout(ls, W, H)
+    expect(r.fullText).toContain('Global Infrastructure Layer')
+    expect(r.fullText).toContain('\n- Primary Data Centers')
+    expect(r.fullText).toContain('\n  - US-East Cluster')
+    expect(r.listTree[0].children).toHaveLength(1)
+  })
+
+  it('#5 repairs statistical α and table-column AO -> A0', () => {
+    expect(fixFieldConfusables('a Level (1 - a) Specimen AO')).toBe('α Level (1 - α) Specimen A0')
+    const ls = [
+      L('Code', 50, 100, 60), L('Mean ± SD', 200, 100, 100),
+      L('A1', 50, 130, 40), L('12.4 ± 0.3', 200, 130, 80),
+      L('AO', 50, 160, 40), L('10.1 ± 0.2', 200, 160, 80),
+    ]
+    const r = reconstructPageLayout(ls, W, H)
+    expect(r.tables[0].markdown).toContain('| A0 | 10.1 ± 0.2 |')
   })
 })

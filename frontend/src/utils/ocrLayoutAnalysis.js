@@ -18,6 +18,7 @@ import {
   isProtectedText,
   shouldJoinWithoutSpace,
   normalizeForCompare,
+  repairCodeSyntax,
 } from './ocrPostProcess.js'
 
 const median = arr => {
@@ -175,11 +176,28 @@ function renderTable(rows, nCols) {
   const clean = t => fixFieldConfusables(t).replace(/\s+/g, ' ').trim()
   rows.forEach(r => r.cells.forEach(c => {
     c.text = clean(c.text)
-    // Detect numeric / center alignment
     if (/^\(?\s*[+\-€$£¥]?\s*[\d,.]+%?\s*\)?$/.test(c.text)) c.align = 'right'
     else if (/^[✓✔✗×☑☒☐□○◉]$/.test(c.text)) c.align = 'center'
     else c.align = 'left'
   }))
+
+  // TASK #5: Table-column consistency check (e.g., AO -> A0 when sibling cells have A1/A2/B0; a -> α in statistical headers)
+  for (let col = 0; col < nCols; col++) {
+    const colCells = rows.flatMap(r => r.cells.filter(c => c.c0 === col && c.c1 === col))
+    const hasNumericIndex = colCells.some(c => /\b[ABCTSV]\d\b/.test(c.text))
+    if (hasNumericIndex) {
+      for (const c of colCells) {
+        c.text = c.text.replace(/\b([ABCTSV])O\b/g, '$10')
+      }
+    }
+  }
+  if (rows[0]) {
+    for (const c of rows[0].cells) {
+      c.text = c.text.replace(/(^|\s|\()a(\s*\)|$)/g, (m, p, s) =>
+        rows.some(r => r.cells.some(rc => /[μσ±]/.test(rc.text))) ? `${p}α${s}` : m
+      )
+    }
+  }
 
   const md = rows.map(r => {
     const arr = Array(nCols).fill('')
@@ -363,7 +381,7 @@ function evalCodeRun(run) {
     out.push(' '.repeat(Math.max(0, sp)) + l.text.trim())
     prev = l
   }
-  const codeText = out.join('\n')
+  const codeText = repairCodeSyntax(out.join('\n'))
   const validation = validateCodeBrackets(codeText)
   const tagged = run.map(l => ({ ...l, regionType: 'CODE', noCorrect: true }))
   return pseudo('isCode', tagged, { codeText, regionType: 'CODE', bracketValidation: validation })
@@ -456,8 +474,66 @@ function xyCut(items, ctx) {
 
 /* ───────────────────────── text, lists (10 levels), & protected tokens ───────────────────────── */
 
-const LIST_RE = /^(?:[•◦▪▫●○■□·‣⁃*]|[-–—]|\(?\d{1,3}[.)]|\d{1,3}(?:\.\d{1,3})+\.?[a-z]?[.)]?|\(?[a-z][.)]|\([ivxlc]+\))\s+\S/i
+const LIST_RE = /^(?:[•◦▪▫●○■□·‣⁃*](?=\s*\S)|[-–—]\s+\S|\(?\d{1,3}[.)]\s+\S|\d{1,3}(?:\.\d{1,3})+\.?[a-z]?[.)]?\s+\S|\(?[a-z][.)]\s+\S|\([ivxlc]+\)\s+\S)/i
+const STANDALONE_MARKER_RE = /^(?:[•◦▪▫●○■□·‣⁃*\-–—]|\(?\d{1,3}(?:\.\d{1,3})*[.)]?|\(?[a-z][.)]|\([ivxlc]+\))$/i
 const HEADING_RE = /^(Section|Chapter|Part)\s+\d+\b/i
+
+/**
+ * TASK #4: Re-attaches standalone hanging bullet/number markers (e.g. "•" split from
+ * "Primary Data Centers" by a hanging tab) before layout/table analysis so list hierarchy
+ * is never flattened into prose.
+ */
+export function attachStandaloneListMarkers(lines, medH) {
+  const sorted = [...lines].sort((a, b) => a.yCenter - b.yCenter || a.xMin - b.xMin)
+  const absorbed = new Set()
+  const merged = []
+
+  for (let i = 0; i < sorted.length; i++) {
+    if (absorbed.has(i)) continue
+    const l = sorted[i]
+    const txt = (l.text || '').trim()
+    if (STANDALONE_MARKER_RE.test(txt)) {
+      let partnerIdx = -1
+      let bestGap = Infinity
+      for (let j = i + 1; j < sorted.length; j++) {
+        if (absorbed.has(j)) continue
+        const r = sorted[j]
+        if (Math.abs(r.yCenter - l.yCenter) > medH * 0.6) {
+          if (r.yCenter - l.yCenter > medH) break
+          continue
+        }
+        const gap = r.xMin - l.xMax
+        if (r.xMin >= l.xMin && gap >= -2 && gap <= medH * 4.0 && gap < bestGap && !STANDALONE_MARKER_RE.test((r.text || '').trim())) {
+          bestGap = gap
+          partnerIdx = j
+        }
+      }
+      if (partnerIdx !== -1) {
+        const p = sorted[partnerIdx]
+        absorbed.add(partnerIdx)
+        const combined = txt + ' ' + p.text.trim()
+        const xMin = Math.min(l.xMin, p.xMin)
+        const xMax = Math.max(l.xMax, p.xMax)
+        const yMin = Math.min(l.yMin, p.yMin)
+        const yMax = Math.max(l.yMax, p.yMax)
+        merged.push({
+          ...p,
+          text: combined,
+          xMin, xMax, yMin, yMax,
+          bbox: [xMin, yMin, xMax, yMax],
+          box: [[xMin, yMin], [xMax, yMin], [xMax, yMax], [xMin, yMax]],
+          width: xMax - xMin,
+          height: yMax - yMin,
+          xCenter: (xMin + xMax) / 2,
+          yCenter: (yMin + yMax) / 2,
+        })
+        continue
+      }
+    }
+    merged.push(l)
+  }
+  return merged
+}
 
 function fixProse(l) {
   if (l.noCorrect || isProtectedText(l.text)) return
@@ -525,7 +601,7 @@ function renderPlainRun(lines, medH, charW, listTreeCollector) {
         const depth = depthOf(l.xMin)
         l.regionType = 'LIST'
         l.listLevel = depth
-        const t = l.text.replace(/^(\S)/, (_, m) => normalizeBullet(m))
+        const t = l.text.replace(/^([•◦▪▫●○■□·‣⁃*])\s*/, (_, m) => normalizeBullet(m) + ' ').replace(/\s+/g, ' ').trim()
         const markerMatch = t.match(/^(\S+)/)
         const marker = markerMatch ? markerMatch[1] : '-'
         rowText = '  '.repeat(depth) + t.replace(/^•(?=\s)/, '-')
@@ -694,9 +770,10 @@ export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight, pageN
   if (!rawLines || rawLines.length === 0) return empty
 
   const enriched = enrichLineGeometry(rawLines, pageNumber)
-  const { header, body, footer } = partitionPageZones(enriched, canvasHeight)
   const medH = median(enriched.map(l => l.height)) || 14
   const charW = Math.max(5, medH * 0.55)
+  const { header, body: rawBody, footer } = partitionPageZones(enriched, canvasHeight)
+  const body = attachStandaloneListMarkers(rawBody, medH)
 
   const t = detectTables(body, medH)
   const c = findCodeBlocks(t.rest, medH)

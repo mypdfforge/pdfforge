@@ -10,7 +10,10 @@
  * Writer adds invisible text (Tr 3) only for OCR-sourced lines. Native text is already in the PDF.
  */
 import { reconstructPageLayout, enrichLineGeometry } from './ocrLayoutAnalysis.js'
-import { routeRegions, dedupeLines, lineWords, isRtlText, detectScript, overlap, isFragmentOverlap, similarity } from './ocrPostProcess.js'
+import {
+  routeRegions, dedupeLines, lineWords, isRtlText, detectScript, overlap,
+  isFragmentOverlap, similarity, classifyTokenType, validateJwtToken,
+} from './ocrPostProcess.js'
 
 /* ───────────── ONNX runtime from CDN (keeps Cloudflare asset < 25 MiB) ───────────── */
 let ortPromise = null
@@ -133,31 +136,49 @@ export async function ocrRawLines(engine, imageData) {
 }
 
 /**
- * DEFECT 06 / 09: Recover weak lines (< threshold confidence) via 2x upscaled crop re-OCR.
- * Low confidence is flagged, never deleted.
+ * TASK #1 & #2 & DEFECT 06:
+ * Recovers weak lines (< threshold), ALL protected unbroken tokens (jwt/url/base64/hash/uuid),
+ * and code lines with unbalanced delimiters using high-res (3x for critical tokens, 2x otherwise) crop re-OCR.
  */
-export async function recoverLowConfidence(engine, canvas, lines, { threshold = 0.85, max = 40 } = {}) {
-  const weak = lines.filter(l => (l.mean ?? 1) < threshold).slice(0, max)
-  for (const l of weak) {
+export async function recoverLowConfidence(engine, canvas, lines, { threshold = 0.85, max = 50 } = {}) {
+  const candidates = lines.filter(l => {
+    const tType = classifyTokenType(l.text)
+    const isProtected = tType === 'jwt' || tType === 'url' || tType === 'base64' || tType === 'hash' || tType === 'uuid'
+    const isCode = tType === 'code' || /[{}()[\];]/.test(l.text || '')
+    if (isProtected) return !validateJwtToken(l.text).valid || (l.mean ?? 1) < 0.99
+    if (isCode && (l.mean ?? 1) < 0.96) return true
+    return (l.mean ?? 1) < threshold
+  }).slice(0, max)
+
+  for (const l of candidates) {
+    const tType = classifyTokenType(l.text)
+    const isCritical = tType === 'jwt' || tType === 'url' || tType === 'base64' || tType === 'hash' || tType === 'code'
+    const scale = isCritical ? 3 : 2
     const xs = l.box.map(p => p[0])
     const ys = l.box.map(p => p[1])
-    const pad = 6
+    const pad = isCritical ? 8 : 6
     const x = Math.max(0, Math.floor(Math.min(...xs)) - pad)
     const y = Math.max(0, Math.floor(Math.min(...ys)) - pad)
     const w = Math.min(canvas.width - x, Math.ceil(Math.max(...xs)) - x + pad)
     const h = Math.min(canvas.height - y, Math.ceil(Math.max(...ys)) - y + pad)
     if (w < 4 || h < 4) continue
     const c = document.createElement('canvas')
-    c.width = w * 2
-    c.height = h * 2
+    c.width = w * scale
+    c.height = h * scale
     const ctx = c.getContext('2d')
     ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(canvas, x, y, w, h, 0, 0, c.width, c.height)
     try {
       const r = await ocrRawLines(engine, ctx.getImageData(0, 0, c.width, c.height))
-      const text = r.map(t => t.text).join(' ').trim()
+      const text = r.map(t => t.text).join(isCritical ? '' : ' ').trim()
       const mean = r.length ? r.reduce((s, t) => s + (t.mean ?? 0), 0) / r.length : 0
-      if (text && mean > (l.mean ?? 0) + 0.02) { l.text = text; l.mean = mean; l.recovered = true }
+      const newJwtValid = tType === 'jwt' && validateJwtToken(text).valid
+      const oldJwtValid = tType === 'jwt' && validateJwtToken(l.text).valid
+      if (text && ((newJwtValid && !oldJwtValid) || mean > (l.mean ?? 0) + 0.015)) {
+        l.text = text
+        l.mean = Math.max(mean, newJwtValid ? 0.98 : mean)
+        l.recovered = true
+      }
     } catch (e) { /* keep original */ }
     c.width = 0
   }
@@ -307,18 +328,31 @@ const safeWidth = (f, text, size) => {
   try { return f.font.widthOfTextAtSize(text, size) } catch (e) { return text.length * size * 0.5 }
 }
 
-function pickFont(fonts, str) {
-  const cps = Array.from(str).map(c => c.codePointAt(0)).filter(cp => cp > 32)
-  let best = null
-  let bestN = -1
-  for (const f of fonts) {
-    const n = f.set ? cps.filter(cp => f.set.has(cp)).length : cps.length
-    if (n === cps.length) return { f, text: str, dropped: 0 }
-    if (n > bestN) { best = f; bestN = n }
+/**
+ * TASK #3: Segments a string into font-capable runs per character codepoint so mixed lines
+ * (e.g. Latin + Emoji + Checkmarks + CJK) never drop glyphs in PDF text layer injection.
+ */
+export function segmentTextByFont(fonts, str) {
+  const runs = []
+  let skipped = 0
+  for (const ch of Array.from(str)) {
+    const cp = ch.codePointAt(0)
+    // Ignore invisible emoji variation selector-16 (U+FE0F) when base glyph is matched
+    if (cp === 0xFE0F || cp === 0xFE0E) continue
+    let chosen = null
+    if (cp <= 32) {
+      chosen = runs.length ? runs[runs.length - 1].f : fonts[0]
+    } else {
+      for (const f of fonts) {
+        if (!f.set || f.set.has(cp)) { chosen = f; break }
+      }
+    }
+    if (!chosen) { skipped++; continue }
+    const last = runs[runs.length - 1]
+    if (last && last.f === chosen) last.text += ch
+    else runs.push({ f: chosen, text: ch })
   }
-  if (bestN <= 0) return null
-  const text = Array.from(str).filter(c => c.codePointAt(0) <= 32 || best.set.has(c.codePointAt(0))).join('')
-  return { f: best, text, dropped: cps.length - bestN }
+  return { runs, skipped }
 }
 
 function invert([a, b, c, d, e, f]) {
@@ -380,12 +414,9 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
 
     for (const line of lines) {
       const text = line.text.replace(/\s+/g, ' ').trim()
-      const pick = pickFont(fonts, text)
-      if (!pick) { stats.skippedLines++; continue }
-      stats.skippedChars += pick.dropped
-      const { f } = pick
-      const words = pick.text.split(' ').filter(Boolean)
-      if (!words.length) continue
+      const seg = segmentTextByFont(fonts, text)
+      stats.skippedChars += seg.skipped
+      if (!seg.runs.length) { stats.skippedLines++; continue }
 
       const BL = toPdf(...line.box[3])
       const BR = toPdf(...line.box[2])
@@ -399,32 +430,34 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
       const sin = vy / W
       const size = Math.max(3, Math.min(H * 0.8, 48))
 
-      const wi = words.map(w => safeWidth(f, w, 10))
-      const sp = safeWidth(f, ' ', 10)
-      const total = wi.reduce((a, b) => a + b, 0) + sp * (words.length - 1)
-      if (total <= 0) continue
-      const rtl = isRtlText(pick.text)
+      // Break segmented runs into word-or-script chunks so horizontal alignment tracks widths cleanly
+      const runWidths = seg.runs.map(r => safeWidth(r.f, r.text, 10))
+      const total10 = runWidths.reduce((a, b) => a + b, 0)
+      if (total10 <= 0) continue
+
+      const rtl = isRtlText(text)
       let cum = 0
-      words.forEach((w, i) => {
-        const start = rtl ? 1 - (cum + wi[i]) / total : cum / total
-        cum += wi[i] + sp
-        const wordW = (wi[i] / total) * W
-        const natural = safeWidth(f, w, size)
+      seg.runs.forEach((r, idx) => {
+        const w10 = runWidths[idx]
+        const start = rtl ? 1 - (cum + w10) / total10 : cum / total10
+        cum += w10
+        const runW = (w10 / total10) * W
+        const natural = safeWidth(r.f, r.text, size)
         if (natural <= 0) return
-        const tz = Math.max(40, Math.min(250, (wordW / natural) * 100))
+        const tz = Math.max(40, Math.min(250, (runW / natural) * 100))
         const x = BL[0] + start * vx
         const y = BL[1] + start * vy
         try {
           ops.push(
             op('BT'),
-            op('Tf', PDFName.of(keyOf(f)), num(size)),
+            op('Tf', PDFName.of(keyOf(r.f)), num(size)),
             op('Tz', num(tz)),
             op('Tm', num(cos), num(sin), num(-sin), num(cos), num(x), num(y)),
-            op('Tj', f.font.encodeText(w)),
+            op('Tj', r.f.font.encodeText(r.text)),
             op('ET'),
           )
           stats.wordsWritten++
-        } catch (e) { stats.skippedChars += w.length }
+        } catch (e) { stats.skippedChars += r.text.length }
       })
     }
     ops.push(op('Q'))
@@ -439,13 +472,30 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
 export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
   const {
     Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell,
-    WidthType, BorderStyle, AlignmentType, ShadingType, TableLayoutType, Header, Footer,
+    WidthType, BorderStyle, AlignmentType, ShadingType, TableLayoutType, Header, Footer, LevelFormat,
   } = await import('docx')
 
   const firstHdr = pages.find(p => p.headerLines?.length)?.headerLines.map(l => l.text).join(' ')
   const firstFtr = pages.find(p => p.footerLines?.length)?.footerLines.map(l => l.text).join(' ')
   const thin = { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' }
   const allBorders = { top: thin, bottom: thin, left: thin, right: thin }
+
+  const makeRuns = (str, opts = {}) => {
+    const segs = []
+    for (const ch of Array.from(str || '')) {
+      const isEmoji = /[\p{Extended_Pictographic}\u2600-\u27BF]/u.test(ch)
+      const last = segs[segs.length - 1]
+      if (last && last.isEmoji === isEmoji) last.text += ch
+      else segs.push({ text: ch, isEmoji })
+    }
+    return segs.map(s => new TextRun({
+      text: s.text,
+      font: s.isEmoji ? 'Segoe UI Emoji' : opts.font,
+      bold: opts.bold,
+      size: opts.size,
+      rightToLeft: opts.rightToLeft,
+    }))
+  }
 
   const children = []
   for (let pIdx = 0; pIdx < pages.length; pIdx++) {
@@ -492,7 +542,7 @@ export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
             margins: { top: 60, bottom: 60, left: 100, right: 100 },
             children: [new Paragraph({
               alignment: c.align === 'right' ? AlignmentType.RIGHT : c.align === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT,
-              children: [new TextRun({ text: c.text || '', bold: ri === 0, size: 20 })],
+              children: makeRuns(c.text || '', { bold: ri === 0, size: 20 }),
             })],
           })),
         }))
@@ -511,19 +561,28 @@ export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
           children.push(new Paragraph({
             heading: HeadingLevel.HEADING_2,
             spacing: { before: 160, after: 80 },
-            children: [new TextRun({ text: l.slice(3).trim(), bold: true })],
+            children: makeRuns(l.slice(3).trim(), { bold: true }),
           }))
         } else {
           const rtl = isRtlText(l)
-          const indentMatch = l.match(/^(\s*)- /)
-          const level = indentMatch ? Math.min(9, Math.floor(indentMatch[1].length / 2)) : null
-          children.push(new Paragraph({
-            bidirectional: rtl || undefined,
-            alignment: rtl ? AlignmentType.START : AlignmentType.LEFT,
-            indent: level != null ? { left: (level + 1) * 360, hanging: 240 } : undefined,
-            spacing: { after: 70 },
-            children: [new TextRun({ text: l.trim(), rightToLeft: rtl || undefined, size: 22 })],
-          }))
+          const bulletMatch = l.match(/^(\s*)[•\-]\s+(.*)$/)
+          if (bulletMatch) {
+            const level = Math.min(9, Math.floor(bulletMatch[1].length / 2))
+            children.push(new Paragraph({
+              numbering: level <= 8 ? { reference: 'ocr-nested-bullet', level } : undefined,
+              indent: level > 8 ? { left: (level + 1) * 360, hanging: 240 } : undefined,
+              bidirectional: rtl || undefined,
+              spacing: { after: 50 },
+              children: makeRuns(bulletMatch[2], { rightToLeft: rtl || undefined, size: 22 }),
+            }))
+          } else {
+            children.push(new Paragraph({
+              bidirectional: rtl || undefined,
+              alignment: rtl ? AlignmentType.START : AlignmentType.LEFT,
+              spacing: { after: 70 },
+              children: makeRuns(l.trim(), { rightToLeft: rtl || undefined, size: 22 }),
+            }))
+          }
         }
       }
     }
@@ -532,6 +591,18 @@ export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
   const doc = new Document({
     creator: 'PDFFORGE OCR',
     title,
+    numbering: {
+      config: [{
+        reference: 'ocr-nested-bullet',
+        levels: Array.from({ length: 9 }, (_, i) => ({
+          level: i,
+          format: LevelFormat.BULLET,
+          text: ['•', '◦', '▪'][i % 3],
+          alignment: AlignmentType.LEFT,
+          style: { paragraph: { indent: { left: (i + 1) * 360, hanging: 260 } } },
+        })),
+      }],
+    },
     sections: [{
       headers: firstHdr ? { default: new Header({ children: [new Paragraph({ children: [new TextRun({ text: firstHdr, size: 18, color: '666666' })] })] }) } : undefined,
       footers: firstFtr ? { default: new Footer({ children: [new Paragraph({ children: [new TextRun({ text: firstFtr, size: 18, color: '666666' })] })] }) } : undefined,

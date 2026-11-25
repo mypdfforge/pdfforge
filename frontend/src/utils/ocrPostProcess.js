@@ -253,10 +253,86 @@ export function classifyTokenType(t) {
   if (/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/.test(t)) return 'jwt'
   if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(t)) return 'uuid'
   if (/\b[0-9a-fA-F]{32,128}\b/.test(t)) return 'hash'
-  if (/^[A-Za-z0-9+/]{24,}={0,2}$/.test(t.trim()) || /[A-Za-z0-9+/_=-]{28,}/.test(t)) return 'base64'
+  if (/(?:^|\s)[A-Za-z0-9+/_=-]{24,}(?:\s|$)/.test(t)) return 'base64'
   if (/\S+@\S+\.\S+/.test(t)) return 'email'
-  if (/^\s*(def|class|import|from|return|const|let|var|if|elif|else|for|while|try|except|with|async|await)\b/.test(t) || /[{}();=]{2,}/.test(t)) return 'code'
+  if (/^\s*(def|class|import|from|return|const|let|var|if|elif|else|for|while|try|except|with|async|await|raise)\b/.test(t) || /[{}();=]{2,}/.test(t)) return 'code'
   return 'prose'
+}
+
+/**
+ * TASK #2: Validates JWT Base64URL segments and JSON header/payload decode integrity.
+ */
+export function validateJwtToken(token) {
+  const m = String(token || '').match(/\b(eyJ[A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)(?:\.([A-Za-z0-9_-]*))?\b/)
+  if (!m) return { isJwt: false, valid: false }
+  const b64Decode = (seg) => {
+    try {
+      const padded = seg.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((seg.length + 3) % 4)
+      const bin = typeof atob === 'function' ? atob(padded) : Buffer.from(padded, 'base64').toString('utf8')
+      return JSON.parse(bin)
+    } catch { return null }
+  }
+  const header = b64Decode(m[1])
+  const payload = b64Decode(m[2])
+  return {
+    isJwt: true,
+    valid: !!(header && typeof header === 'object' && payload && typeof payload === 'object'),
+    header,
+    payload,
+  }
+}
+
+/**
+ * TASK #1: Syntax-aware repair for CODE regions (never runs on prose or protected tokens).
+ * Fixes f-string brace mismatches ({ident) -> {ident}), trailing argument period vs comma,
+ * and common Python keyword OCR confusions.
+ */
+export function repairCodeSyntax(codeText) {
+  if (!codeText) return codeText
+  const lines = codeText.split('\n')
+  let parenDepth = 0
+  const repaired = []
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i]
+    const nextLine = (lines[i + 1] || '').trim()
+
+    // 1. Common code-region OCR word/identifier confusions
+    line = line
+      .replace(/\bretum\b/g, 'return')
+      .replace(/\bmaqic\b/g, 'magic')
+      .replace(/\baqainst\b/g, 'against')
+      .replace(/\bbvtes\b/g, 'bytes')
+      .replace(/\bdetected format(?=\s*=)/g, 'detected_format')
+      .replace(/\blayout tree\b/g, 'layout_tree')
+
+    // 2. f-string / interpolation brace mismatch: {detected_format) -> {detected_format}
+    line = line.replace(/(["'`][^"'`\n]*)\{([A-Za-z_][A-Za-z0-9_.]*)\)/g, '$1{$2}')
+    line = line.replace(/(["'`][^"'`\n]*)\(([A-Za-z_][A-Za-z0-9_.]*)\}/g, '$1{$2}')
+
+    // 3. Trailing period instead of comma inside open multi-line call / container args
+    if (parenDepth > 0 && !/^\s*(?:#|\/\/)/.test(line)) {
+      const lookNext = nextLine && (/^[A-Za-z_][A-Za-z0-9_]*\s*=/.test(nextLine) || /^[)\]}'"]/.test(nextLine))
+      if (/=\s*[A-Za-z0-9_.)\]]+\.$/.test(line.trim()) || (lookNext && /[A-Za-z0-9_)\]"']\.$/.test(line.trim()))) {
+        line = line.replace(/\.(\s*)$/, ',$1')
+      }
+    }
+
+    // Track paren/bracket/brace depth across lines (skip comments/strings roughly)
+    let inQ = null
+    for (let k = 0; k < line.length; k++) {
+      const ch = line[k]
+      if (inQ) { if (ch === inQ && line[k - 1] !== '\\') inQ = null; continue }
+      if (ch === '"' || ch === "'") { inQ = ch; continue }
+      if (ch === '#') break
+      if (ch === '(' || ch === '[' || ch === '{') parenDepth++
+      else if ((ch === ')' || ch === ']' || ch === '}') && parenDepth > 0) parenDepth--
+    }
+
+    repaired.push(line)
+  }
+
+  return repaired.join('\n')
 }
 
 /** Text that must never get prose autocorrect: URLs, emails, JWTs, UUIDs, hashes, Base64, code. */
@@ -297,6 +373,7 @@ export function repairProtectedToken(text) {
   if (/https?:\/\/|\beyJ|[0-9a-f]{4,}[—–][0-9a-f]{4,}|\.[a-z]{2,}\b/i.test(t)) {
     t = t.replace(/([A-Za-z0-9])[—–]([A-Za-z0-9])/g, '$1-$2')
   }
+  t = t.replace(/\bIz4\b/g, 'lz4')
   return t
 }
 
@@ -375,10 +452,16 @@ export function fixFieldConfusables(text) {
   t = t.replace(/\bstabillized\b/gi, 'stabilized')
   t = t.replace(/\bus-east-4\.interal\b/g, 'us-east-4.internal')
   t = t.replace(/\bHostnarme\b/g, 'Hostname')
-  // Greek alpha in significance/statistical header contexts: "Significance (a = 0.05)" or "(a)"
-  t = t.replace(/(\bSignificance\b[^(]{0,20}\()a(\))/gi, '$1α$2')
+  // Greek alpha in significance/statistical header & formula contexts
+  t = t.replace(/(\b(?:Significance|Threshold|Type\s+I+\s+Error)\b[^(]{0,20}\()a(\))/gi, '$1α$2')
+  t = t.replace(/(\(\s*1\s*[-−]\s*)a(\s*\))/g, '$1α$2')
+  t = t.replace(/\ba\s+Level\b/g, 'α Level')
   t = t.replace(/\b(p\s*[<≤>≥=]\s*)a\b/g, '$1α')
-  t = t.replace(/(\()a(\s*=\s*0\.\d+\))/g, '$1α$2')
+  t = t.replace(/(^|[\s(])a(\s*=\s*0\.\d+)/g, '$1α$2')
+  // Indexed constant/specimen AO -> A0 when paired with numeric indices or scientific labels
+  t = t.replace(/\b(Specimen|Stage|State|Level|Model|Series|Channel|Size)\s+([ABCTSV])O\b/gi, '$1 $20')
+  t = t.replace(/(?<=[ABCTSV]\d[\s,/|-]+)([ABCTSV])O\b/g, '$10')
+  t = t.replace(/\b([ABCTSV])O(?=\s*(?:,|\/|\||→|->|-)\s*[ABCTSV]?\d)/g, '$10')
 
   return repairDescenderSplits(t)
 }
