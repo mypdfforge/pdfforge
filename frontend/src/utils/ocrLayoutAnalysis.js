@@ -1,35 +1,52 @@
 /**
  * ocrLayoutAnalysis.js
  * Client-side Document Layout Analysis for native + OCR lines.
- *  - header/footer zones
- *  - tables (grid from geometry, colspan, wrapped-cell merge) -> markdown / html / json
- *  - code blocks (monospace pitch, indent grid, no autocorrect)
- *  - nested lists (indent clusters, markers kept verbatim)
- *  - recursive XY-cut reading order (columns before gutter crossing)
- *  - form fields (checkbox / radio / text line / signature / date)
- * shortcut: heuristics only, no ML layout model. Upgrade: add a small ONNX layout model.
+ *  - Header/footer zones + cross-page canonical deduplication (DEFECT 02 / 13)
+ *  - Tables: grid from geometry, merged colspan headers, wrapped-cell join -> markdown/html/json (DEFECT 10)
+ *  - Code blocks: monospace pitch, 4-space indent grid, bracket balance validation, no autocorrect (DEFECT 07)
+ *  - Nested lists: up to 10 levels via indent clusters & ListNode tree (DEFECT 12)
+ *  - Protected unbroken tokens: wrapped URL/JWT/Base64/Hex rejoining without spaces (DEFECT 05)
+ *  - Recursive XY-cut reading order: columns before gutter crossing (DEFECT 11)
+ *  - Form fields: checkbox / radio / text line / signature / date (DEFECT 14)
+ *  - Core invariant metadata: page, bbox, confidence, origin, script, regionType, flagged
  */
-import { fixFieldConfusables, normalizePunctuation, normalizeBullet } from './ocrPostProcess.js'
+import {
+  fixFieldConfusables,
+  normalizePunctuation,
+  normalizeBullet,
+  detectScript,
+  isProtectedText,
+  shouldJoinWithoutSpace,
+  normalizeForCompare,
+} from './ocrPostProcess.js'
 
 const median = arr => {
   const a = arr.filter(x => x > 0).sort((x, y) => x - y)
   return a.length ? a[Math.floor(a.length / 2)] : 0
 }
 
-export function enrichLineGeometry(rawLines) {
+export function enrichLineGeometry(rawLines, pageNumber = 1) {
   return rawLines.map((line, index) => {
     const box = line.box || []
     const xs = box.map(p => p[0])
     const ys = box.map(p => p[1])
-    const xMin = xs.length ? Math.min(...xs) : 0
-    const xMax = xs.length ? Math.max(...xs) : 0
-    const yMin = ys.length ? Math.min(...ys) : 0
-    const yMax = ys.length ? Math.max(...ys) : 0
+    const xMin = Number.isFinite(line.xMin) ? line.xMin : (xs.length ? Math.min(...xs) : 0)
+    const xMax = Number.isFinite(line.xMax) ? line.xMax : (xs.length ? Math.max(...xs) : 0)
+    const yMin = Number.isFinite(line.yMin) ? line.yMin : (ys.length ? Math.min(...ys) : 0)
+    const yMax = Number.isFinite(line.yMax) ? line.yMax : (ys.length ? Math.max(...ys) : 0)
+    const src = line.source || 'ocr'
+    const conf = line.mean ?? 1
     return {
       ...line,
-      source: line.source || 'ocr',
+      page: line.page || pageNumber,
+      source: src,
+      origin: src === 'native' ? 'source-text' : 'recognized',
+      confidence: conf,
+      flagged: src !== 'native' && conf < 0.85,
+      script: line.script || detectScript(line.text),
       originalIndex: index,
       xMin, xMax, yMin, yMax,
+      bbox: [xMin, yMin, xMax, yMax],
       width: xMax - xMin,
       height: yMax - yMin,
       xCenter: (xMin + xMax) / 2,
@@ -45,9 +62,9 @@ export function partitionPageZones(lines, canvasHeight) {
   const body = []
   const footer = []
   for (const l of lines) {
-    if (l.yCenter < hT) header.push({ ...l, zone: 'header' })
-    else if (l.yCenter > fT) footer.push({ ...l, zone: 'footer' })
-    else body.push({ ...l, zone: 'body' })
+    if (l.yCenter < hT) header.push({ ...l, zone: 'header', regionType: 'HEADER' })
+    else if (l.yCenter > fT) footer.push({ ...l, zone: 'footer', regionType: 'FOOTER' })
+    else body.push({ ...l, zone: 'body', regionType: l.regionType || 'PARAGRAPH' })
   }
   const byRow = (a, b) => a.yMin - b.yMin || a.xMin - b.xMin
   header.sort(byRow)
@@ -74,7 +91,7 @@ function clusterRows(lines, medH) {
 const rowTop = r => Math.min(...r.map(l => l.yMin))
 const rowBottom = r => Math.max(...r.map(l => l.yMax))
 
-/* ───────────────────────── tables ───────────────────────── */
+/* ───────────────────────── tables (DEFECT 10) ───────────────────────── */
 
 function looksLikeProseColumns(multiRows) {
   const cells = multiRows.flat()
@@ -102,7 +119,7 @@ function buildTable(run, medH) {
     const hit = []
     cols.forEach((col, i) => {
       const ov = Math.min(cell.xMax, col.x1) - Math.max(cell.xMin, col.x0)
-      if (ov >= 0.4 * (col.x1 - col.x0)) hit.push(i)
+      if (ov >= 0.4 * Math.max(1, col.x1 - col.x0)) hit.push(i)
     })
     if (hit.length) return [hit[0], hit[hit.length - 1]]
     let best = 0
@@ -118,22 +135,37 @@ function buildTable(run, medH) {
   let prevBottom = null
   for (const r of run) {
     const gap = prevBottom == null ? Infinity : rowTop(r) - prevBottom
-    // shortcut: tight gap = wrapped cell text. Upgrade: use ruling lines from the image.
-    const wrap = rows.length > 0 && gap < medH * 0.3
     const cells = r.map(c => {
       const [c0, c1] = colsOf(c)
       return { c0, c1, text: c.text.trim(), xMin: c.xMin, xMax: c.xMax, yMin: c.yMin, yMax: c.yMax }
     })
+
+    // Wrapped continuation inside a cell:
+    // Tight gap OR partial subset of columns closely trailing the previous row
+    const prevRow = rows[rows.length - 1]
+    const isBannerHeader = rows.length === 0 && cells.length === 1 && cells[0].c1 - cells[0].c0 + 1 > 1
+    const isBannerCont = rows.length === 1 && rows[0].cells.length === 1 && cells.length === 1 && (cells[0].c1 - cells[0].c0 + 1) > 1 && gap < medH * 1.1
+    const wrap = !isBannerHeader && prevRow && (
+      isBannerCont ||
+      gap < medH * 0.35 ||
+      (gap < medH * 0.9 && cells.length < nCols && !(prevRow.cells.length === 1 && (prevRow.cells[0].c1 - prevRow.cells[0].c0 + 1) > 1))
+    )
+
     if (wrap) {
-      const prev = rows[rows.length - 1]
       for (const cell of cells) {
-        const host = prev.cells.find(p => p.c0 <= cell.c0 && p.c1 >= cell.c0)
+        const host = prevRow.cells.find(p => p.c0 <= cell.c0 && p.c1 >= cell.c0)
         if (host) {
-          host.text += ' ' + cell.text
+          host.text += (shouldJoinWithoutSpace(host.text, cell.text) ? '' : ' ') + cell.text
           host.yMax = Math.max(host.yMax, cell.yMax)
-        } else prev.cells.push(cell)
+          host.xMax = Math.max(host.xMax, cell.xMax)
+          host.xMin = Math.min(host.xMin, cell.xMin)
+        } else {
+          prevRow.cells.push(cell)
+        }
       }
-    } else rows.push({ cells })
+    } else {
+      rows.push({ cells })
+    }
     prevBottom = rowBottom(r)
   }
   return { rows, nCols }
@@ -141,7 +173,14 @@ function buildTable(run, medH) {
 
 function renderTable(rows, nCols) {
   const clean = t => fixFieldConfusables(t).replace(/\s+/g, ' ').trim()
-  rows.forEach(r => r.cells.forEach(c => { c.text = clean(c.text) }))
+  rows.forEach(r => r.cells.forEach(c => {
+    c.text = clean(c.text)
+    // Detect numeric / center alignment
+    if (/^\(?\s*[+\-€$£¥]?\s*[\d,.]+%?\s*\)?$/.test(c.text)) c.align = 'right'
+    else if (/^[✓✔✗×☑☒☐□○◉]$/.test(c.text)) c.align = 'center'
+    else c.align = 'left'
+  }))
+
   const md = rows.map(r => {
     const arr = Array(nCols).fill('')
     for (const c of r.cells) arr[c.c0] = c.text.replace(/\|/g, '\\|')
@@ -169,7 +208,14 @@ function renderTable(rows, nCols) {
     markdown: md.join('\n'),
     html,
     nCols,
-    rows: rows.map(r => r.cells.map(c => ({ text: c.text, col: c.c0, colspan: c.c1 - c.c0 + 1, bbox: [c.xMin, c.yMin, c.xMax, c.yMax] }))),
+    rows: rows.map((r, ri) => r.cells.map(c => ({
+      text: c.text,
+      col: c.c0,
+      colspan: c.c1 - c.c0 + 1,
+      align: c.align,
+      isHeader: ri === 0,
+      bbox: [c.xMin, c.yMin, c.xMax, c.yMax],
+    }))),
   }
 }
 
@@ -194,20 +240,29 @@ function detectTables(lines, medH) {
   while (i < rows.length) {
     if (rows[i].length < 2) { i++; continue }
     const run = [rows[i]]
-    // A lone wide title row right above the grid is a merged (colspan) header.
-    const above = rows[i - 1]
-    if (above && above.length === 1 && !used.has(above[0]) && above[0].text.length < 100 && !/[.]$/.test(above[0].text)) {
-      const w = Math.max(...rows[i].map(c => c.xMax)) - Math.min(...rows[i].map(c => c.xMin))
-      if (rowTop(rows[i]) - rowBottom(above) <= medH * 2.0 && above[0].width >= 0.6 * w) run.unshift(above)
+    const gridW = Math.max(...rows[i].map(c => c.xMax)) - Math.min(...rows[i].map(c => c.xMin))
+
+    // Pull 1 or 2 lone merged banner header lines immediately above the grid
+    for (let up = 1; up <= 2 && i - up >= 0; up++) {
+      const above = rows[i - up]
+      const topRow = run[0]
+      if (above && above.length === 1 && !used.has(above[0]) && above[0].text.length < 110 && !/[.]$/.test(above[0].text)) {
+        if (rowTop(topRow) - rowBottom(above) <= medH * 2.0 && above[0].width >= 0.45 * gridW) {
+          run.unshift(above)
+          continue
+        }
+      }
+      break
     }
+
     let j = i + 1
     while (j < rows.length) {
       const r = rows[j]
       const gap = rowTop(r) - rowBottom(run[run.length - 1])
       if (r.length >= 2 && gap <= medH * 2.2) { run.push(r); j++; continue }
-      if (r.length === 1 && gap <= medH * 0.9) {
+      if (r.length === 1 && gap <= medH * 1.1) {
         const x = r[0].xMin
-        if (run.some(rr => rr.some(c => Math.abs(c.xMin - x) < medH))) { run.push(r); j++; continue }
+        if (run.some(rr => rr.some(c => Math.abs(c.xMin - x) < medH * 1.2))) { run.push(r); j++; continue }
       }
       break
     }
@@ -215,44 +270,92 @@ function detectTables(lines, medH) {
     if (multi.length >= 2 && !looksLikeProseColumns(multi)) {
       const { rows: trows, nCols } = buildTable(run, medH)
       const t = renderTable(trows, nCols)
-      const flat = run.flat()
-      flat.forEach(l => used.add(l))
-      blocks.push(pseudo('isTable', flat, { table: t }))
+      const flat = run.flat().map(l => ({ ...l, regionType: 'TABLE' }))
+      run.flat().forEach(l => used.add(l))
+      blocks.push(pseudo('isTable', flat, { table: t, regionType: 'TABLE' }))
     }
     i = Math.max(j, i + 1)
   }
   return { blocks, rest: lines.filter(l => !used.has(l)) }
 }
 
-/* ───────────────────────── code ───────────────────────── */
+/* ───────────────────────── code blocks & validation (DEFECT 07) ───────────────────────── */
 
-const CODE_RE = /^\s*(def |class |import |from \S+ import|return\b|if |elif |else:|for |while |try:|except|with |async |await |#|\/\/|\/\*|\*\/|@\w+|print\(|[\w.[\]]+\s*(=|\+=|-=)\s|[\w.]+\(.*\)\s*:?\s*$|[)\]}]\s*$|[{}]\s*$)/
-const STRONG_RE = /^\s*(def |class |import |from \S+ import|return\b|elif |else:|try:|except|#|\/\/|if .*:$|for .*:$)/
+const CODE_RE = /^\s*(def |class |import |from \S+ import|return\b|if |elif |else:|for |while |try:|except|finally:|with |async |await |#|\/\/|\/\*|\*\/|@\w+|print\(|const |let |var |function |export |[\w.[\]]+\s*(=|\+=|-=)\s|[\w.]+\(.*\)\s*:?\s*$|[)\]}]\s*$|[{}]\s*$)/
+const STRONG_RE = /^\s*(def |class |import |from \S+ import|return\b|elif |else:|try:|except|finally:|#|\/\/|if .*:$|for .*:$|with .*:$|async def )/
 
 function isCodeLine(l) {
+  if (l.isMono) return true
   if (CODE_RE.test(l.text)) return true
   const words = l.text.trim().split(/\s+/).length
   return words <= 4 && /[()[\]{}=:_.]/.test(l.text)
 }
 
-function evalCodeRun(run, medH) {
-  if (run.length < 3) return null
+/** Validates brackets & quotes balance inside reconstructed code blocks. */
+export function validateCodeBrackets(codeText) {
+  const stack = []
+  const pairs = { '(': ')', '[': ']', '{': '}' }
+  const closers = { ')': '(', ']': '[', '}': '{' }
+  const issues = []
+  const lines = (codeText || '').split('\n')
+
+  lines.forEach((line, li) => {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('#') || trimmed.startsWith('//')) return
+    let inQuote = null
+    for (let ci = 0; ci < line.length; ci++) {
+      const ch = line[ci]
+      const prev = ci > 0 ? line[ci - 1] : ''
+      if (inQuote) {
+        if (ch === inQuote && prev !== '\\') inQuote = null
+        continue
+      }
+      if (ch === '"' || ch === "'") {
+        // Ignore triple quotes or handle single quotes cleanly
+        inQuote = ch
+        continue
+      }
+      if (ch === '#' || (ch === '/' && line[ci + 1] === '/')) break
+      if (pairs[ch]) stack.push({ ch, line: li + 1 })
+      else if (closers[ch]) {
+        const top = stack[stack.length - 1]
+        if (!top || top.ch !== closers[ch]) {
+          issues.push(`Line ${li + 1}: unexpected "${ch}"`)
+        } else {
+          stack.pop()
+        }
+      }
+    }
+    if (inQuote) issues.push(`Line ${li + 1}: unclosed ${inQuote} quote`)
+  })
+  for (const unclosed of stack) {
+    issues.push(`Line ${unclosed.line}: unclosed "${unclosed.ch}"`)
+  }
+  return { balanced: issues.length === 0, issues }
+}
+
+function evalCodeRun(run) {
+  const hasMono = run.some(l => l.isMono)
+  if (!hasMono && run.length < 3) return null
+  if (hasMono && run.length < 2) return null
+
   const cpw = run.filter(l => l.text.trim().length >= 8).map(l => l.width / l.text.length)
-  if (cpw.length >= 2) {
+  if (!hasMono && cpw.length >= 2) {
     const mean = cpw.reduce((a, b) => a + b, 0) / cpw.length
     const sd = Math.sqrt(cpw.reduce((s, v) => s + (v - mean) ** 2, 0) / cpw.length)
-    if (sd / mean > 0.2) return null
+    if (sd / mean > 0.28) return null
   }
-  if (!run.some(l => STRONG_RE.test(l.text))) return null
-  const adv = median(cpw) || median(run.map(l => l.width / Math.max(1, l.text.length)))
+  if (!hasMono && !run.some(l => STRONG_RE.test(l.text))) return null
+
+  const adv = median(cpw) || median(run.map(l => l.width / Math.max(1, l.text.length))) || 7
   const minX = Math.min(...run.map(l => l.xMin))
   const out = []
   let prev = null
   for (const l of run) {
     if (prev) {
       const pitch = prev.height * 1.35
-      const blanks = Math.round((l.yMin - prev.yMin) / pitch) - 1
-      for (let b = 0; b < blanks; b++) out.push('')
+      const blanks = Math.max(0, Math.round((l.yMin - prev.yMin) / pitch) - 1)
+      for (let b = 0; b < Math.min(blanks, 3); b++) out.push('')
     }
     let sp = Math.round((l.xMin - minX) / adv)
     const snapped = Math.round(sp / 4) * 4
@@ -260,7 +363,10 @@ function evalCodeRun(run, medH) {
     out.push(' '.repeat(Math.max(0, sp)) + l.text.trim())
     prev = l
   }
-  return pseudo('isCode', run, { codeText: out.join('\n') })
+  const codeText = out.join('\n')
+  const validation = validateCodeBrackets(codeText)
+  const tagged = run.map(l => ({ ...l, regionType: 'CODE', noCorrect: true }))
+  return pseudo('isCode', tagged, { codeText, regionType: 'CODE', bracketValidation: validation })
 }
 
 function findCodeBlocks(lines, medH) {
@@ -269,7 +375,7 @@ function findCodeBlocks(lines, medH) {
   const used = new Set()
   let run = []
   const flush = () => {
-    const b = evalCodeRun(run, medH)
+    const b = evalCodeRun(run)
     if (b) { blocks.push(b); run.forEach(l => used.add(l)) }
     run = []
   }
@@ -348,16 +454,17 @@ function xyCut(items, ctx) {
   return sortRows(items, ctx.medH)
 }
 
-/* ───────────────────────── text rendering ───────────────────────── */
+/* ───────────────────────── text, lists (10 levels), & protected tokens ───────────────────────── */
 
 const LIST_RE = /^(?:[•◦▪▫●○■□·‣⁃*]|[-–—]|\(?\d{1,3}[.)]|\d{1,3}(?:\.\d{1,3})+\.?[a-z]?[.)]?|\(?[a-z][.)]|\([ivxlc]+\))\s+\S/i
 const HEADING_RE = /^(Section|Chapter|Part)\s+\d+\b/i
 
 function fixProse(l) {
+  if (l.noCorrect || isProtectedText(l.text)) return
   l.text = normalizePunctuation(fixFieldConfusables(l.text))
 }
 
-function renderPlainRun(lines, medH, charW) {
+function renderPlainRun(lines, medH, charW, listTreeCollector) {
   // clusters: break on big vertical gap or when order jumps back up (new column)
   const clusters = []
   let cur = []
@@ -375,29 +482,71 @@ function renderPlainRun(lines, medH, charW) {
     cl.forEach(fixProse)
     const minLeft = Math.min(...cl.map(l => l.xMin))
     const listXs = cl.filter(l => LIST_RE.test(l.text)).map(l => l.xMin).sort((a, b) => a - b)
+    // Cluster list indent stops (up to 10 nesting levels)
     const levels = []
-    for (const x of listXs) if (!levels.length || x - levels[levels.length - 1] > charW * 0.9) levels.push(x)
+    for (const x of listXs) {
+      if (!levels.length || x - levels[levels.length - 1] > charW * 0.65) {
+        if (levels.length < 10) levels.push(x)
+      }
+    }
     const depthOf = x => {
       let d = 0
-      levels.forEach((lx, i) => { if (x >= lx - charW * 0.9) d = i })
+      levels.forEach((lx, i) => { if (x >= lx - charW * 0.65) d = Math.min(9, i) })
       return d
     }
 
-    // join same-row neighbours (side-by-side short fragments) with a space
     let rowAnchor = null
     let rowText = ''
     const flushRow = () => { if (rowText) out.push(rowText); rowText = ''; rowAnchor = null }
+
+    const nodeStack = []
+
     for (const l of cl) {
-      const sameRow = rowAnchor && Math.abs(l.yCenter - rowAnchor.yCenter) < medH * 0.5 && l.xMin >= rowAnchor.xMax - charW
-      if (sameRow) { rowText += ' ' + l.text; rowAnchor = l; continue }
+      const isList = LIST_RE.test(l.text)
+      const sameRow = !isList && rowAnchor && !LIST_RE.test(rowAnchor.text) &&
+        Math.abs(l.yCenter - rowAnchor.yCenter) < medH * 0.5 && l.xMin >= rowAnchor.xMax - charW
+
+      if (sameRow) {
+        rowText += (shouldJoinWithoutSpace(rowText, l.text) ? '' : ' ') + l.text
+        rowAnchor = l
+        continue
+      }
+
+      // DEFECT 05: Rejoin wrapped protected tokens across adjacent lines without inserting spaces
+      if (!isList && rowAnchor && shouldJoinWithoutSpace(rowText, l.text)) {
+        rowText += l.text.trim()
+        rowAnchor = l
+        continue
+      }
+
       flushRow()
       rowAnchor = l
-      if (LIST_RE.test(l.text)) {
+      if (isList) {
+        const depth = depthOf(l.xMin)
+        l.regionType = 'LIST'
+        l.listLevel = depth
         const t = l.text.replace(/^(\S)/, (_, m) => normalizeBullet(m))
-        rowText = '  '.repeat(depthOf(l.xMin)) + t.replace(/^•(?=\s)/, '-')
+        const markerMatch = t.match(/^(\S+)/)
+        const marker = markerMatch ? markerMatch[1] : '-'
+        rowText = '  '.repeat(depth) + t.replace(/^•(?=\s)/, '-')
+
+        if (listTreeCollector) {
+          const node = { level: depth, marker, text: t, bbox: l.bbox, children: [] }
+          while (nodeStack.length && nodeStack[nodeStack.length - 1].level >= depth) {
+            nodeStack.pop()
+          }
+          if (nodeStack.length) {
+            nodeStack[nodeStack.length - 1].children.push(node)
+          } else {
+            listTreeCollector.push(node)
+          }
+          nodeStack.push(node)
+        }
       } else if (l.height > medH * 1.35 || (HEADING_RE.test(l.text) && l.text.length < 90 && !/[.]$/.test(l.text))) {
+        l.regionType = 'HEADING'
         rowText = `\n## ${l.text}\n`
       } else {
+        if (l.script === 'hebrew' || l.script === 'arabic') l.regionType = 'RTL_TEXT'
         const off = l.xMin - minLeft
         const sp = off >= charW * 1.5 ? Math.max(1, Math.round(off / (charW * 1.1))) : 0
         rowText = ' '.repeat(sp) + l.text
@@ -411,10 +560,11 @@ function renderPlainRun(lines, medH, charW) {
 function renderItems(items, medH, charW) {
   const parts = []
   const flatLines = []
+  const listTree = []
   let run = []
   const flushRun = () => {
     if (!run.length) return
-    parts.push(renderPlainRun(run, medH, charW))
+    parts.push(renderPlainRun(run, medH, charW, listTree))
     flatLines.push(...run)
     run = []
   }
@@ -424,12 +574,12 @@ function renderItems(items, medH, charW) {
     else run.push(it)
   }
   flushRun()
-  return { text: parts.join('\n'), lines: flatLines }
+  return { text: parts.join('\n'), lines: flatLines, listTree }
 }
 
-/* ───────────────────────── form fields ───────────────────────── */
+/* ───────────────────────── form fields (DEFECT 14) ───────────────────────── */
 
-const CHECK_RE = /^\s*(?:(\[)\s*([xX✓✔√]?)\s*(\])|(\()\s*([xX✓✔√]?)\s*(\))|([☐☑☒□]))\s*(.*)$/
+const CHECK_RE = /^\s*(?:(\[)\s*([xX✓✔√]?)\s*(\])|(\()\s*([xX✓✔√]?)\s*(\))|([☐☑☒□○◉]))\s*(.*)$/
 
 export function detectFormFields(lines) {
   const fields = []
@@ -439,10 +589,11 @@ export function detectFormFields(lines) {
     const t = l.text
     const m = CHECK_RE.exec(t)
     if (m) {
-      const bracket = m[1] ? 'checkbox' : m[4] ? 'radio' : 'checkbox'
-      const mark = m[2] || m[5] || ''
       const glyph = m[7]
-      const checked = !!mark || glyph === '☑' || glyph === '☒'
+      const isRadioGlyph = glyph === '○' || glyph === '◉'
+      const bracket = m[1] ? 'checkbox' : (m[4] || isRadioGlyph) ? 'radio' : 'checkbox'
+      const mark = m[2] || m[5] || ''
+      const checked = !!mark || glyph === '☑' || glyph === '☒' || glyph === '◉'
       if (bracket === 'radio') { if (!prevRadio) radioGroup++; prevRadio = true } else prevRadio = false
       fields.push({
         type: bracket, state: checked ? 'checked' : 'unchecked', label: (m[8] || '').trim(),
@@ -454,25 +605,95 @@ export function detectFormFields(lines) {
     prevRadio = false
     if (/_{4,}|\.{6,}/.test(t)) {
       const label = t.replace(/[_.]{4,}/g, '').trim()
+      const dateMatch = t.match(/\b(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/)
       const type = /signature|sign here/i.test(label) ? 'signature' : /^date\b/i.test(label) ? 'date' : 'text'
-      fields.push({ type, label, bbox: [l.xMin, l.yMin, l.xMax, l.yMax] })
+      fields.push({ type, label, value: dateMatch ? dateMatch[1] : undefined, bbox: [l.xMin, l.yMin, l.xMax, l.yMax] })
     } else if (/^(signature|sign here)\s*:?\s*$/i.test(t.trim())) {
       fields.push({ type: 'signature', label: t.trim(), bbox: [l.xMin, l.yMin, l.xMax, l.yMax] })
+    } else if (/^date\s*:\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i.test(t.trim())) {
+      const dm = t.trim().match(/^date\s*:\s*(.+)$/i)
+      fields.push({ type: 'date', label: 'Date', value: dm[1].trim(), bbox: [l.xMin, l.yMin, l.xMax, l.yMax] })
     }
   }
   return fields
 }
 
+/* ───────────────────────── cross-page header/footer reconciliation (DEFECT 02/13) ───────────────────────── */
+
+const furnitureNorm = s => String(s || '')
+  .normalize('NFKC')
+  .replace(/[·•●▪◦]/g, '•')
+  .replace(/[—–]{1,2}/g, '—')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+/**
+ * Reconciles running headers/footers across pages:
+ * - Unifies glyph variants (· vs •, —— vs —) to the majority canonical string
+ * - Deduplicates repeated headers/footers inside a page and strips any leaked duplicate from body
+ */
+export function reconcileDocumentHeadersFooters(pages) {
+  if (!pages || pages.length < 2) return pages
+  const pickCanonical = (getArr) => {
+    const counts = new Map()
+    for (const p of pages) {
+      const txt = furnitureNorm(getArr(p).map(l => l.text).join(' '))
+      if (!txt) continue
+      const key = txt.replace(/\d+/g, '#').toLowerCase()
+      if (!counts.has(key)) counts.set(key, new Map())
+      const variants = counts.get(key)
+      variants.set(txt, (variants.get(txt) || 0) + 1)
+    }
+    const winners = new Map()
+    for (const [key, variants] of counts) {
+      let bestTxt = '', bestN = 0
+      for (const [v, n] of variants) if (n > bestN) { bestTxt = v; bestN = n }
+      if (bestN >= 2) winners.set(key, bestTxt)
+    }
+    return winners
+  }
+
+  const hdrWinners = pickCanonical(p => p.headerLines || [])
+  const ftrWinners = pickCanonical(p => p.footerLines || [])
+
+  for (const p of pages) {
+    const normList = (arr, winners) => {
+      const seen = new Set()
+      const kept = []
+      for (const l of arr || []) {
+        const clean = furnitureNorm(l.text)
+        const key = clean.replace(/\d+/g, '#').toLowerCase()
+        const canonical = winners.get(key) || clean
+        const dedupKey = normalizeForCompare(canonical)
+        if (!dedupKey || seen.has(dedupKey)) continue
+        seen.add(dedupKey)
+        kept.push({ ...l, text: canonical })
+      }
+      return kept
+    }
+    p.headerLines = normList(p.headerLines, hdrWinners)
+    p.footerLines = normList(p.footerLines, ftrWinners)
+
+    // Rebuild text cleanly with single header + body + single footer
+    const hdrText = p.headerLines.map(l => l.text).join(' ')
+    const ftrText = p.footerLines.map(l => l.text).join(' ')
+    const bodyText = (p.bodyText || '').trim()
+    p.text = [hdrText, bodyText, ftrText].filter(Boolean).join('\n\n')
+    p.lines = [...p.headerLines, ...(p.bodyLines || []), ...p.footerLines]
+  }
+  return pages
+}
+
 /* ───────────────────────── pipeline ───────────────────────── */
 
-export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight) {
+export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight, pageNumber = 1) {
   const empty = {
-    allLines: [], bodyLines: [], headerLines: [], footerLines: [], fullText: '',
-    avgConfidence: 100.0, lowConfidenceCount: 0, tables: [], formFields: [],
+    allLines: [], bodyLines: [], headerLines: [], footerLines: [], fullText: '', bodyText: '',
+    avgConfidence: 100.0, lowConfidenceCount: 0, tables: [], codeBlocks: [], listTree: [], formFields: [],
   }
   if (!rawLines || rawLines.length === 0) return empty
 
-  const enriched = enrichLineGeometry(rawLines)
+  const enriched = enrichLineGeometry(rawLines, pageNumber)
   const { header, body, footer } = partitionPageZones(enriched, canvasHeight)
   const medH = median(enriched.map(l => l.height)) || 14
   const charW = Math.max(5, medH * 0.55)
@@ -483,8 +704,8 @@ export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight) {
   const ordered = xyCut(items, { medH, minGutter: Math.max(15, charW * 2) })
   const rendered = renderItems(ordered, medH, charW)
 
-  header.forEach(fixProse)
-  footer.forEach(fixProse)
+  header.forEach(h => { h.text = furnitureNorm(normalizePunctuation(fixFieldConfusables(h.text))) })
+  footer.forEach(f => { f.text = furnitureNorm(normalizePunctuation(fixFieldConfusables(f.text))) })
   const allLines = [...header, ...rendered.lines, ...footer]
 
   const textParts = []
@@ -501,10 +722,13 @@ export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight) {
     bodyLines: rendered.lines,
     headerLines: header,
     footerLines: footer,
+    bodyText: rendered.text,
     fullText: textParts.join('\n\n'),
     avgConfidence: avg,
     lowConfidenceCount: lowCount,
     tables: ordered.filter(i => i.isTable).map(i => ({ bbox: [i.xMin, i.yMin, i.xMax, i.yMax], ...i.table })),
+    codeBlocks: ordered.filter(i => i.isCode).map(i => ({ bbox: [i.xMin, i.yMin, i.xMax, i.yMax], codeText: i.codeText, ...i.bracketValidation })),
+    listTree: rendered.listTree,
     formFields: detectFormFields(allLines),
   }
 }

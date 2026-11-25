@@ -5,9 +5,10 @@ import { Upload, Loader2, CheckCircle, AlertCircle, FileText, Search, X, Downloa
 import { downloadBlob } from '../utils/api'
 import {
   getPaddleOCREngine, packForLanguage, ocrRawLines, recoverLowConfidence,
-  buildPageResult, buildSearchablePdf, buildSidecar,
+  buildPageResult, buildSearchablePdf, buildSidecar, evaluateQualityGates, buildOcrDocxBlob,
 } from '../utils/paddleOcr'
 import { extractNativeLines, isNativeGood, pageHasImages } from '../utils/nativeText'
+import { reconcileDocumentHeadersFooters } from '../utils/ocrLayoutAnalysis'
 
 /**
  * 100% client-side. Per page:
@@ -144,7 +145,6 @@ export default function OCRToolPage({
         return engineInfo.engine
       }
 
-      const textChunks = []
       const pages = []
       let nativeOnlyPages = 0
 
@@ -160,11 +160,11 @@ export default function OCRToolPage({
 
         let nativeLines = []
         let useOcr = true
-        if (existingMode === 'auto') {
+        if (existingMode === 'auto' || existingMode === 'reuse') {
           const nl = await extractNativeLines(page, viewport, pdfjs)
           if (isNativeGood(nl)) {
             nativeLines = nl
-            useOcr = await pageHasImages(page, pdfjs)
+            useOcr = existingMode === 'reuse' ? false : await pageHasImages(page, pdfjs)
           }
         }
 
@@ -186,28 +186,39 @@ export default function OCRToolPage({
 
         const result = buildPageResult({
           nativeLines, ocrLines, width, height,
-          viewportTransform: viewport.transform, ocrSkipped: !useOcr,
+          viewportTransform: viewport.transform, ocrSkipped: !useOcr, pageNumber: p,
         })
         pages.push(result)
-        textChunks.push(`--- Page ${p} ---\n${result.text.trim() || '(No text detected)'}`)
         await new Promise(r => setTimeout(r, 10)) // let the UI breathe
       }
       await pdfDoc.destroy()
 
       if (abortRef.current) { clearResults(); return }
 
+      // DEFECT 02 / 13: Reconcile running headers & footers across all pages before rendering
+      reconcileDocumentHeadersFooters(pages)
+      const textChunks = pages.map((r, i) => `--- Page ${i + 1} ---\n${(r.text || '').trim() || '(No text detected)'}`)
+
       setExtractedText(textChunks.join('\n\n'))
       const ocrPages = pages.filter(r => !r.ocrSkipped)
       setDocConfidence(ocrPages.length
         ? Math.round((ocrPages.reduce((s, r) => s + r.avgConfidence, 0) / ocrPages.length) * 10) / 10
         : null)
-      setSidecarJson(JSON.stringify(buildSidecar(pages, { source: file.name, language }), null, 2))
+      const sidecar = buildSidecar(pages, { source: file.name, language, mode: existingMode })
+      setSidecarJson(JSON.stringify(sidecar, null, 2))
+      const gates = sidecar.qualityGates || evaluateQualityGates(pages)
+      if (gates.unbalancedCodeCount > 0) {
+        warn.push(`${gates.unbalancedCodeCount} code block(s) had bracket mismatches — added to review queue in JSON sidecar.`)
+      }
       const sum = {
         pages: totalPages,
         nativeOnlyPages,
         lowConf: pages.reduce((s, r) => s + r.lowConfidenceCount, 0),
         tables: pages.reduce((s, r) => s + r.tables.length, 0),
         fields: pages.reduce((s, r) => s + r.formFields.length, 0),
+        reviewItems: gates.reviewQueue?.length || 0,
+        gatesPassed: gates.passed,
+        pagesData: pages,
       }
 
       const needsWrite = pages.some(r => r.lines.some(l => l.source !== 'native'))
@@ -241,6 +252,11 @@ export default function OCRToolPage({
   const downloadText = () => downloadBlob(new Blob([extractedText], { type: 'text/plain' }), baseName() + '.txt', 'text/plain')
   const downloadMarkdown = () => downloadBlob(new Blob([extractedText], { type: 'text/markdown' }), baseName() + '.md', 'text/markdown')
   const downloadJson = () => downloadBlob(new Blob([sidecarJson], { type: 'application/json' }), baseName() + '_ocr.json', 'application/json')
+  const downloadDocx = async () => {
+    if (!summary?.pagesData?.length) return
+    const blob = await buildOcrDocxBlob(summary.pagesData, baseName())
+    downloadBlob(blob, baseName() + '_ocr.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+  }
   const downloadSearchablePdf = () => {
     if (searchablePdfBytes) downloadBlob(searchablePdfBytes, baseName() + '_searchable.pdf', 'application/pdf')
   }
@@ -286,9 +302,11 @@ export default function OCRToolPage({
 
           <Section title="Existing Text In PDF">
             <OptionButton active={existingMode === 'auto'} onClick={() => setExistingMode('auto')} icon={<CheckCircle size={14} />}
-              label="Smart (recommended)" desc="Use real text where it exists. OCR only scanned regions. No duplicates" />
+              label="Smart Hybrid (recommended)" desc="Keep valid text; OCR only graphic/scanned regions. Zero duplicates" />
+            <OptionButton active={existingMode === 'reuse'} onClick={() => setExistingMode('reuse')} icon={<FileText size={14} />}
+              label="Reuse Existing Text" desc="Skip OCR completely when valid selectable text exists" />
             <OptionButton active={existingMode === 'redo'} onClick={() => setExistingMode('redo')} icon={<Search size={14} />}
-              label="Re-OCR everything" desc="Ignore existing text. Old invisible OCR layers are replaced" />
+              label="Re-OCR Everything" desc="Ignore existing text. Old invisible OCR layers are replaced" />
           </Section>
 
           <Section title="Document Language">
@@ -383,6 +401,7 @@ export default function OCRToolPage({
                   <button onClick={copyText} style={ghostBtn}><Copy size={13} /> Copy</button>
                   <button onClick={downloadText} style={ghostBtn}><Download size={13} /> .txt</button>
                   <button onClick={downloadMarkdown} style={ghostBtn}><Download size={13} /> .md</button>
+                  <button onClick={downloadDocx} style={ghostBtn}><Download size={13} /> .docx</button>
                   <button onClick={downloadJson} style={ghostBtn}><Download size={13} /> .json</button>
                 </div>
               </div>

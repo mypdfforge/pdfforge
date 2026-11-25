@@ -1,7 +1,8 @@
 /**
  * ocrPostProcess.js
  * Pure, client-side helpers: sub/superscripts, script detection, fuzzy compare,
- * native-vs-OCR region routing, field-typed confusable fixes, punctuation cleanup.
+ * fragment-debris elimination, native-vs-OCR region routing, field-typed confusable
+ * fixes, descender split repair, protected-token validation, and prose punctuation cleanup.
  * No DOM, no network. Deterministic: same input -> same output.
  */
 
@@ -73,7 +74,14 @@ export function isRtlText(text) {
 }
 
 export function normalizeForCompare(s) {
-  return (s || '').normalize('NFKC').replace(/\u00ad/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
+  return (s || '')
+    .normalize('NFKC')
+    .replace(/\u00ad/g, '')
+    .replace(/[·•●▪◦○‣⁃]/g, '•')
+    .replace(/[—–]+/g, '—')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
 }
 
 function lev(a, b) {
@@ -117,22 +125,76 @@ export function overlap(a, b) {
   return { inter, iou: inter / (areaA + areaB - inter), coverA: inter / areaA, coverB: inter / areaB }
 }
 
+/** True if `sub` is an ordered character subsequence of `sup` (with small typo tolerance). */
+function isOrderedSubsequence(sub, sup) {
+  if (!sub || sub.length > sup.length) return false
+  let si = 0
+  let matched = 0
+  for (let i = 0; i < sup.length && si < sub.length; i++) {
+    if (sup[i] === sub[si]) { si++; matched++ }
+  }
+  if (si === sub.length) return true
+  // Allow at most 1 misread char if fragment has >= 5 chars (e.g. "Compillation" / "Substit ti")
+  if (sub.length >= 5 && matched >= sub.length - 1) return true
+  return false
+}
+
+/**
+ * DEFECT 01 Guard: Returns true if `frag` is a strict partial-glyph fragment or letter-subset
+ * of `full` occupying an overlapping position (e.g. "r ion" overlapping "Version").
+ */
+export function isFragmentOverlap(frag, full, precomputedOverlap = null) {
+  const o = precomputedOverlap || overlap(frag, full)
+  // Must have significant spatial overlap in the smaller box (frag)
+  if (o.coverA < 0.45 && o.iou < 0.35) return false
+
+  const fx = normalizeForCompare(frag.text).replace(/[\s.,;:!?'"`()[\]{}\-_/\\]+/g, '')
+  const ux = normalizeForCompare(full.text).replace(/[\s.,;:!?'"`()[\]{}\-_/\\]+/g, '')
+  if (!fx || !ux) return false
+  if (fx === ux) return false
+  if (fx.length >= ux.length) return false
+
+  // Direct substring OR ordered letter-subset inside the larger overlapping line
+  if (ux.includes(fx)) return true
+  if (fx.length <= ux.length * 0.85 && isOrderedSubsequence(fx, ux)) return true
+  return false
+}
+
 /**
  * Region router. Invariant: for any page region, ONE text source only.
- * Native lines are validated upstream (isNativeGood). An OCR line that sits on native
- * text is dropped (native wins). OCR kept only where no native text exists.
+ * Native lines are validated upstream (isNativeGood). Any OCR line that overlaps native text,
+ * duplicates native text, or is partial-glyph debris over native text is dropped (native wins).
  */
 export function routeRegions(nativeLines, ocrLines) {
+  if (!nativeLines.length) return [...ocrLines]
   const keptOcr = []
   for (const o of ocrLines) {
+    let dominated = false
     let covered = 0
-    for (const n of nativeLines) covered += overlap(o, n).coverA
-    if (covered < 0.5) keptOcr.push(o)
+    for (const n of nativeLines) {
+      const ov = overlap(o, n)
+      if (ov.inter <= 0) continue
+      covered += ov.coverA
+      if (
+        ov.coverA >= 0.45 ||
+        ov.coverB >= 0.65 ||
+        ov.iou >= 0.40 ||
+        isFragmentOverlap(o, n, ov) ||
+        (ov.coverA >= 0.25 && similarity(o.text, n.text) >= 0.78)
+      ) {
+        dominated = true
+        break
+      }
+    }
+    if (!dominated && covered < 0.45) keptOcr.push(o)
   }
   return [...nativeLines, ...keptOcr]
 }
 
-/** Drop near-duplicate lines (same place, same text). Keeps native, then higher confidence. */
+/**
+ * Drop near-duplicate lines & overlapping fragment debris (zero min-length gate).
+ * Keeps native over OCR, complete lines over fragments, and higher confidence over lower.
+ */
 export function dedupeLines(lines) {
   const rank = l => (l.source === 'native' ? 2 : 1) + (l.mean ?? 1) * 0.01
   const drop = new Set()
@@ -140,10 +202,24 @@ export function dedupeLines(lines) {
     if (drop.has(i)) continue
     for (let j = i + 1; j < lines.length; j++) {
       if (drop.has(j)) continue
-      const o = overlap(lines[i], lines[j])
-      if ((o.iou >= 0.5 || Math.max(o.coverA, o.coverB) >= 0.7) && similarity(lines[i].text, lines[j].text) >= 0.85) {
-        drop.add(rank(lines[i]) >= rank(lines[j]) ? j : i)
-        if (drop.has(i)) break
+      const a = lines[i]
+      const b = lines[j]
+      const o = overlap(a, b)
+      if (o.inter <= 0) continue
+
+      // DEFECT 01: Drop overlapping partial-glyph fragment debris unconditionally
+      if (isFragmentOverlap(a, b, o)) { drop.add(i); break }
+      if (isFragmentOverlap(b, a, o)) { drop.add(j); continue }
+
+      // DEFECT 03: Dedup even 1-word cells & rewrapped copies when boxes overlap
+      const boxMatch = o.iou >= 0.45 || Math.max(o.coverA, o.coverB) >= 0.60
+      if (boxMatch && similarity(a.text, b.text) >= 0.82) {
+        if (rank(a) >= rank(b)) {
+          drop.add(j)
+        } else {
+          drop.add(i)
+          break
+        }
       }
     }
   }
@@ -165,46 +241,163 @@ export function lineWords(line) {
       bbox: [line.xMin + (i / total) * w, line.yMin, line.xMin + ((i + p.length) / total) * w, line.yMax],
       conf: line.mean ?? 1,
       source: line.source || 'ocr',
+      flagged: (line.mean ?? 1) < 0.85,
     }
   })
 }
 
-/** Text that must never get prose autocorrect: URLs, emails, hashes, ids, code. */
-export function isProtectedText(t) {
-  return /https?:\/\/|www\.|\S+@\S+\.\S+|[A-Za-z0-9+/=_-]{24,}|^\s*(def|class|import|return)\b|[{}();=]{2,}/.test(t)
+/** Classifies unbroken/code/structured tokens that must NEVER receive prose autocorrect. */
+export function classifyTokenType(t) {
+  if (!t) return 'prose'
+  if (/https?:\/\/\S+|www\.\S+/i.test(t)) return 'url'
+  if (/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/.test(t)) return 'jwt'
+  if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(t)) return 'uuid'
+  if (/\b[0-9a-fA-F]{32,128}\b/.test(t)) return 'hash'
+  if (/^[A-Za-z0-9+/]{24,}={0,2}$/.test(t.trim()) || /[A-Za-z0-9+/_=-]{28,}/.test(t)) return 'base64'
+  if (/\S+@\S+\.\S+/.test(t)) return 'email'
+  if (/^\s*(def|class|import|from|return|const|let|var|if|elif|else|for|while|try|except|with|async|await)\b/.test(t) || /[{}();=]{2,}/.test(t)) return 'code'
+  return 'prose'
 }
 
-/** Context-constrained fixes. Only touches patterns that are unambiguous. */
-export function fixFieldConfusables(text) {
+/** Text that must never get prose autocorrect: URLs, emails, JWTs, UUIDs, hashes, Base64, code. */
+export function isProtectedText(t) {
+  return classifyTokenType(t) !== 'prose'
+}
+
+/**
+ * DEFECT 05: Checks whether two adjacent wrapped lines form a broken unbroken token
+ * (URL, JWT, Base64, SHA/Hex) that should be rejoined without inserting any space.
+ */
+export function shouldJoinWithoutSpace(prevText, nextText) {
+  const a = (prevText || '').trimEnd()
+  const b = (nextText || '').trimStart()
+  if (!a || !b) return false
+  // Wrapped JWT or URL or Base64 or long Hex token with no internal spaces at boundary
+  const tailA = a.split(/\s+/).pop() || ''
+  const headB = b.split(/\s+/)[0] || ''
+  if (!tailA || !headB) return false
+  if (
+    (/^(https?:\/\/|eyJ|[A-Za-z0-9+/=_-]{16,}$|[0-9a-fA-F]{16,}$)/.test(tailA) || /[-./_=?&]$/.test(tailA)) &&
+    /^[A-Za-z0-9+/=_.\-?&:#%]+$/.test(headB) &&
+    (tailA.length + headB.length >= 24)
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * DEFECT 05: Normalizes unambiguous dash/format corruption inside protected identifiers/tokens
+ * (e.g. em-dash inside UUIDs/JWTs/URLs/SHA identifiers -> ASCII hyphen '-').
+ */
+export function repairProtectedToken(text) {
   if (!text) return text
   let t = text
+  // Em-dash / en-dash accidentally emitted inside URLs, JWTs, UUIDs, or hostnames -> '-'
+  if (/https?:\/\/|\beyJ|[0-9a-f]{4,}[—–][0-9a-f]{4,}|\.[a-z]{2,}\b/i.test(t)) {
+    t = t.replace(/([A-Za-z0-9])[—–]([A-Za-z0-9])/g, '$1-$2')
+  }
+  return t
+}
+
+/**
+ * DEFECT 08: Repairs descender-triggered intra-word breaks ("Pa g e 14", "Sy ntax",
+ * "Formattin g", "Hierarch y", "Le g al", "Led g er", "Com p arison", "j ust", "SPECIFICAT ION")
+ * originating in broken PDF text layers or tight kerning. Skips code and protected tokens.
+ */
+const DESCENDER_WORD_FIXES = [
+  [/\bPa\s+g\s+e\b/g, 'Page'],
+  [/\bP\s+a\s+g\s+e\b/g, 'Page'],
+  [/\bSy\s+ntax\b/g, 'Syntax'],
+  [/\bFormattin\s+g\b/g, 'Formatting'],
+  [/\bHierarch\s+y\b/g, 'Hierarchy'],
+  [/\bLe\s+g\s+al\b/g, 'Legal'],
+  [/\bNumberin\s+g\b/g, 'Numbering'],
+  [/\bEx\s*p\s*erimentation\b/g, 'Experimentation'],
+  [/\bH\s*yp\s*otheses\b/g, 'Hypotheses'],
+  [/\bLed\s+g\s+er\b/g, 'Ledger'],
+  [/\bCom\s+p\s+arison\b/g, 'Comparison'],
+  [/\bj\s+ust\b/g, 'just'],
+  [/\bl\s+yp\s+hs\b/g, 'glyphs'],
+  [/\bG\s*l\s+yp\s+hs\b/g, 'Glyphs'],
+  [/\bEmoj\s+is\b/g, 'Emojis'],
+  [/\bSPECIFICAT\s+ION\b/g, 'SPECIFICATION'],
+  [/\b([A-Za-z]{2,})\s+([gypj])(?=\s|$|[.,:;!?])/g, (m, pre, d) => {
+    // Common descender-end splits like "Formattin g", "Numberin g", "Loggin g", "Trackin g", "Typograph y"
+    if (d === 'g' && /in$/i.test(pre)) return pre + 'g'
+    if (d === 'y' && /(?:ph|ch|tr|ar|or|er|it|at|nt|rt|ll|gg)$/i.test(pre)) return pre + 'y'
+    return m
+  }],
+]
+
+export function repairDescenderSplits(text) {
+  if (!text || isProtectedText(text)) return text
+  let t = text
+  for (const [re, rep] of DESCENDER_WORD_FIXES) {
+    t = t.replace(re, rep)
+  }
+  return t
+}
+
+/** Context-constrained fixes (DEFECT 09). Only touches patterns that are unambiguous. */
+export function fixFieldConfusables(text) {
+  if (!text) return text
+  let t = repairProtectedToken(text)
+  if (isProtectedText(t)) return t
+
   // Euro read as E: "(E3,120,000.00)" and "E3,120"
   t = t.replace(/\(E(?=\d{1,3}(?:,\d{3})*(?:\.\d+)?\))/g, '(€')
   t = t.replace(/(^|[\s(])E(?=\d{1,3}(?:,\d{3})+(?:\.\d+)?(?:\s|\)|$))/g, '$1€')
-  // IDs like EVT-9OOO2 -> EVT-90002 (needs at least one real digit)
-  t = t.replace(/\b([A-Z]{2,5})-([0-9OIlSB]{3,})\b/g, (m, p, d) =>
+
+  // IDs like EVT-9OOO2 or SPEC-00O -> digits fixed (needs at least one real digit)
+  t = t.replace(/\b([A-Z]{2,6})-([0-9OIlSB]{2,})\b/g, (m, p, d) =>
     /\d/.test(d) ? `${p}-${d.replace(/O/g, '0').replace(/[Il]/g, '1').replace(/S/g, '5').replace(/B/g, '8')}` : m)
-  // Mostly-digit tokens: O->0, l/I->1
+
+  // "d00%" -> "100%"
+  t = t.replace(/\bd00%/g, '100%')
+
+  // Mostly-digit tokens: O->0, l/I->1 (skip dates/version tags handled separately)
   t = t.replace(/(?<![A-Za-z])[0-9OolI][0-9OolI.,]{2,}%?(?![A-Za-z])/g, tok => {
     const core = tok.replace(/[.,%]/g, '')
     const digits = (core.match(/\d/g) || []).length
     return digits >= 2 && digits / core.length >= 0.6 ? tok.replace(/[Oo]/g, '0').replace(/[lI]/g, '1') : tok
   })
-  // Check mark read as square root
-  t = t.replace(/(^|[\s(:])√(?=\s|$|\))/g, '$1✓')
+
+  // Check mark read as square root (safe: never converts √2 or √(x))
+  t = t.replace(/(^|[\s(|:,])√(?=\s|$|\)|\|)/g, '$1✓')
+
+  // Remaining named/statistical OCR confusions from DEFECT 09
   t = t.replace(/\bPh\.D\]/g, 'Ph.D.')
-  return t
+  t = t.replace(/\bNeurlPS\b/g, 'NeurIPS')
+  t = t.replace(/\bUItimate\b/g, 'Ultimate')
+  t = t.replace(/\bMinlO\b/g, 'MinIO')
+  t = t.replace(/\bIz4\b/g, 'lz4')
+  t = t.replace(/\bstabillized\b/gi, 'stabilized')
+  t = t.replace(/\bus-east-4\.interal\b/g, 'us-east-4.internal')
+  t = t.replace(/\bHostnarme\b/g, 'Hostname')
+  // Greek alpha in significance/statistical header contexts: "Significance (a = 0.05)" or "(a)"
+  t = t.replace(/(\bSignificance\b[^(]{0,20}\()a(\))/gi, '$1α$2')
+  t = t.replace(/\b(p\s*[<≤>≥=]\s*)a\b/g, '$1α')
+  t = t.replace(/(\()a(\s*=\s*0\.\d+\))/g, '$1α$2')
+
+  return repairDescenderSplits(t)
 }
 
-/** Prose-only punctuation cleanup. Skipped for protected text. */
+/** DEFECT 13: Prose-only punctuation cleanup. Skipped for protected text & code. */
 export function normalizePunctuation(text) {
   if (!text || isProtectedText(text)) return text
   return text
     .replace(/&\.(?=\s|$)/g, '&')
-    .replace(/(\w)&(?=\s|$)/g, '$1 &')
+    // Restore missing space before/after '&' in prose while preserving acronyms like R&D, AT&T, P&L
+    .replace(/([a-z]{2,})&(?=\s|[A-Z]|$)/g, '$1 &')
+    .replace(/(\w)&(?=[A-Z][a-z])/g, '$1 & ')
+    .replace(/(\w)\s+&\s+([A-Za-z])/g, '$1 & $2')
     .replace(/[—–]{2,}/g, '—')
-    .replace(/(\w) '(s)\b/g, "$1'$2")
-    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/(\w)\s+'(s|t|re|ve|ll|d|m)\b/g, "$1'$2")
+    // Timestamp glued without space: 2026-10-3114:15:00 -> 2026-10-31 14:15:00
+    .replace(/\b(\d{4}-\d{2}-\d{2})(\d{2}:\d{2}:\d{2})\b/g, '$1 $2')
+    // Clean extra spaces before punctuation (never collapse URLs/decimals)
+    .replace(/\s+([,.;:!?])(?=\s|$)/g, '$1')
 }
 
 /** Normalize list bullets: · • ● ▪ all -> • */

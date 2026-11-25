@@ -1,15 +1,16 @@
 /**
  * paddleOcr.js
- * 100% client-side OCR (PP-OCR via onnxruntime-web + esearch-ocr) and searchable-PDF writer.
+ * 100% client-side OCR (PP-OCR via onnxruntime-web + esearch-ocr), searchable-PDF writer,
+ * structured Word (.docx) exporter, coverage auditor, and quality gates.
  * Files never leave the browser.
  *
  * Pipeline per page (see OCRToolPage):
  *   native text (pdf.js)  ──┐
- *   OCR lines (+recover)  ──┴─> routeRegions (ONE source per region) -> layout -> page result
+ *   OCR lines (+recover)  ──┴─> routeRegions (ONE source per region) -> dedupeLines -> layout -> audit
  * Writer adds invisible text (Tr 3) only for OCR-sourced lines. Native text is already in the PDF.
  */
 import { reconstructPageLayout, enrichLineGeometry } from './ocrLayoutAnalysis.js'
-import { routeRegions, dedupeLines, lineWords, isRtlText, detectScript } from './ocrPostProcess.js'
+import { routeRegions, dedupeLines, lineWords, isRtlText, detectScript, overlap, isFragmentOverlap, similarity } from './ocrPostProcess.js'
 
 /* ───────────── ONNX runtime from CDN (keeps Cloudflare asset < 25 MiB) ───────────── */
 let ortPromise = null
@@ -51,7 +52,6 @@ async function fetchWithCache(url, onProgress, label) {
 
   const resp = await fetch(url)
   if (!resp.ok) throw new Error(`Failed to load ${url}: ${resp.status}`)
-  // SPA hosts answer missing files with index.html (200). Treat as missing.
   if ((resp.headers.get('content-type') || '').includes('text/html')) throw new Error(`Not found: ${url}`)
 
   const total = parseInt(resp.headers.get('content-length') || '0', 10)
@@ -79,8 +79,6 @@ async function fetchWithCache(url, onProgress, label) {
 
 /* ───────────── engine (one per script pack) ───────────── */
 
-// Language -> recognizer pack. Packs live in /models/ocr/<pack>/{rec.onnx,dict.txt}.
-// 'default' = /models/ocr/{rec.onnx,dict.txt}. Missing pack -> fall back to default with a warning.
 const LANG_PACK = {
   rus: 'cyrillic', ara: 'arabic', heb: 'hebrew', hin: 'devanagari',
   jpn: 'japan', kor: 'korean', ell: 'greek', tha: 'thai',
@@ -135,8 +133,8 @@ export async function ocrRawLines(engine, imageData) {
 }
 
 /**
- * Low confidence is flagged, never deleted. First try a 2x upscaled crop of the line.
- * Keeps the better reading. (Small fonts are the usual cause of 3.2ms -> 3.2s type errors.)
+ * DEFECT 06 / 09: Recover weak lines (< threshold confidence) via 2x upscaled crop re-OCR.
+ * Low confidence is flagged, never deleted.
  */
 export async function recoverLowConfidence(engine, canvas, lines, { threshold = 0.85, max = 40 } = {}) {
   const weak = lines.filter(l => (l.mean ?? 1) < threshold).slice(0, max)
@@ -165,13 +163,38 @@ export async function recoverLowConfidence(engine, canvas, lines, { threshold = 
   }
 }
 
-/** Route native + OCR into one set of lines, run layout, return the page result. */
-export function buildPageResult({ nativeLines = [], ocrLines = [], width, height, viewportTransform, ocrSkipped = false }) {
-  const routed = routeRegions(enrichLineGeometry(nativeLines), enrichLineGeometry(ocrLines))
+/**
+ * DEFECT 06 Coverage Audit: ensures every detected raw line is represented in the final page output
+ * (or legitimately absorbed by native text / deduplication), returning uncovered boxes if any.
+ */
+export function auditPageCoverage(rawLines, emittedLines) {
+  const uncovered = []
+  for (const r of rawLines) {
+    if (!r.text || !r.text.trim()) continue
+    const covered = emittedLines.some(e => {
+      const ov = overlap(r, e)
+      return ov.coverA >= 0.4 || ov.iou >= 0.35 || similarity(r.text, e.text) >= 0.8
+    })
+    if (!covered) uncovered.push(r)
+  }
+  return { totalDetected: rawLines.length, uncoveredCount: uncovered.length, uncovered }
+}
+
+/** Route native + OCR into one set of lines, run layout, enforce coverage, return the page result. */
+export function buildPageResult({ nativeLines = [], ocrLines = [], width, height, viewportTransform, ocrSkipped = false, pageNumber = 1 }) {
+  const eNative = enrichLineGeometry(nativeLines, pageNumber)
+  const eOcr = enrichLineGeometry(ocrLines, pageNumber)
+  const routed = routeRegions(eNative, eOcr)
   const merged = dedupeLines(routed)
-  const layout = reconstructPageLayout(merged, width, height)
+
+  // DEFECT 06: Verify 100% coverage of non-native lines not absorbed by native regions
+  const layout = reconstructPageLayout(merged, width, height, pageNumber)
+  const coverage = auditPageCoverage(merged, layout.allLines)
+
   return {
+    page: pageNumber,
     text: layout.fullText,
+    bodyText: layout.bodyText,
     lines: layout.allLines,
     canvasWidth: width,
     canvasHeight: height,
@@ -183,11 +206,58 @@ export function buildPageResult({ nativeLines = [], ocrLines = [], width, height
     avgConfidence: layout.avgConfidence,
     lowConfidenceCount: layout.lowConfidenceCount,
     tables: layout.tables,
+    codeBlocks: layout.codeBlocks,
+    listTree: layout.listTree,
     formFields: layout.formFields,
+    coverage,
   }
 }
 
-/* ───────────── PDF writer ───────────── */
+/* ───────────── DEFECT 16 Quality Gates ───────────── */
+
+export function evaluateQualityGates(pages) {
+  let fragmentCount = 0
+  let duplicateCount = 0
+  let uncoveredCount = 0
+  let unbalancedCodeCount = 0
+  const reviewQueue = []
+
+  for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+    const p = pages[pIdx]
+    const ls = p.lines || []
+    for (let i = 0; i < ls.length; i++) {
+      const a = ls[i]
+      if (a.flagged) {
+        reviewQueue.push({ page: pIdx + 1, text: a.text, confidence: a.confidence, bbox: a.bbox, reason: 'low_confidence' })
+      }
+      for (let j = i + 1; j < ls.length; j++) {
+        const b = ls[j]
+        const o = overlap(a, b)
+        if (o.inter <= 0) continue
+        if (isFragmentOverlap(a, b, o) || isFragmentOverlap(b, a, o)) fragmentCount++
+        else if ((o.iou >= 0.5 || Math.max(o.coverA, o.coverB) >= 0.7) && similarity(a.text, b.text) >= 0.85) duplicateCount++
+      }
+    }
+    if (p.coverage?.uncoveredCount) uncoveredCount += p.coverage.uncoveredCount
+    for (const cb of p.codeBlocks || []) {
+      if (!cb.balanced) {
+        unbalancedCodeCount++
+        reviewQueue.push({ page: pIdx + 1, text: cb.codeText.slice(0, 60), confidence: 0.7, bbox: cb.bbox, reason: 'code_brackets', issues: cb.issues })
+      }
+    }
+  }
+
+  return {
+    passed: fragmentCount === 0 && duplicateCount === 0 && uncoveredCount === 0,
+    fragmentCount,
+    duplicateCount,
+    uncoveredCount,
+    unbalancedCodeCount,
+    reviewQueue,
+  }
+}
+
+/* ───────────── PDF writer (DEFECT 04 & 15) ───────────── */
 
 /**
  * Remove only invisible-text streams left by earlier OCR runs.
@@ -211,13 +281,12 @@ function stripLegacyOcrStreams(pdfDoc, decodePDFRawStream) {
   }
 }
 
-// Optional fonts are fetched only when the text needs them. Missing file = reported, not fatal.
+// Wired directly to the bundled Unicode TrueType fonts in frontend/public/wasm/docx2pdf/fonts/
 const FONT_SOURCES = {
   arial: '/wasm/docx2pdf/fonts/Arial-Regular.ttf',
   devanagari: '/wasm/docx2pdf/fonts/Nirmala-Regular.ttf',
-  cjk: '/fonts/NotoSansCJK-Regular.ttf',
-  thai: '/fonts/NotoSansThai-Regular.ttf',
-  emoji: '/fonts/NotoEmoji-Regular.ttf',
+  cjk: '/wasm/docx2pdf/fonts/SimSun-Regular.ttf',
+  symbol: '/wasm/docx2pdf/fonts/SegoeUISymbol.ttf',
 }
 
 function neededScripts(pages) {
@@ -228,8 +297,7 @@ function neededScripts(pages) {
       const t = l.text || ''
       if (/\p{Script=Devanagari}/u.test(t)) need.add('devanagari')
       if (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(t)) need.add('cjk')
-      if (/\p{Script=Thai}/u.test(t)) need.add('thai')
-      if (/\p{Extended_Pictographic}/u.test(t)) need.add('emoji')
+      if (/\p{Extended_Pictographic}|[\u2070-\u209F\u2190-\u27BF\u2B00-\u2BFF]/u.test(t)) need.add('symbol')
     }
   }
   return need
@@ -262,7 +330,6 @@ function invert([a, b, c, d, e, f]) {
  * Build searchable PDF. Per word: positioned on the baseline (rotation aware), horizontally
  * scaled (Tz) to the OCR box width, render mode 3 (invisible). Embedded subset fonts, so
  * ToUnicode is correct. Idempotent: old invisible OCR streams are stripped first.
- * Returns { bytes, stats }.
  */
 export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgress) {
   const lib = await import('@cantoo/pdf-lib')
@@ -277,6 +344,7 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
   const toSet = f => { try { return new Set(f.getCharacterSet()) } catch (e) { return null } }
   const fonts = []
   const embed = async key => {
+    if (!FONT_SOURCES[key]) { stats.missingFonts.push(key); return }
     try {
       const bytes = await fetchWithCache(FONT_SOURCES[key], onProgress, `${key} font`)
       const font = await pdfDoc.embedFont(bytes, { subset: true })
@@ -319,7 +387,6 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
       const words = pick.text.split(' ').filter(Boolean)
       if (!words.length) continue
 
-      // box = [TL, TR, BR, BL] in canvas px -> PDF user space (handles /Rotate and skew)
       const BL = toPdf(...line.box[3])
       const BR = toPdf(...line.box[2])
       const TL = toPdf(...line.box[0])
@@ -339,7 +406,6 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
       const rtl = isRtlText(pick.text)
       let cum = 0
       words.forEach((w, i) => {
-        // RTL: logical first word sits at the right end. Text stays in logical order for search/copy.
         const start = rtl ? 1 - (cum + wi[i]) / total : cum / total
         cum += wi[i] + sp
         const wordW = (wi[i] / total) * W
@@ -368,23 +434,136 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
   return { bytes: await pdfDoc.save(), stats }
 }
 
+/* ───────────── Structured Word (.docx) Export for OCR (DEFECT 16) ───────────── */
+
+export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
+  const {
+    Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell,
+    WidthType, BorderStyle, AlignmentType, ShadingType, TableLayoutType, Header, Footer,
+  } = await import('docx')
+
+  const firstHdr = pages.find(p => p.headerLines?.length)?.headerLines.map(l => l.text).join(' ')
+  const firstFtr = pages.find(p => p.footerLines?.length)?.footerLines.map(l => l.text).join(' ')
+  const thin = { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' }
+  const allBorders = { top: thin, bottom: thin, left: thin, right: thin }
+
+  const children = []
+  for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+    const p = pages[pIdx]
+    if (pIdx > 0) children.push(new Paragraph({ pageBreakBefore: true }))
+
+    const chunks = (p.bodyText || '').split(/\n(?=(?:```|(?:\| .+ \|\n\| ---)))/)
+    let tblIdx = 0
+    for (const chunk of chunks) {
+      const trimmed = chunk.trim()
+      if (!trimmed) continue
+      if (trimmed.startsWith('```')) {
+        const codeLines = trimmed.replace(/^```[^\n]*\n?/, '').replace(/\n?```$/, '').split('\n')
+        const paras = codeLines.map(cl => new Paragraph({
+          spacing: { after: 20, line: 240 },
+          children: [new TextRun({ text: cl, font: 'Consolas', size: 18 })],
+        }))
+        children.push(new Table({
+          layout: TableLayoutType.FIXED,
+          width: { size: 9360, type: WidthType.DXA },
+          rows: [new TableRow({
+            children: [new TableCell({
+              width: { size: 9360, type: WidthType.DXA },
+              shading: { type: ShadingType.CLEAR, fill: 'F4F5F7', color: 'auto' },
+              borders: allBorders,
+              margins: { top: 100, bottom: 100, left: 160, right: 160 },
+              children: paras,
+            })],
+          })],
+        }))
+        continue
+      }
+      if (trimmed.startsWith('| ') && p.tables?.[tblIdx]) {
+        const t = p.tables[tblIdx++]
+        const nCols = Math.max(1, t.nCols || 1)
+        const colW = Math.floor(9360 / nCols)
+        const rows = t.rows.map((r, ri) => new TableRow({
+          tableHeader: ri === 0,
+          children: r.map(c => new TableCell({
+            width: { size: colW * (c.colspan || 1), type: WidthType.DXA },
+            columnSpan: c.colspan > 1 ? c.colspan : undefined,
+            shading: ri === 0 ? { type: ShadingType.CLEAR, fill: 'E7E9EE', color: 'auto' } : undefined,
+            borders: allBorders,
+            margins: { top: 60, bottom: 60, left: 100, right: 100 },
+            children: [new Paragraph({
+              alignment: c.align === 'right' ? AlignmentType.RIGHT : c.align === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT,
+              children: [new TextRun({ text: c.text || '', bold: ri === 0, size: 20 })],
+            })],
+          })),
+        }))
+        children.push(new Table({
+          layout: TableLayoutType.FIXED,
+          width: { size: 9360, type: WidthType.DXA },
+          rows,
+        }))
+        continue
+      }
+
+      for (const rawLine of chunk.split('\n')) {
+        const l = rawLine.trimEnd()
+        if (!l.trim()) continue
+        if (l.startsWith('## ')) {
+          children.push(new Paragraph({
+            heading: HeadingLevel.HEADING_2,
+            spacing: { before: 160, after: 80 },
+            children: [new TextRun({ text: l.slice(3).trim(), bold: true })],
+          }))
+        } else {
+          const rtl = isRtlText(l)
+          const indentMatch = l.match(/^(\s*)- /)
+          const level = indentMatch ? Math.min(9, Math.floor(indentMatch[1].length / 2)) : null
+          children.push(new Paragraph({
+            bidirectional: rtl || undefined,
+            alignment: rtl ? AlignmentType.START : AlignmentType.LEFT,
+            indent: level != null ? { left: (level + 1) * 360, hanging: 240 } : undefined,
+            spacing: { after: 70 },
+            children: [new TextRun({ text: l.trim(), rightToLeft: rtl || undefined, size: 22 })],
+          }))
+        }
+      }
+    }
+  }
+
+  const doc = new Document({
+    creator: 'PDFFORGE OCR',
+    title,
+    sections: [{
+      headers: firstHdr ? { default: new Header({ children: [new Paragraph({ children: [new TextRun({ text: firstHdr, size: 18, color: '666666' })] })] }) } : undefined,
+      footers: firstFtr ? { default: new Footer({ children: [new Paragraph({ children: [new TextRun({ text: firstFtr, size: 18, color: '666666' })] })] }) } : undefined,
+      children: children.length ? children : [new Paragraph({})],
+    }],
+  })
+  return Packer.toBlob(doc)
+}
+
 /* ───────────── sidecar JSON ───────────── */
 
 export function buildSidecar(pages, meta = {}) {
+  const gates = evaluateQualityGates(pages)
   return {
     generator: 'PDFFORGE',
-    version: 1,
+    version: 2,
     ...meta,
+    qualityGates: gates,
     pages: pages.map((p, i) => ({
       page: i + 1,
       width: p.canvasWidth,
       height: p.canvasHeight,
       ocrSkipped: !!p.ocrSkipped,
       avgConfidence: p.avgConfidence,
+      coverage: p.coverage,
       lines: p.lines.map(l => ({
+        page: l.page || i + 1,
         text: l.text,
+        origin: l.origin || (l.source === 'native' ? 'source-text' : 'recognized'),
         source: l.source || 'ocr',
         script: detectScript(l.text),
+        regionType: l.regionType || 'PARAGRAPH',
         confidence: l.mean ?? 1,
         flagged: (l.mean ?? 1) < 0.85,
         zone: l.zone,
@@ -393,6 +572,8 @@ export function buildSidecar(pages, meta = {}) {
         words: lineWords(l),
       })),
       tables: p.tables,
+      codeBlocks: p.codeBlocks,
+      listTree: p.listTree,
       formFields: p.formFields,
     })),
   }
