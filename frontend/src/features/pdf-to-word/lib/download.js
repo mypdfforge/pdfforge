@@ -35,5 +35,15 @@ export async function zipDocx(entries) {
     const finalName = count === 1 ? name : name.replace(/\.docx$/i, `-${count}.docx`)
     files[finalName] = new Uint8Array(await blob.arrayBuffer())
   }
-  return new Blob([zipSync(files, { level: 0 })], { type: 'application/zip' })
+  try {
+    const w = new Worker(new URL('./zipWorker.js', import.meta.url), { type: 'module' })
+    const buf = await new Promise((res, rej) => {
+      w.onmessage = (e) => (e.data?.ok ? res(e.data.buf) : rej(new Error(e.data?.message || 'zip error')))
+      w.onerror = (e) => rej(new Error(e?.message || 'zip worker failed'))
+      w.postMessage({ files })
+    }).finally(() => w.terminate())
+    return new Blob([buf], { type: 'application/zip' })
+  } catch {
+    return new Blob([zipSync(files, { level: 0 })], { type: 'application/zip' })
+  }
 }

@@ -207,12 +207,15 @@ function groupItemsIntoLines(items) {
   const lines = [];
   // Sort items top-to-bottom in PDF coords (higher y is higher up on page)
   const sorted = [...items].sort((p, q) => q.y - p.y || p.x - q.x);
-
+  let active = []; // sliding window of eligible lines
   for (const item of sorted) {
-    let line = lines.find((l) => Math.abs(l.y - item.y) < Math.max(3.5, item.size * 0.35));
+    const tol = Math.max(3.5, item.size * 0.35);
+    active = active.filter((l) => l.y - item.y <= tol); // sorted desc => older lines can never match again
+    let line = active.find((l) => Math.abs(l.y - item.y) < tol);
     if (!line) {
       line = { y: item.y, items: [] };
       lines.push(line);
+      active.push(line);
     }
     line.items.push(item);
   }

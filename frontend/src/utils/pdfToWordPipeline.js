@@ -20,6 +20,7 @@ import { stitchCrossPageTables } from './pdfTableMerge.js'
 import { extractVectorGeometry } from './pdfVectorExtractor.js'
 import * as U from './pdfToWordUtils.js'
 import { buildDocxBlob } from './docxBuild.js'
+import { convertViaWorkers } from './pdfIngestClient.js'
 
 export { ConversionError } from './pdfToWordUtils.js'
 
@@ -61,8 +62,19 @@ export async function convertPdfToDocx(file, opts = {}) {
     onProgress?.({ percent: Math.round(percent), stage, message, page, totalPages: total,
       pagesPerSec: v.pagesPerSec, etaSec: v.etaSec ?? null, warnings: warnings.length })
   }
+  const title = (cfg.title || file.name || 'Converted PDF').replace(/\.pdf$/i, '')
 
   U.throwIfAborted(signal)
+  if (cfg.useWorkers !== false && typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined') {
+    try {
+      const r = await convertViaWorkers(file, { signal, onProgress, title, warn })
+      return { blob: r.blob, warnings, stats: { ...stats, packMode: r.packMode, engine: 'workers', elapsedMs: Math.round(U.now() - t0) } }
+    } catch (e) {
+      if (e?.code === 'ABORTED' || signal?.aborted) throw e
+      warn(null, 'WORKER_INGEST_UNAVAILABLE', 'Worker ingest unavailable; used the main-thread pipeline.', 'info')
+    }
+  }
+
   const pdfjs = globalThis.pdfjsLib
   if (!pdfjs?.getDocument) throw new U.ConversionError('NO_PDFJS', 'PDF engine (pdf.js) is not loaded.')
 
