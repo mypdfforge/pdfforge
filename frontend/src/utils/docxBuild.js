@@ -23,18 +23,25 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
  *          yieldFn?:()=>Promise<void>,isAborted?:()=>boolean}} o
  * @returns {Promise<{blob:Blob, packMode:string, modes:string[]}>}
  */
+function isEmptyPageModel(m) {
+  if (!m || m.mode === 'failed' || m.pageImage || m.images?.length) return false
+  return !(m.blocks || []).some((b) => b.type !== 'paragraph' || (b.line?.text && b.line.text.trim()))
+}
+
 export async function buildDocxBlob(models, o) {
   const { warn, onProgress, yieldFn, isAborted } = o
-  const numbering = buildDocumentNumbering(models)
+  const filtered = models.filter((m) => !isEmptyPageModel(m))
+  const activeModels = filtered.length > 0 ? filtered : (models.length > 0 ? [models[0]] : [])
+  const numbering = buildDocumentNumbering(activeModels)
   const g = { bodySize: o.bodySize || 11, numbering }
   g.h1 = g.bodySize * 1.45
   g.h2 = g.bodySize * 1.18
-  const n = models.length
+  const n = activeModels.length
   const sections = [], modes = []
   for (let i = 0; i < n; i++) {
     if (isAborted?.()) throw U.abortError()
     onProgress?.(i, n)
-    const m = models[i]
+    const m = activeModels[i]
     try {
       sections.push(buildSection(m, g, 'rich', warn))
       modes.push(m.mode)
@@ -58,11 +65,11 @@ export async function buildDocxBlob(models, o) {
   }
   if (!blob) {
     try {
-      blob = await packDocument(models.map((m) => buildSection(m, g, 'plain', warn)), o.title, numbering.config)
+      blob = await packDocument(activeModels.map((m) => buildSection(m, g, 'plain', warn)), o.title, numbering.config)
       if (!(await U.looksLikeZip(blob))) throw new Error('invalid zip')
     } catch {
       packMode = 'minimal'
-      blob = await packDocument(models.map((m) => buildSection(m, g, 'minimal', warn)), o.title)
+      blob = await packDocument(activeModels.map((m) => buildSection(m, g, 'minimal', warn)), o.title)
     }
   }
 

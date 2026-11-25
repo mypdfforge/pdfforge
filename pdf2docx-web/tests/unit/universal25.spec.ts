@@ -49,5 +49,16 @@ describe('Universal & 25-page structural regression gate', () => {
 
     // Canonical Arabic (no presentation forms U+FB50-U+FEFF)
     expect(/[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(xml)).toBe(false)
+
+    // No blank emptied continuation sections (each <w:sectPr> section must have visible text/table/image)
+    const body = xml.match(/<w:body>([\s\S]*)<\/w:body>/)?.[1] || xml
+    const sects = body.split(/<w:sectPr[\s>]/).slice(0, -1)
+    expect(sects.length).toBe(25)
+    for (const s of sects) {
+      const hasText = [...s.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].some((m) => m[1].trim().length > 0)
+      const hasTbl = s.includes('<w:tbl>')
+      const hasImg = s.includes('<w:drawing>')
+      expect(hasText || hasTbl || hasImg).toBe(true)
+    }
   })
 })
