@@ -6,7 +6,7 @@
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell,
   WidthType, BorderStyle, AlignmentType, ImageRun, ShadingType, TableLayoutType,
-  PageOrientation, VerticalAlign, VerticalMergeType,
+  PageOrientation, VerticalAlign, VerticalMergeType, HeightRule,
 } from 'docx'
 import { wrapUnbrokenStrings } from './pdfLayoutSegmenter.js'
 import * as U from './pdfToWordUtils.js'
@@ -84,10 +84,19 @@ export async function buildDocxBlob(models, o) {
 function pageGeometry(m) {
   const lines = (m.lines || []).filter((l) => Number.isFinite(l.x))
   const xe = (l) => l.xEnd ?? l.x + (l.w || 0)
-  const minX = lines.length ? Math.min(...lines.map((l) => l.x)) : 54
-  const maxX = lines.length ? Math.max(...lines.map(xe)) : m.w - 54
-  const left = clamp(minX, 28, 110)
-  const right = clamp(m.w - maxX, 28, 110)
+  const xs0 = lines.map((l) => l.x)
+  const xs1 = lines.map(xe)
+  for (const b of m.blocks || []) {
+    if (Number.isFinite(b.x0)) xs0.push(b.x0)
+    if (Number.isFinite(b.x1)) xs1.push(b.x1)
+  }
+  for (const r of m.vector?.rects || []) {
+    if (r.w > 30 && r.x >= 0 && r.x + r.w <= m.w) { xs0.push(r.x); xs1.push(r.x + r.w) }
+  }
+  const minX = xs0.length ? Math.min(...xs0) : 54
+  const maxX = xs1.length ? Math.max(...xs1) : m.w - 54
+  const left = clamp(minX, 28, 76)
+  const right = clamp(m.w - maxX, 28, 76)
   const top = 48, bottom = 48
   const contentW = Math.max(144, m.w - left - right)
   const contentH = Math.max(144, m.h - top - bottom)
@@ -134,17 +143,21 @@ function buildRichChildren(m, g, geo, warn) {
   const imgs = (m.images || []).slice().sort((a, b) => a.y - b.y)
   let ii = 0
   let blockFailures = 0
+  let prevBot = null
 
   for (const block of m.blocks || []) {
     const top = blockTop(block, m)
+    const bot = blockBottom(block, m)
     while (ii < imgs.length && top != null && imgs[ii].y < top) out.push(imageParagraph(imgs[ii++], geo))
+    const gapPt = prevBot != null && top != null ? clamp(top - prevBot, 0, 64) : 0
     try {
-      out.push(...buildBlock(block, ctx))
+      out.push(...buildBlock(block, { ...ctx, spaceBeforePt: gapPt > 6 ? gapPt - 4 : 0 }))
     } catch (e) {
       blockFailures++
       const txt = blockPlainText(block)
       if (txt) out.push(new Paragraph({ children: [new TextRun({ text: wrap(U.cleanText(txt)) })] }))
     }
+    if (bot != null) prevBot = bot
   }
   while (ii < imgs.length) out.push(imageParagraph(imgs[ii++], geo))
   if (blockFailures) warn(m.pageNum, 'BLOCK_FALLBACK', `Page ${m.pageNum}: ${blockFailures} block(s) fell back to plain text.`, 'info')
@@ -152,9 +165,21 @@ function buildRichChildren(m, g, geo, warn) {
 }
 
 function blockTop(block, m) {
-  const raw = block.y ?? block.line?.y ?? block.lines?.[0]?.y ?? block.col1Lines?.[0]?.y
+  if (Number.isFinite(block.yMax)) return m.topDown ? block.yMax : m.h - block.yMax
+  const l = block.line ?? block.lines?.[0] ?? block.col1Lines?.[0]
+  const raw = block.y ?? l?.y
   if (!Number.isFinite(raw)) return null
-  return m.topDown ? raw : m.h - raw
+  const sz = l?.size || 10
+  return (m.topDown ? raw : m.h - raw) - sz * 0.85
+}
+
+function blockBottom(block, m) {
+  if (Number.isFinite(block.yMin)) return m.topDown ? block.yMin : m.h - block.yMin
+  const l = block.line ?? block.lines?.[block.lines?.length - 1] ?? block.col1Lines?.[block.col1Lines?.length - 1]
+  const raw = block.y ?? l?.y
+  if (!Number.isFinite(raw)) return null
+  const sz = l?.size || 10
+  return (m.topDown ? raw : m.h - raw) + sz * 0.25
 }
 
 function blockPlainText(b) {
@@ -172,7 +197,7 @@ function buildBlock(block, ctx) {
     case 'callout': return buildCallout(block, ctx)
     case 'code': return buildCode(block, ctx)
     case 'paragraph': {
-      const p = paragraphFromLine(block.line, ctx)
+      const p = paragraphFromLine(block.line, ctx, { spaceBeforePt: ctx.spaceBeforePt })
       return p ? [p] : []
     }
     default: return []
@@ -216,7 +241,11 @@ function paragraphFromLine(line, ctx, extra = {}) {
   return new Paragraph({
     heading, alignment, bidirectional: rtl || undefined, keepNext: heading ? true : undefined,
     numbering: li ? { reference: li.reference, level: li.level } : undefined,
-    spacing: { after: heading ? 160 : isList ? 40 : 70, line: line.isCode ? 240 : 276 },
+    spacing: {
+      before: extra.spaceBeforePt > 0 ? tw(extra.spaceBeforePt) : undefined,
+      after: heading ? 160 : isList ? 40 : 70,
+      line: line.isCode ? 240 : 276,
+    },
     indent: Object.keys(indent).length ? indent : undefined,
     children,
     ...extra.paragraph,
@@ -258,7 +287,10 @@ const shade = (fill) => ({ type: ShadingType.CLEAR, fill, color: 'auto' })
 function buildTable(block, ctx) {
   const { geo } = ctx
   const numCols = Math.max(1, block.numCols || block.colWidths?.length || 1)
-  const totalTw = tw(geo.contentW)
+  const rawW = Number.isFinite(block.tableWidth) && block.tableWidth >= 100
+    ? clamp(block.tableWidth, 100, geo.contentW)
+    : geo.contentW
+  const totalTw = tw(rawW)
   let colTw = U.percentToTwips(Array.from({ length: numCols }, (_, i) => block.colWidths?.[i]), totalTw)
   const vt = block.theme?.fromVector ? block.theme : null // never trust keyword-guessed themes
   const hdrBg = U.normHex(vt?.bg) || 'E7E9EE'
@@ -305,7 +337,12 @@ function buildTable(block, ctx) {
         })],
       })
     })
-    return new TableRow({ tableHeader: !!r.isHeader || (block.repeatHeader && ri === 0), cantSplit: true, children: cells })
+    return new TableRow({
+      tableHeader: !!r.isHeader || (block.repeatHeader && ri === 0),
+      cantSplit: true,
+      height: Number.isFinite(r.height) && r.height > 8 ? { value: tw(Math.max(8, r.height - 1)), rule: HeightRule.ATLEAST } : undefined,
+      children: cells,
+    })
   })
 
   return [

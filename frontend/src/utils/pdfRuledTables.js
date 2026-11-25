@@ -143,13 +143,16 @@ export function detectRuledTables(lines, vector) {
         });
         c = c2;
       }
-      rows.push({ isHeader: r === 0, cells });
+      rows.push({ isHeader: r === 0, height: Math.round((yTop - yBot) * 10) / 10, cells });
     }
     if (!indices.size) continue;
     const total = X[X.length - 1] - X[0];
     results.push({
       block: {
         type: 'table', numCols: nC, rows, ruled: true,
+        x0: Math.round(X[0] * 10) / 10,
+        x1: Math.round(X[X.length - 1] * 10) / 10,
+        tableWidth: Math.round(total * 10) / 10,
         colWidths: Array.from({ length: nC }, (_, i) => Math.max(3, Math.round(((X[i + 1] - X[i]) / total) * 100))),
         y: Y[0], yMin: Y[Y.length - 1], yMax: Y[0],
         theme: { fromVector: true, bg: rows[0]?.cells.find(c => c.fill)?.fill || 'E7E9EE', border: group[0]?.color || 'A6A6A6' },
