@@ -79,6 +79,24 @@ describe('Batch 4: Ruled tables & cross-page continuation', () => {
     expect(m[1].blocks.length).toBe(0)
   })
 
+  it('cross-page stitch keeps non-header continuation row 0 intact', () => {
+    const t = (yMin: number, yMax: number, rows: any[]) => ({
+      type: 'table',
+      numCols: 2,
+      colWidths: [50, 50],
+      yMin,
+      yMax,
+      rows,
+    })
+    const m = [
+      { h: 800, blocks: [t(40, 700, [{ isHeader: true, cells: [{ text: '1. Intro' }, { text: 'Page 1' }] }, { cells: [{ text: '18. Matrix' }, { text: 'Page 18' }] }])] },
+      { h: 800, blocks: [t(100, 780, [{ isHeader: true, cells: [{ text: '19. Timeline' }, { text: 'Page 19' }] }, { cells: [{ text: '20. Refs' }, { text: 'Page 20' }] }])] },
+    ] as any
+    expect(stitchCrossPageTables(m)).toBe(1)
+    expect(m[0].blocks[0].rows.length).toBe(4)
+    expect(m[0].blocks[0].rows[2].cells[0].text).toBe('19. Timeline')
+  })
+
   it('assigns line.items per cell without duplicating rows whose midpoint sits on border', () => {
     const v = mesh(
       [[54, 680, 740], [306, 680, 740], [558, 680, 740]],

@@ -1,4 +1,9 @@
 /** Stitch tables split across page breaks; mark the surviving header for repetition. */
+const rowKey = (r) =>
+  (r?.cells || [])
+    .map((c) => String(c.text || '').replace(/\s+/g, ' ').trim().toLowerCase())
+    .join('\t');
+
 export function stitchCrossPageTables(models, { widthTol = 3, bandRatio = 0.18 } = {}) {
   let merged = 0;
   for (let i = 0; i < models.length - 1; i++) {
@@ -15,10 +20,14 @@ export function stitchCrossPageTables(models, { widthTol = 3, bandRatio = 0.18 }
     const nearTop = (first.yMax ?? first.y ?? B.h) >= B.h * (1 - bandRatio);
     if (!nearBottom || !nearTop) continue;
     const rows = first.rows.slice();
-    if (rows[0]?.isHeader && last.rows.some(r => r.isHeader)) rows.shift();  // drop repeated header
+    const hdr = last.rows.find(r => r.isHeader) || last.rows[0];
+    const k0 = rowKey(rows[0]), kh = rowKey(hdr);
+    // Drop row 0 of the continuation ONLY if it actually duplicates the header (not new data rows!)
+    if (rows[0] && hdr && k0 === kh && (k0.replace(/\t/g, '').length > 0 || (rows[0].isHeader && hdr.isHeader))) {
+      rows.shift();
+    }
     last.rows.push(...rows);
-    last.repeatHeader = true;
-    if (last.rows[0]) last.rows[0].isHeader = true;
+    if (last.rows[0]?.isHeader) last.repeatHeader = true;
     B.blocks.splice(firstIdx, 1);
     merged++;
   }

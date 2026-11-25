@@ -104,13 +104,13 @@ export function detectRuledTables(lines, vector) {
             });
             if (matched.length) {
               indices.add(i);
-              cellLines.push({ y: l.y, size: l.size, items: matched });
+              cellLines.push({ y: l.y, size: l.size, isBold: l.isBold, items: matched });
             }
           } else {
             const cx = (l.x + (l.xEnd ?? l.x + (l.w || 0))) / 2;
             if (cx >= xLo && cx < xHi) {
               indices.add(i);
-              cellLines.push({ y: l.y, size: l.size, text: l.text });
+              cellLines.push({ y: l.y, size: l.size, isBold: l.isBold, text: l.text });
             }
           }
         });
@@ -130,22 +130,42 @@ export function detectRuledTables(lines, vector) {
           });
           return s.trim();
         }).filter(Boolean).join(' ').trim();
+        const cellBold = cellLines.some((cl) =>
+          cl.items ? cl.items.some((it) => it.isBold) : !!cl.isBold
+        );
         const fill = (vector?.rects || []).find(fr => fr.fill && fr.fill !== 'FFFFFF' &&
           fr.x <= box.x0 + 4 && fr.x + fr.w >= box.x1 - 4 &&
           fr.y <= box.yBot + 4 && fr.y + fr.h >= box.yTop - 4);
         cells.push({
           text, columnSpan: span,
           vMerge: r2 - r > 1 ? 'restart' : undefined,
-          isHeader: r === 0, bold: r === 0,
+          isHeader: false, bold: cellBold,
           align: /^[(+\-€$£¥]?[\d,.]+[)%]?$/.test(text) ? 'right' : 'left',
           fontSize: cellLines[0]?.size || 10,
           fill: fill?.fill || undefined,
         });
         c = c2;
       }
-      rows.push({ isHeader: r === 0, height: Math.round((yTop - yBot) * 10) / 10, cells });
+      rows.push({ isHeader: false, height: Math.round((yTop - yBot) * 10) / 10, cells });
     }
     if (!indices.size) continue;
+
+    // Detect whether row 0 is an actual header row (distinct fill or all-bold header row vs body)
+    let isRealHeader = false;
+    if (rows.length >= 2) {
+      const r0 = rows[0].cells.filter((c) => c.text || c.fill);
+      const r1 = rows[1].cells.filter((c) => c.text || c.fill);
+      const f0 = rows[0].cells.find((c) => c.fill && c.fill !== 'FFFFFF')?.fill || null;
+      const f1 = rows[1].cells.find((c) => c.fill && c.fill !== 'FFFFFF')?.fill || null;
+      const r0AllBold = r0.some((c) => c.text) && r0.filter((c) => c.text).every((c) => c.bold);
+      const r1AllBold = r1.some((c) => c.text) && r1.filter((c) => c.text).every((c) => c.bold);
+      if ((f0 && f0 !== f1) || (r0AllBold && !r1AllBold)) isRealHeader = true;
+    }
+    if (isRealHeader) {
+      rows[0].isHeader = true;
+      for (const c of rows[0].cells) { c.isHeader = true; c.bold = true; }
+    }
+
     const total = X[X.length - 1] - X[0];
     results.push({
       block: {
@@ -155,7 +175,11 @@ export function detectRuledTables(lines, vector) {
         tableWidth: Math.round(total * 10) / 10,
         colWidths: Array.from({ length: nC }, (_, i) => Math.max(3, Math.round(((X[i + 1] - X[i]) / total) * 100))),
         y: Y[0], yMin: Y[Y.length - 1], yMax: Y[0],
-        theme: { fromVector: true, bg: rows[0]?.cells.find(c => c.fill)?.fill || 'E7E9EE', border: group[0]?.color || 'A6A6A6' },
+        theme: {
+          fromVector: true,
+          bg: isRealHeader ? (rows[0]?.cells.find(c => c.fill)?.fill || 'E7E9EE') : undefined,
+          border: group[0]?.color || 'A6A6A6',
+        },
       },
       indices, firstIndex: Math.min(...indices),
     });
