@@ -110,7 +110,7 @@ export function detectRuledTables(lines, vector) {
             const cx = (l.x + (l.xEnd ?? l.x + (l.w || 0))) / 2;
             if (cx >= xLo && cx < xHi) {
               indices.add(i);
-              cellLines.push({ y: l.y, size: l.size, isBold: l.isBold, text: l.text });
+              cellLines.push({ y: l.y, size: l.size, isBold: l.isBold, x: l.x, xEnd: l.xEnd ?? l.x + (l.w || 0), text: l.text });
             }
           }
         });
@@ -133,6 +133,17 @@ export function detectRuledTables(lines, vector) {
         const cellBold = cellLines.some((cl) =>
           cl.items ? cl.items.some((it) => it.isBold) : !!cl.isBold
         );
+        let cellAlign = /^[(+\-€$£¥]?[\d,.]+[)%]?$/.test(text) ? 'right' : 'left';
+        if (cellAlign === 'left' && cellLines.length) {
+          const xs0 = cellLines.flatMap((cl) => cl.items ? cl.items.map((it) => it.x) : (Number.isFinite(cl.x) ? [cl.x] : []));
+          const xs1 = cellLines.flatMap((cl) => cl.items ? cl.items.map((it) => it.x + (it.w || 0)) : (Number.isFinite(cl.xEnd) ? [cl.xEnd] : []));
+          if (xs0.length && xs1.length) {
+            const leftGap = Math.min(...xs0) - box.x0;
+            const rightGap = box.x1 - Math.max(...xs1);
+            if (rightGap >= -2 && rightGap < 18 && leftGap > Math.max(20, rightGap * 2.2)) cellAlign = 'right';
+            else if (cellLines.length === 1 && leftGap > 16 && rightGap > 16 && Math.abs(leftGap - rightGap) <= 10) cellAlign = 'center';
+          }
+        }
         const fill = (vector?.rects || []).find(fr => fr.fill && fr.fill !== 'FFFFFF' &&
           fr.x <= box.x0 + 4 && fr.x + fr.w >= box.x1 - 4 &&
           fr.y <= box.yBot + 4 && fr.y + fr.h >= box.yTop - 4);
@@ -140,7 +151,7 @@ export function detectRuledTables(lines, vector) {
           text, columnSpan: span,
           vMerge: r2 - r > 1 ? 'restart' : undefined,
           isHeader: false, bold: cellBold,
-          align: /^[(+\-€$£¥]?[\d,.]+[)%]?$/.test(text) ? 'right' : 'left',
+          align: cellAlign,
           fontSize: cellLines[0]?.size || 10,
           fill: fill?.fill || undefined,
         });

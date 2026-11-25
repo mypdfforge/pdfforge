@@ -117,6 +117,7 @@ describe('Batch 4: Ruled tables & cross-page continuation', () => {
     expect(r.length).toBe(1)
     expect(r[0].block.rows[0].cells[0].text).toBe('19. Incident Timeline')
     expect(r[0].block.rows[0].cells[1].text).toBe('Page 19')
+    expect(r[0].block.rows[0].cells[1].align).toBe('right')
     expect(r[0].block.rows[1].cells[0].text).toBe('20. Cross-Reference')
     expect(r[0].block.rows[1].cells[1].text).toBe('Page 20')
     expect(r[0].block.tableWidth).toBe(504)

@@ -715,6 +715,9 @@ export function shouldMergeLines(cur, next) {
   const nextText = next.text.trim();
 
   if (curText.endsWith(':')) return false;
+  if (/^[_─━\-]{5,}$/.test(curText) || /^[_─━\-]{5,}$/.test(nextText)) return false;
+  if (/\(\s*[xX]?\s*\)|\[\s*[xX]?\s*\]/.test(curText) && !/\(\s*[xX]?\s*\)|\[\s*[xX]?\s*\]/.test(nextText)) return false;
+  if (nextText.endsWith(':') && nextText.length < 60 && !/[.;!?]/.test(nextText.slice(0, -1))) return false;
 
   if (/^Section\s+\d+/i.test(nextText)) return false;
   if (/^(Q\d+:|A:)/.test(nextText)) return false;
