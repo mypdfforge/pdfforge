@@ -174,7 +174,7 @@ function buildRichChildren(m, g, geo, warn) {
 function blockTop(block, m) {
   if (Number.isFinite(block.yMax)) return m.topDown ? block.yMax : m.h - block.yMax
   const l = block.line ?? block.lines?.[0] ?? block.col1Lines?.[0]
-  const raw = block.y ?? l?.y
+  const raw = block.y ?? l?.yTop ?? l?.y
   if (!Number.isFinite(raw)) return null
   const sz = l?.size || 10
   return (m.topDown ? raw : m.h - raw) - sz * 0.85
@@ -183,7 +183,7 @@ function blockTop(block, m) {
 function blockBottom(block, m) {
   if (Number.isFinite(block.yMin)) return m.topDown ? block.yMin : m.h - block.yMin
   const l = block.line ?? block.lines?.[block.lines?.length - 1] ?? block.col1Lines?.[block.col1Lines?.length - 1]
-  const raw = block.y ?? l?.y
+  const raw = block.y ?? l?.yBot ?? l?.y
   if (!Number.isFinite(raw)) return null
   const sz = l?.size || 10
   return (m.topDown ? raw : m.h - raw) + sz * 0.25

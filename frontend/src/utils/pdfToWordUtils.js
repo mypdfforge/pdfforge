@@ -250,8 +250,9 @@ export function mergePlainLines(lines) {
       prev.text += sep + l.text
       prev.spans = [...(prev.spans || []), { text: sep, size: prev.size }, ...(l.spans || [{ text: l.text, size: l.size, bold: l.isBold, italic: l.isItalic }])]
       prev.y = l.y
+      prev.yBot = l.yBot ?? l.y
       prev.xEnd = Math.max(prev.xEnd ?? 0, l.xEnd ?? 0)
-    } else out.push({ ...l, spans: l.spans ? [...l.spans] : [{ text: l.text, size: l.size, bold: l.isBold, italic: l.isItalic }] })
+    } else out.push({ ...l, yTop: l.yTop ?? l.y, yBot: l.yBot ?? l.y, spans: l.spans ? [...l.spans] : [{ text: l.text, size: l.size, bold: l.isBold, italic: l.isItalic }] })
   }
   return out
 }
@@ -285,8 +286,10 @@ export function makeAlignmentDetector(lines, bodySize) {
   const body = usable.filter((l) => Math.abs((l.size || bodySize) - bodySize) < 1 && xe(l) - l.x > 0.5 * tw)
   const flush = body.filter((l) => maxX - xe(l) < 0.012 * tw).length
   const justified = body.length >= 4 && flush / body.length >= 0.6
+  const LIST_MARKER_RE = /^(?:[\u2022\u2023\u25E6\u2043\u2219\u25AA\u25CF•●○◦▪■□–—·*‣⁃\-]\s+|(?:\d+(?:\.\d+)*[.)]|[a-z][.)]|[ivx]+[.)])\s+)/i
   return (l) => {
     if (l.align === 'center' || l.align === 'right' || l.align === 'justify') return l.align
+    if (LIST_MARKER_RE.test(String(l.text || '').trimStart())) return 'left'
     const w = xe(l) - l.x
     const center = (l.x + xe(l)) / 2
     if (w < 0.8 * tw && Math.abs(center - (minX + maxX) / 2) < 0.03 * tw && l.x - minX > 0.05 * tw) return 'center'

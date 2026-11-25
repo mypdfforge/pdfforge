@@ -39,8 +39,14 @@ export function buildDocumentNumbering(models, { levelPt = 18 } = {}) {
   let cur = null, lastVal = new Map();
   const breakRun = () => { cur = null; lastVal = new Map(); };
   for (const m of models || []) {
-    for (const l of m.lines || []) {
-      const info = parseListMarker(l.text, Math.max(0, (l.x ?? 0) - (m.minX ?? 0)), levelPt);
+    const xs = (m.lines || []).filter(l => Number.isFinite(l.x)).map(l => l.x);
+    const pageMinX = Number.isFinite(m.minX) ? m.minX : (xs.length ? Math.min(...xs) : 0);
+    const iter = Array.isArray(m.blocks) && m.blocks.length
+      ? m.blocks.map(b => (b.type === 'paragraph' ? b.line : null))
+      : (m.lines || []);
+    for (const l of iter) {
+      if (!l) { breakRun(); continue; }
+      const info = parseListMarker(l.text, Math.max(0, (l.x ?? 0) - pageMinX), levelPt);
       if (!info) { breakRun(); continue; }
       const v = info.parts && /^\d+$/.test(info.parts[info.level]) ? parseInt(info.parts[info.level], 10) : null;
       const restart = cur && (info.kind !== cur.kind ||

@@ -761,7 +761,7 @@ export function mergeParagraphBlocks(blocks) {
       continue;
     }
 
-    let curLine = { ...b.line, spans: [...(b.line.spans || []).map((s) => ({ ...s }))], items: [...b.line.items] };
+    let curLine = { ...b.line, yTop: b.line.yTop ?? b.line.y, yBot: b.line.yBot ?? b.line.y, spans: [...(b.line.spans || []).map((s) => ({ ...s }))], items: [...b.line.items] };
     while (i + 1 < blocks.length && blocks[i + 1].type === 'paragraph' && shouldMergeLines(curLine, blocks[i + 1].line)) {
       const nextLine = blocks[i + 1].line;
       curLine.text = curLine.text.trim() + ' ' + nextLine.text.trim();
@@ -784,6 +784,7 @@ export function mergeParagraphBlocks(blocks) {
       curLine.width = curLine.xEnd - Math.min(curLine.x, nextLine.x);
       curLine.x = Math.min(curLine.x, nextLine.x);
       curLine.y = nextLine.y;
+      curLine.yBot = nextLine.yBot ?? nextLine.y;
       i++;
     }
     merged.push({ type: 'paragraph', line: curLine });
