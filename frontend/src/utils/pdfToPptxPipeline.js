@@ -1,7 +1,8 @@
 /**
  * pdfToPptxPipeline.js — hardened, per-page-isolated PDF → .pptx converter.
  * 100% client-side. Reuses the PDF-to-Word analysis layer (analyzePage, table stitching,
- * vector extraction, image extraction, abortable/timeout watchdogs, and memory budgets).
+ * vector extraction, image extraction, abortable/timeout watchdogs, and memory budgets)
+ * plus PPTX-specific normalization for code blocks, deep lists, and visual-order RTL.
  */
 import { stitchCrossPageTables } from './pdfTableMerge.js'
 import {
@@ -17,6 +18,178 @@ import * as U from './pdfToWordUtils.js'
 export { ConversionError } from './pdfToWordUtils.js'
 
 const MIME_PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+
+const VISUAL_RTL_CLUE_RE = /(?:^|[\s,(])[ךםןףץ][\u0590-\u05FF]|(?:^|[\s,(])[ًٌٍةى][\u0600-\u06FF]/
+
+/**
+ * Restores pre-reversed visual-order RTL strings (e.g. from PDF generators that emit
+ * Arabic/Hebrew glyphs left-to-right) back into logical reading order.
+ */
+export function restoreVisualRtlText(text, pageLines = null) {
+  if (!text || !U.isMostlyRtl(text) || !VISUAL_RTL_CLUE_RE.test(text)) return text
+
+  const reverseLine = (s) => {
+    // Reverse character order across RTL segments while keeping embedded ASCII numbers/words intact
+    const chars = [...s.trim()].reverse()
+    let out = chars.join('')
+    // Un-reverse embedded LTR/digit runs that were flipped by full-string reversal
+    out = out.replace(/[A-Za-z0-9][A-Za-z0-9.,:/_-]*[A-Za-z0-9]|[A-Za-z0-9]/g, (m) =>
+      m.length > 1 ? [...m].reverse().join('') : m
+    )
+    // Fix mirrored parentheses after reversal
+    out = out.replace(/[()]/g, (ch) => (ch === '(' ? ')' : '('))
+    return out
+  }
+
+  // If the cell text spans multiple original PDF lines, extract RTL runs per PDF line in top-to-bottom order
+  if (Array.isArray(pageLines) && pageLines.length > 0) {
+    const rtlRuns = []
+    const orderedLines = [...pageLines].sort((a, b) => (b.y ?? 0) - (a.y ?? 0))
+    for (const l of orderedLines) {
+      if (!l.text) continue
+      // Extract RTL-dominant spans/chunks from lines that may also contain other columns
+      const matches = l.text.match(/[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF][^\nA-Za-z]{2,}/g) || []
+      for (const m of matches) {
+        const seg = m.trim()
+        if (seg.length >= 3 && text.includes(seg) && !rtlRuns.includes(seg)) {
+          rtlRuns.push(seg)
+        }
+      }
+    }
+    if (rtlRuns.length > 1) {
+      const joined = rtlRuns.map((seg) => reverseLine(seg)).join(' ')
+      if (joined.length >= text.length * 0.7) return joined
+    }
+  }
+
+  return reverseLine(text)
+}
+
+/**
+ * Coalesces shattered code blocks and splits accidentally merged list-item paragraphs
+ * without altering the shared PDF-to-Word segmentation modules.
+ */
+export function normalizeModelForPptx(m) {
+  if (!m || m.mode === 'failed' || m.pageImage || !Array.isArray(m.blocks)) return m
+
+  // 1. Restore visual-order RTL inside table cells first (using unmutated m.lines for line boundaries)
+  for (const b of m.blocks) {
+    if (b.type === 'table' && Array.isArray(b.rows)) {
+      for (const r of b.rows) {
+        for (const c of r.cells || []) {
+          if (c.text && VISUAL_RTL_CLUE_RE.test(c.text)) {
+            c.text = restoreVisualRtlText(c.text, m.lines)
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Restore visual-order RTL in lines
+  for (const l of m.lines || []) {
+    if (l.text && VISUAL_RTL_CLUE_RE.test(l.text)) {
+      l.text = restoreVisualRtlText(l.text)
+      if (Array.isArray(l.spans) && l.spans.length === 1) l.spans[0].text = l.text
+    }
+  }
+
+  // 3. Coalesce fragmented code blocks (when wrapped/commented lines lost isCode)
+  const blocks = []
+  const rawBlocks = m.blocks
+  let i = 0
+  while (i < rawBlocks.length) {
+    const b = rawBlocks[i]
+    if (b.type === 'code') {
+      // Find the furthest code block connected via small-font non-section/non-checkbox lines
+      let endIdx = i
+      for (let j = i + 1; j < rawBlocks.length; j++) {
+        const nb = rawBlocks[j]
+        if (nb.type === 'code') { endIdx = j; continue }
+        if (nb.type === 'paragraph' && nb.line) {
+          const t = (nb.line.text || '').trim()
+          const sz = nb.line.size || 10
+          if (sz <= 10.5 && !/^Section\s+\d+/i.test(t) && !nb.line.checkbox && !nb.line.admonition) {
+            continue
+          }
+        }
+        break
+      }
+
+      if (endIdx > i) {
+        const codeLines = []
+        for (let k = i; k <= endIdx; k++) {
+          const kb = rawBlocks[k]
+          if (kb.type === 'code') codeLines.push(...(kb.lines || []))
+          else if (kb.type === 'paragraph' && kb.line) codeLines.push(kb.line)
+        }
+        // Re-join sub-lines that share the same PDF y coordinate (split by column detector)
+        const byY = []
+        const sorted = [...codeLines].sort((a, b) => (b.y ?? 0) - (a.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
+        for (const cl of sorted) {
+          const last = byY[byY.length - 1]
+          if (last && Math.abs((last.y ?? 0) - (cl.y ?? 0)) <= 2.5) {
+            last.parts.push(cl)
+          } else {
+            byY.push({ y: cl.y, parts: [cl] })
+          }
+        }
+        const rebuiltLines = byY.map((row) => {
+          row.parts.sort((a, b) => (a.x ?? 0) - (b.x ?? 0))
+          const first = row.parts[0]
+          let text = ''
+          let prevEnd = first.x ?? 0
+          for (let pi = 0; pi < row.parts.length; pi++) {
+            const part = row.parts[pi]
+            if (pi > 0) {
+              const gap = Math.max(1, Math.round(((part.x ?? prevEnd) - prevEnd) / 4.8))
+              text += ' '.repeat(Math.min(gap, 16))
+            }
+            text += (part.text || '').trim()
+            prevEnd = part.xEnd ?? ((part.x ?? 0) + (part.text?.length || 0) * 5)
+          }
+          return { ...first, text, isCode: true }
+        })
+        blocks.push({ type: 'code', lines: rebuiltLines })
+        i = endIdx + 1
+        continue
+      }
+    }
+
+    // 3. Split merged multi-item list paragraphs (e.g., 7-level bullet hierarchy with wide vertical gaps)
+    if (b.type === 'paragraph' && b.line && Array.isArray(b.line.spans) && b.line.spans.length >= 4) {
+      const yTop = b.line.yTop ?? b.line.y
+      const yBot = b.line.yBot ?? b.line.y
+      const lo = Math.min(yTop, yBot) - 2
+      const hi = Math.max(yTop, yBot) + 2
+      const matching = (m.lines || [])
+        .filter((l) => Number.isFinite(l.y) && l.y >= lo && l.y <= hi && (l.text || '').trim())
+        .sort((a, b2) => b2.y - a.y)
+      if (matching.length >= 4) {
+        const gaps = []
+        for (let gi = 1; gi < matching.length; gi++) {
+          gaps.push(Math.abs(matching[gi - 1].y - matching[gi].y))
+        }
+        const minGap = Math.min(...gaps)
+        const sz = b.line.size || 10
+        const hasPeriodEndings = matching.filter((l) => /\.\s*$/.test(l.text.trim())).length
+        // Wide vertical line gap (>= 1.85x font size) + unpunctuated items indicates list items, not wrapped prose
+        if (minGap >= sz * 1.85 && hasPeriodEndings <= Math.floor(matching.length * 0.25)) {
+          for (const ml of matching) {
+            blocks.push({ type: 'paragraph', line: { ...ml, isListLike: true } })
+          }
+          i++
+          continue
+        }
+      }
+    }
+
+    blocks.push(b)
+    i++
+  }
+
+  m.blocks = blocks
+  return m
+}
 
 /**
  * @param {File|Blob} file
@@ -93,7 +266,7 @@ export async function convertPdfToPptx(file, opts = {}) {
             U.withTimeout(analyzePage(pdf, p, { pdfjs, hist, mem, warn, cfg }), cfg.pageTimeoutMs, `Page ${p}`),
             signal
           )
-          // If page has neither text blocks nor embedded images (e.g., pure vector illustration), render as slide image
+          normalizeModelForPptx(m)
           const hasAnyContent = (m.blocks && m.blocks.length > 0) || (m.images && m.images.length > 0) || m.pageImage
           if (!hasAnyContent && typeof document !== 'undefined' && !mem.skipImages) {
             try {

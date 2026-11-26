@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
 import { buildPptxBlob } from '../../src/utils/pdfToPptxBuild.js'
+import { normalizeModelForPptx, restoreVisualRtlText } from '../../src/utils/pdfToPptxPipeline.js'
 import { convertPdfToPptx } from '../../src/features/pdf-to-pptx/engine/engineHost.js'
 
 // 1x1 transparent PNG bytes
@@ -23,6 +24,7 @@ function makeRichModel(pageNum = 1) {
     lines: [
       { text: 'Executive Overview', x: 48, y: 360, xEnd: 320, size: 22, isBold: true },
       { text: '• First bullet point', x: 48, y: 320, xEnd: 240, size: 11 },
+      { text: '• Nested child bullet', x: 72, y: 300, xEnd: 260, size: 11 },
     ],
     blocks: [
       {
@@ -40,6 +42,24 @@ function makeRichModel(pageNum = 1) {
       {
         type: 'paragraph',
         line: {
+          text: 'H2SO4 and E = mc2',
+          x: 48,
+          y: 340,
+          xEnd: 260,
+          size: 11,
+          spans: [
+            { text: 'H', size: 11 },
+            { text: '2', size: 8, subScript: true },
+            { text: 'SO', size: 11 },
+            { text: '4', size: 8, subScript: true },
+            { text: ' and E = mc', size: 11 },
+            { text: '2', size: 8, superScript: true },
+          ],
+        },
+      },
+      {
+        type: 'paragraph',
+        line: {
           text: '• First bullet point',
           x: 48,
           y: 320,
@@ -49,12 +69,23 @@ function makeRichModel(pageNum = 1) {
         },
       },
       {
+        type: 'paragraph',
+        line: {
+          text: '• Nested child bullet',
+          x: 72,
+          y: 300,
+          xEnd: 260,
+          size: 11,
+          spans: [{ text: '• Nested child bullet', size: 11 }],
+        },
+      },
+      {
         type: 'table',
         numCols: 2,
         colWidths: [50, 50],
         tableWidth: 500,
         x0: 48,
-        yMax: 280,
+        yMax: 270,
         theme: { fromVector: true, bg: '1E293B', text: 'FFFFFF', border: 'CBD5E1' },
         rows: [
           {
@@ -64,13 +95,13 @@ function makeRichModel(pageNum = 1) {
           {
             cells: [
               { text: 'Throughput', vMerge: 'restart' },
-              { text: '99.9%' },
+              { text: '($1,200.00)' },
             ],
           },
           {
             cells: [
               { text: '', vMerge: 'continue' },
-              { text: '100% SLA' },
+              { text: 'مرحباً بكم' },
             ],
           },
         ],
@@ -78,11 +109,14 @@ function makeRichModel(pageNum = 1) {
       {
         type: 'callout',
         admonition: { type: 'tip', color: '10B981', bg: 'ECFDF5' },
-        lines: [{ text: 'All checks passed cleanly.', x: 48, y: 120, size: 10 }],
+        lines: [{ text: '[SUCCESS] All checks passed cleanly.', x: 48, y: 120, size: 10 }],
       },
       {
         type: 'code',
-        lines: [{ text: 'const ok = true;', x: 48, y: 80, size: 9 }],
+        lines: [
+          { text: 'def run():', x: 48, y: 90, size: 9 },
+          { text: 'return True', x: 64, y: 78, size: 9 },
+        ],
       },
     ],
     images: [{ data: TINY_PNG, type: 'png', pxW: 1, pxH: 1, x: 520, y: 40, w: 120, h: 80 }],
@@ -93,7 +127,7 @@ function makeRichModel(pageNum = 1) {
 }
 
 describe('PDF to PowerPoint hardened builder & engineHost', () => {
-  it('builds a valid editable .pptx ZIP with text, merged tables, callouts, code, and images', async () => {
+  it('builds valid OOXML with single <a:pPr>, sub/superscripts, RTL cells, financial styling, code & images', async () => {
     const warnings = []
     const res = await buildPptxBlob([makeRichModel(1)], {
       title: 'Quarterly Deck',
@@ -108,13 +142,87 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
     const slide1Xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
     expect(slide1Xml).toBeDefined()
+
+    // Ensure no <a:p> has duplicate <a:pPr> tags
+    for (const p of slide1Xml.match(/<a:p>[\s\S]*?<\/a:p>/g) || []) {
+      expect((p.match(/<a:pPr\b/g) || []).length).toBeLessThanOrEqual(1)
+    }
+
     expect(slide1Xml).toContain('Executive Overview')
-    expect(slide1Xml).toContain('First bullet point')
-    expect(slide1Xml).toContain('Metric')
-    expect(slide1Xml).toContain('Throughput')
-    expect(slide1Xml).toContain('All checks passed cleanly.')
-    expect(slide1Xml).toContain('const ok = true;')
+    expect(slide1Xml).toContain('baseline="-40000"')
+    expect(slide1Xml).toContain('baseline="30000"')
+    expect(slide1Xml).toContain('B91C1C') // negative currency styling
+    expect(slide1Xml).toContain('rtl="1"') // RTL cell support
+    expect(slide1Xml).toContain('Consolas')
+    expect(slide1Xml).toContain('0F172A') // dark code container
+    expect(slide1Xml).toContain('lvl="1"') // nested bullet level
     expect(zip.file(/^ppt\/media\//).length).toBeGreaterThan(0)
+  })
+
+  it('converts form controls, hierarchical outlines, workflows, and timelines into native shapes', async () => {
+    const model = {
+      pageNum: 1,
+      mode: 'rich',
+      w: 595.28,
+      h: 841.89,
+      topDown: false,
+      lines: [
+        { text: '1.1.1 Edge Routing', x: 54, y: 740, size: 10 },
+        { text: '[X] Verified RTL', x: 54, y: 700, size: 10 },
+        { text: '( ) Low (X) High', x: 54, y: 660, size: 10 },
+        { text: 'Signature: ________ Date: 2026-11-26', x: 54, y: 620, size: 10 },
+      ],
+      blocks: [
+        { type: 'paragraph', line: { text: '1.1.1 Edge Routing', x: 54, y: 740, size: 10 } },
+        { type: 'paragraph', line: { text: '[X] Verified RTL', x: 54, y: 700, size: 10 } },
+        { type: 'paragraph', line: { text: '( ) Low (X) High', x: 54, y: 660, size: 10 } },
+        { type: 'paragraph', line: { text: 'Signature: ________ Date: 2026-11-26', x: 54, y: 620, size: 10 } },
+        {
+          type: 'table',
+          numCols: 3,
+          rows: [
+            { cells: [{ text: 'Phase 01: Ingest' }, { text: 'Validate payload' }, { text: 'COMPLETED' }] },
+            { cells: [{ text: 'Phase 02: Parse' }, { text: 'Build AST' }, { text: 'IN_PROGRESS' }] },
+          ],
+        },
+      ],
+      images: [],
+      vector: { rects: [] },
+    }
+
+    const res = await buildPptxBlob([model], { slideLayout: 'auto' })
+    const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
+    const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
+    expect(xml).toContain('1.1.1 ')
+    expect(xml).toContain('✓')
+    expect(xml).toContain('prst="ellipse"')
+    expect(xml).toContain('prst="line"')
+    expect(xml).toContain('prst="downArrow"')
+  })
+
+  it('restores pre-reversed visual-order RTL and coalesces fragmented code blocks', () => {
+    const fixedAr = restoreVisualRtlText(
+      'ليوحت رابتخا يف مكب ًابحرم ةقدلا يلاع ةدقعملا تادنتسملا',
+      [
+        { y: 654, text: 'Arabic (RTL) ليوحت رابتخا يف مكب ًابحرم Bi-directional' },
+        { y: 642, text: 'ةقدلا يلاع ةدقعملا تادنتسملا' },
+      ]
+    )
+    expect(fixedAr.startsWith('مرحباً بكم في اختبار تحويل')).toBe(true)
+
+    const m = normalizeModelForPptx({
+      pageNum: 1,
+      mode: 'rich',
+      lines: [],
+      blocks: [
+        { type: 'code', lines: [{ y: 683, x: 59, text: 'def f():', isCode: true }] },
+        { type: 'paragraph', line: { y: 670, x: 75, size: 8.5, text: 'x = 1' } },
+        { type: 'code', lines: [{ y: 658, x: 75, text: 'return x', isCode: true }] },
+      ],
+    })
+    expect(m.blocks).toHaveLength(1)
+    expect(m.blocks[0].type).toBe('code')
+    expect(m.blocks[0].lines).toHaveLength(3)
   })
 
   it('respects 16:9 and 4:3 slideLayout dimensions and degrades gracefully on scanned/failed pages', async () => {
