@@ -480,12 +480,7 @@ export async function pdfToExcelAst(file, onProgress, options = {}) {
 }
 
 export async function pdfToExcel(file, onProgress, options = {}) {
-  try {
-    return await pdfToExcelAst(file, onProgress, options)
-  } catch (err) {
-    console.warn('[pdfToExcel] AST emitter fallback to legacy solver:', err)
-    return await legacyPdfToExcel(file, onProgress, options)
-  }
+  return await legacyPdfToExcel(file, onProgress, options)
 }
 
 export { legacyPdfToExcel, setPdfjs }
