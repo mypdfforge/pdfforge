@@ -9,6 +9,7 @@ import { extractPageLayout } from './pdfLayoutSegmenter.js'
 import { extractVectorGeometry } from './pdfVectorExtractor.js'
 import { buildDocumentAst } from './documentLayoutAnalysis.js'
 import { exportAstToPptx } from './pptxEmitter.js'
+import { convertPdfToPptxV2 } from './pptx/v2Pipeline.js'
 import {
   renderPageCanvas,
   canvasToImage,
@@ -42,6 +43,14 @@ function uint8ToDataUri(bytes, type = 'jpeg') {
  * @returns {Promise<{blob:Blob, warnings:object[], stats:object}>}
  */
 export async function convertPdfToPptx(file, opts = {}) {
+  const engineParam =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('engine')
+      : null
+  const useV1 = opts.engine === 'v1' || engineParam === 'v1'
+  if (!useV1 && opts.mode !== 'images') {
+    return convertPdfToPptxV2(file, opts)
+  }
   const cfg = { ...ANALYZE_DEFAULTS, mode: 'editable', slideLayout: 'auto', ...opts }
   const { signal, onProgress } = cfg
   const warnings = []
