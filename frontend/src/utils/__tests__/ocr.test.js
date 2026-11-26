@@ -2,12 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   toScript, detectScript, fixFieldConfusables, normalizePunctuation, similarity,
   isFragmentOverlap, repairDescenderSplits, shouldJoinWithoutSpace, repairProtectedToken, dedupeLines,
-  repairCodeSyntax, validateJwtToken,
+  repairCodeSyntax, validateJwtToken, decodeWithCtcMultiChar, normalizePuaSymbols,
 } from '../ocrPostProcess.js'
 import {
   reconstructPageLayout, detectFormFields, validateCodeBrackets, reconcileDocumentHeadersFooters,
 } from '../ocrLayoutAnalysis.js'
 import { buildPageResult, evaluateQualityGates, auditPageCoverage, buildOcrDocxBlob, segmentTextByFont } from '../paddleOcr.js'
+import { verifyDocxBlob } from '../docxVerify.js'
 import { isNativeGood } from '../nativeText.js'
 
 // line helper: text, x, y(top), width, height, source, mean
@@ -306,5 +307,39 @@ describe('TASK #1-#5 Code syntax, JWT validation, per-run emoji font, detached b
     ]
     const r = reconstructPageLayout(ls, W, H)
     expect(r.tables[0].markdown).toContain('| A0 | 10.1 ± 0.2 |')
+  })
+
+  it('/goal validates PUA symbols, XNO->✗ No, angle brackets <>, CTC multiChar JWT beam, & OpenXML DOCX', async () => {
+    expect(normalizePuaSymbols('\uF0FC Included \uF0FB No \uF0FE Yes \uF0A3 Box')).toBe('✓ Included ✗ No ☑ Yes ☐ Box')
+    expect(fixFieldConfusables('XNO √ Included √ Digitally Signed')).toBe('✗ No ✓ Included ✓ Digitally Signed')
+
+    expect(validateCodeBrackets('def f(x: List<str>) -> bool:\n    return len(x) < 10').balanced).toBe(true)
+    expect(validateCodeBrackets('def f(x: List<str):').balanced).toBe(false)
+
+    // Simulate a JWT where "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" has an ambiguous 'I' vs 'l' inside "cCI6"
+    const jwtStr = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0In0.sig'
+    const ambIdx = jwtStr.indexOf('cCI6') + 2
+    const charMatrix = Array.from(jwtStr).map((ch, idx) =>
+      idx === ambIdx
+        ? [{ t: 'l', mean: 0.55 }, { t: 'I', mean: 0.45 }]
+        : [{ t: ch, mean: 0.99 }]
+    )
+    const decoded = decodeWithCtcMultiChar(charMatrix, 'jwt')
+    expect(decoded).toBe(jwtStr)
+    expect(validateJwtToken(decoded).valid).toBe(true)
+
+    const p = buildPageResult({
+      ocrLines: [
+        L('Section 01: Multi-Level & Symbols 🚀 ✓', 50, 110, 300),
+        L('• Item one', 50, 150, 120),
+        L('• Sub item', 80, 170, 120),
+        L('1. Legal outline', 50, 200, 140),
+        L('1.1 Sub clause', 70, 220, 140),
+      ],
+      width: W, height: H, pageNumber: 1,
+    })
+    const blob = await buildOcrDocxBlob([p], 'goal-verify')
+    const gate = await verifyDocxBlob(blob)
+    expect(gate.ok).toBe(true)
   })
 })

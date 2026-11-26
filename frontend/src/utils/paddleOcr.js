@@ -12,7 +12,7 @@
 import { reconstructPageLayout, enrichLineGeometry } from './ocrLayoutAnalysis.js'
 import {
   routeRegions, dedupeLines, lineWords, isRtlText, detectScript, overlap,
-  isFragmentOverlap, similarity, classifyTokenType, validateJwtToken,
+  isFragmentOverlap, similarity, classifyTokenType, validateJwtToken, decodeWithCtcMultiChar,
 } from './ocrPostProcess.js'
 
 /* ───────────── ONNX runtime from CDN (keeps Cloudflare asset < 25 MiB) ───────────── */
@@ -136,11 +136,68 @@ export async function ocrRawLines(engine, imageData) {
 }
 
 /**
+ * TASK #5: Scans canvas grayscale pixels immediately to the left of body lines to recover tiny
+ * hanging bullet dots ("•") missed by det.onnx (e.g., Page 16 7-level bullet hierarchy).
+ */
+export function recoverMissingBullets(canvas, lines) {
+  if (!canvas || !lines?.length) return
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return
+  const ys = lines.map(l => (l.box?.[3]?.[1] ?? 0) - (l.box?.[0]?.[1] ?? 0)).filter(h => h > 4)
+  const medH = ys.length ? ys.sort((a, b) => a - b)[Math.floor(ys.length / 2)] : 16
+  const markerRe = /^(?:[•◦▪▫●○■□·‣⁃*\-–—]|\(?\d{1,3}(?:\.\d+)*[.)]?|\(?[a-z][.)])/i
+
+  // Only probe lines aligned like a list block or indented relative to nearby headings
+  for (const l of lines) {
+    if (!l.text || markerRe.test(l.text.trim()) || !l.box?.length) continue
+    const x0 = Math.floor(Math.min(...l.box.map(p => p[0])))
+    const y0 = Math.floor(Math.min(...l.box.map(p => p[1])))
+    const y1 = Math.ceil(Math.max(...l.box.map(p => p[1])))
+    const h = y1 - y0
+    if (h < 6 || h > medH * 1.6 || x0 < medH * 0.8) continue
+
+    const scanW = Math.min(x0, Math.round(h * 1.9))
+    const scanX = Math.max(0, x0 - scanW)
+    const scanY = Math.max(0, Math.floor(y0 + h * 0.15))
+    const scanH = Math.max(4, Math.min(canvas.height - scanY, Math.ceil(h * 0.7)))
+    if (scanW < 6 || scanH < 4) continue
+
+    const img = ctx.getImageData(scanX, scanY, scanW, scanH).data
+    let minInkX = scanW, maxInkX = -1, minInkY = scanH, maxInkY = -1, darkCount = 0
+    for (let py = 0; py < scanH; py++) {
+      for (let px = 0; px < scanW - 2; px++) {
+        const idx = (py * scanW + px) * 4
+        const lum = 0.299 * img[idx] + 0.587 * img[idx + 1] + 0.114 * img[idx + 2]
+        if (lum < 150) {
+          darkCount++
+          if (px < minInkX) minInkX = px
+          if (px > maxInkX) maxInkX = px
+          if (py < minInkY) minInkY = py
+          if (py > maxInkY) maxInkY = py
+        }
+      }
+    }
+    const bw = maxInkX - minInkX + 1
+    const bh = maxInkY - minInkY + 1
+    // Bullet dot signature: compact dark dot (2..12px square-ish) separated from text by whitespace gap
+    if (darkCount >= 4 && bw >= 2 && bw <= h * 0.65 && bh >= 2 && bh <= h * 0.65 && (scanW - maxInkX) >= 3) {
+      const bulletX = scanX + minInkX
+      l.text = '• ' + l.text.trimStart()
+      l.box = [[bulletX, y0], [Math.max(...l.box.map(p => p[0])), y0], [Math.max(...l.box.map(p => p[0])), y1], [bulletX, y1]]
+      l.bulletRecovered = true
+    }
+  }
+}
+
+/**
  * TASK #1 & #2 & DEFECT 06:
  * Recovers weak lines (< threshold), ALL protected unbroken tokens (jwt/url/base64/hash/uuid),
- * and code lines with unbalanced delimiters using high-res (3x for critical tokens, 2x otherwise) crop re-OCR.
+ * and code lines with unbalanced delimiters using high-res (3x) crop re-OCR + character-level
+ * CTC multiChar beam decoding (`engine.recRaw`).
  */
 export async function recoverLowConfidence(engine, canvas, lines, { threshold = 0.85, max = 50 } = {}) {
+  recoverMissingBullets(canvas, lines)
+
   const candidates = lines.filter(l => {
     const tType = classifyTokenType(l.text)
     const isProtected = tType === 'jwt' || tType === 'url' || tType === 'base64' || tType === 'hash' || tType === 'uuid'
@@ -152,7 +209,7 @@ export async function recoverLowConfidence(engine, canvas, lines, { threshold = 
 
   for (const l of candidates) {
     const tType = classifyTokenType(l.text)
-    const isCritical = tType === 'jwt' || tType === 'url' || tType === 'base64' || tType === 'hash' || tType === 'code'
+    const isCritical = tType === 'jwt' || tType === 'url' || tType === 'base64' || tType === 'hash' || tType === 'uuid' || tType === 'code'
     const scale = isCritical ? 3 : 2
     const xs = l.box.map(p => p[0])
     const ys = l.box.map(p => p[1])
@@ -169,9 +226,24 @@ export async function recoverLowConfidence(engine, canvas, lines, { threshold = 
     ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(canvas, x, y, w, h, 0, 0, c.width, c.height)
     try {
-      const r = await ocrRawLines(engine, ctx.getImageData(0, 0, c.width, c.height))
-      const text = r.map(t => t.text).join(isCritical ? '' : ' ').trim()
-      const mean = r.length ? r.reduce((s, t) => s + (t.mean ?? 0), 0) / r.length : 0
+      const cropImg = ctx.getImageData(0, 0, c.width, c.height)
+      let text = ''
+      let mean = 0
+      if (isCritical && typeof engine.det === 'function' && typeof engine.recRaw === 'function') {
+        const detBoxes = await engine.det(cropImg)
+        if (detBoxes?.length) {
+          const rawRes = await engine.recRaw(detBoxes, { topK: 4, threshold: 0.03 })
+          const decodedParts = rawRes.map(item => decodeWithCtcMultiChar(item.text, tType)).filter(Boolean)
+          text = decodedParts.join(tType === 'code' ? ' ' : '').trim()
+          const flatChars = rawRes.flatMap(item => item.text || [])
+          mean = flatChars.length ? flatChars.reduce((s, ch) => s + (ch?.[0]?.mean ?? 0), 0) / flatChars.length : 0
+        }
+      }
+      if (!text) {
+        const r = await ocrRawLines(engine, cropImg)
+        text = r.map(t => t.text).join(isCritical && tType !== 'code' ? '' : ' ').trim()
+        mean = r.length ? r.reduce((s, t) => s + (t.mean ?? 0), 0) / r.length : 0
+      }
       const newJwtValid = tType === 'jwt' && validateJwtToken(text).valid
       const oldJwtValid = tType === 'jwt' && validateJwtToken(l.text).valid
       if (text && ((newJwtValid && !oldJwtValid) || mean > (l.mean ?? 0) + 0.015)) {
@@ -202,7 +274,7 @@ export function auditPageCoverage(rawLines, emittedLines) {
 }
 
 /** Route native + OCR into one set of lines, run layout, enforce coverage, return the page result. */
-export function buildPageResult({ nativeLines = [], ocrLines = [], width, height, viewportTransform, ocrSkipped = false, pageNumber = 1 }) {
+export function buildPageResult({ nativeLines = [], ocrLines = [], width, height, viewportTransform, ocrSkipped = false, pageNumber = 1, redoneImageBytes = null }) {
   const eNative = enrichLineGeometry(nativeLines, pageNumber)
   const eOcr = enrichLineGeometry(ocrLines, pageNumber)
   const routed = routeRegions(eNative, eOcr)
@@ -221,6 +293,7 @@ export function buildPageResult({ nativeLines = [], ocrLines = [], width, height
     canvasHeight: height,
     viewportTransform,
     ocrSkipped,
+    redoneImageBytes,
     headerLines: layout.headerLines,
     footerLines: layout.footerLines,
     bodyLines: layout.bodyLines,
@@ -284,20 +357,29 @@ export function evaluateQualityGates(pages) {
  * Remove only invisible-text streams left by earlier OCR runs.
  * Safe rule: never remove a stream that also paints images or shadings.
  */
-function stripLegacyOcrStreams(pdfDoc, decodePDFRawStream) {
+function stripLegacyOcrStreams(pdfDoc, PDFName, decodePDFRawStream) {
+  const isOcrStream = stream => {
+    try {
+      const dec = stream && decodePDFRawStream(stream)
+      if (!dec || typeof dec.getBytes !== 'function') return false
+      const s = new TextDecoder('latin1').decode(dec.getBytes())
+      const invisible = /\b3\s+Tr\b/.test(s) || s.includes('/ActualText') || (s.includes('BT') && /\/ca\s+0(\.0+)?\s/.test(s))
+      const paints = /\bDo\b|\bBI\b|\bsh\b/.test(s)
+      return invisible && !paints
+    } catch { return false }
+  }
+
   for (let p = 0; p < pdfDoc.getPageCount(); p++) {
-    const contents = pdfDoc.getPage(p).node.Contents()
-    if (!contents || typeof contents.size !== 'function') continue
-    for (let i = contents.size() - 1; i >= 0; i--) {
-      try {
+    const page = pdfDoc.getPage(p)
+    const contents = page.node.Contents()
+    if (!contents) continue
+    if (typeof contents.size === 'function') {
+      for (let i = contents.size() - 1; i >= 0; i--) {
         const stream = pdfDoc.context.lookup(contents.get(i))
-        const dec = stream && decodePDFRawStream(stream)
-        if (!dec || typeof dec.getBytes !== 'function') continue
-        const s = new TextDecoder('latin1').decode(dec.getBytes())
-        const invisible = /\b3\s+Tr\b/.test(s) || s.includes('/ActualText') || (s.includes('BT') && /\/ca\s+0(\.0+)?\s/.test(s))
-        const paints = /\bDo\b|\bBI\b|\bsh\b/.test(s)
-        if (invisible && !paints) contents.remove(i)
-      } catch (e) { /* undecodable stream: leave it */ }
+        if (isOcrStream(stream)) contents.remove(i)
+      }
+    } else if (isOcrStream(contents)) {
+      page.node.delete(PDFName.of('Contents'))
     }
   }
 }
@@ -318,7 +400,7 @@ function neededScripts(pages) {
       const t = l.text || ''
       if (/\p{Script=Devanagari}/u.test(t)) need.add('devanagari')
       if (/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(t)) need.add('cjk')
-      if (/\p{Extended_Pictographic}|[\u2070-\u209F\u2190-\u27BF\u2B00-\u2BFF]/u.test(t)) need.add('symbol')
+      if (/\p{Extended_Pictographic}|[\u00B2\u00B3\u00B9\u2070-\u209F\u2190-\u27BF\u2B00-\u2BFF]/u.test(t)) need.add('symbol')
     }
   }
   return need
@@ -372,7 +454,7 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
 
   const pdfDoc = await PDFDocument.load(originalPdfBytes, { ignoreEncryption: true })
   pdfDoc.registerFontkit(fontkit.default || fontkit)
-  try { stripLegacyOcrStreams(pdfDoc, decodePDFRawStream) } catch (e) { console.warn('strip failed', e) }
+  try { stripLegacyOcrStreams(pdfDoc, PDFName, decodePDFRawStream) } catch (e) { console.warn('strip failed', e) }
 
   const stats = { wordsWritten: 0, skippedChars: 0, skippedLines: 0, missingFonts: [] }
   const toSet = f => { try { return new Set(f.getCharacterSet()) } catch (e) { return null } }
@@ -400,6 +482,16 @@ export async function buildSearchablePdf(originalPdfBytes, pagesResults, onProgr
     const lines = (res?.lines || []).filter(l => l.source !== 'native' && l.text && l.text.trim() && l.box?.length >= 4)
     if (!lines.length || !res.viewportTransform) continue
     const page = pdfDoc.getPage(p)
+
+    // In 'redo' mode, replace original Tr 0 native content streams (whether PDFStream or PDFArray)
+    // with crisp full-page raster image so only ONE clean Tr 3 searchable text stream exists.
+    if (res.redoneImageBytes) {
+      page.node.delete(PDFName.of('Contents'))
+      const img = await pdfDoc.embedJpg(res.redoneImageBytes)
+      const { width: pw, height: ph } = page.getSize()
+      page.drawImage(img, { x: 0, y: 0, width: pw, height: ph })
+    }
+
     const toPdf = invert(res.viewportTransform)
     const used = new Map()
     const keyOf = f => {
@@ -483,14 +575,16 @@ export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
   const makeRuns = (str, opts = {}) => {
     const segs = []
     for (const ch of Array.from(str || '')) {
-      const isEmoji = /[\p{Extended_Pictographic}\u2600-\u27BF]/u.test(ch)
+      const isEmoji = /\p{Extended_Pictographic}/u.test(ch)
+      const isSymbol = !isEmoji && /[\u2190-\u27BF\u2B00-\u2BFF\u2070-\u209F\u0370-\u03FF±]/.test(ch)
+      const kind = isEmoji ? 'emoji' : isSymbol ? 'symbol' : 'text'
       const last = segs[segs.length - 1]
-      if (last && last.isEmoji === isEmoji) last.text += ch
-      else segs.push({ text: ch, isEmoji })
+      if (last && last.kind === kind) last.text += ch
+      else segs.push({ text: ch, kind })
     }
     return segs.map(s => new TextRun({
       text: s.text,
-      font: s.isEmoji ? 'Segoe UI Emoji' : opts.font,
+      font: s.kind === 'emoji' ? 'Segoe UI Emoji' : s.kind === 'symbol' ? 'Segoe UI Symbol' : opts.font,
       bold: opts.bold,
       size: opts.size,
       rightToLeft: opts.rightToLeft,
@@ -566,6 +660,7 @@ export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
         } else {
           const rtl = isRtlText(l)
           const bulletMatch = l.match(/^(\s*)[•\-]\s+(.*)$/)
+          const numMatch = !bulletMatch && l.match(/^(\s*)(\d+(?:\.\d+)*)[.)]?\s+(.*)$/)
           if (bulletMatch) {
             const level = Math.min(9, Math.floor(bulletMatch[1].length / 2))
             children.push(new Paragraph({
@@ -574,6 +669,14 @@ export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
               bidirectional: rtl || undefined,
               spacing: { after: 50 },
               children: makeRuns(bulletMatch[2], { rightToLeft: rtl || undefined, size: 22 }),
+            }))
+          } else if (numMatch) {
+            const depth = Math.min(8, numMatch[2].split('.').length - 1)
+            children.push(new Paragraph({
+              numbering: { reference: 'ocr-nested-number', level: depth },
+              bidirectional: rtl || undefined,
+              spacing: { after: 60 },
+              children: makeRuns(numMatch[3], { rightToLeft: rtl || undefined, size: 22 }),
             }))
           } else {
             children.push(new Paragraph({
@@ -592,16 +695,28 @@ export async function buildOcrDocxBlob(pages, title = 'OCR Document') {
     creator: 'PDFFORGE OCR',
     title,
     numbering: {
-      config: [{
-        reference: 'ocr-nested-bullet',
-        levels: Array.from({ length: 9 }, (_, i) => ({
-          level: i,
-          format: LevelFormat.BULLET,
-          text: ['•', '◦', '▪'][i % 3],
-          alignment: AlignmentType.LEFT,
-          style: { paragraph: { indent: { left: (i + 1) * 360, hanging: 260 } } },
-        })),
-      }],
+      config: [
+        {
+          reference: 'ocr-nested-bullet',
+          levels: Array.from({ length: 9 }, (_, i) => ({
+            level: i,
+            format: LevelFormat.BULLET,
+            text: ['•', '◦', '▪'][i % 3],
+            alignment: AlignmentType.LEFT,
+            style: { paragraph: { indent: { left: (i + 1) * 360, hanging: 260 } } },
+          })),
+        },
+        {
+          reference: 'ocr-nested-number',
+          levels: Array.from({ length: 9 }, (_, i) => ({
+            level: i,
+            format: LevelFormat.DECIMAL,
+            text: Array.from({ length: i + 1 }, (_, k) => `%${k + 1}`).join('.') + '.',
+            alignment: AlignmentType.LEFT,
+            style: { paragraph: { indent: { left: (i + 1) * 360, hanging: 320 } } },
+          })),
+        },
+      ],
     },
     sections: [{
       headers: firstHdr ? { default: new Header({ children: [new Paragraph({ children: [new TextRun({ text: firstHdr, size: 18, color: '666666' })] })] }) } : undefined,

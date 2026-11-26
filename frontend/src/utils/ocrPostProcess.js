@@ -1,10 +1,23 @@
 /**
  * ocrPostProcess.js
- * Pure, client-side helpers: sub/superscripts, script detection, fuzzy compare,
- * fragment-debris elimination, native-vs-OCR region routing, field-typed confusable
- * fixes, descender split repair, protected-token validation, and prose punctuation cleanup.
+ * Pure, client-side helpers: PUA symbol normalization, sub/superscripts, script detection,
+ * fuzzy compare, fragment-debris elimination, native-vs-OCR region routing, character-level
+ * CTC multiChar token/code decoders, field-typed confusable fixes, and prose punctuation cleanup.
  * No DOM, no network. Deterministic: same input -> same output.
  */
+
+const PUA_MAP = {
+  '\uF0FC': '✓', '\uF050': '✓', '\uF051': '✓', '\uF052': '✓',
+  '\uF0FB': '✗', '\uF055': '✗', '\uF056': '✗', '\uF072': '✗',
+  '\uF0FE': '☑', '\uF0A3': '☐', '\uF06F': '☐',
+  '\uF0B7': '•', '\uF0A7': '▪', '\uF076': '❖',
+}
+
+/** Pre-normalization mapper: converts Wingdings/Symbol/ZapfDingbats PUA glyphs to clean Unicode. */
+export function normalizePuaSymbols(text) {
+  if (!text) return text
+  return String(text).replace(/[\uF050-\uF0FF]/g, ch => PUA_MAP[ch] || ch)
+}
 
 const SUP = {
   '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
@@ -260,6 +273,63 @@ export function classifyTokenType(t) {
 }
 
 /**
+ * TASK #2 & #3: Character-level CTC multiChar decoder for protected unbroken strings & code.
+ * Given an array of per-character candidate arrays `[{t, mean}, ...]`, selects valid alphabet
+ * candidates and resolves JWT JSON header/payload integrity via bounded ambiguous-slot search.
+ */
+export function decodeWithCtcMultiChar(charMatrix, mode = 'prose') {
+  if (!Array.isArray(charMatrix) || !charMatrix.length) return null
+  const top1 = charMatrix.map(cands => (cands?.[0]?.t ?? '')).join('')
+  if (mode === 'prose') return top1
+
+  const allowed = {
+    hash: /^[0-9a-fA-F]$/,
+    base64: /^[A-Za-z0-9+/=]$/,
+    jwt: /^[A-Za-z0-9_.-]$/,
+    url: /^[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]$/,
+    uuid: /^[0-9a-fA-F-]$/,
+  }[mode]
+
+  const filtered = charMatrix.map(cands => {
+    if (!cands?.length) return ''
+    if (allowed) {
+      const hit = cands.find(c => c.t && allowed.test(c.t))
+      if (hit) return hit.t
+    }
+    return cands[0].t || ''
+  })
+
+  if (mode === 'jwt') {
+    const baseStr = filtered.join('')
+    if (validateJwtToken(baseStr).valid) return baseStr
+    // Find up to 5 uncertain positions where top-2 is l/I/1 or O/0 and search for valid JSON decode
+    const altIndices = []
+    charMatrix.forEach((cands, idx) => {
+      if (cands?.length >= 2 && /[lI1O0]/.test(cands[0].t) && cands[1].mean >= 0.05) {
+        const alt = cands.slice(1).find(c => /[lI1O0]/.test(c.t))
+        if (alt) altIndices.push({ idx, alt: alt.t })
+      }
+    })
+    const cap = Math.min(5, altIndices.length)
+    const totalMasks = 1 << cap
+    for (let mask = 1; mask < totalMasks; mask++) {
+      const attempt = filtered.slice()
+      for (let b = 0; b < cap; b++) {
+        if (mask & (1 << b)) attempt[altIndices[b].idx] = altIndices[b].alt
+      }
+      const cand = attempt.join('')
+      if (validateJwtToken(cand).valid) return cand
+    }
+    return baseStr
+  }
+
+  if (mode === 'url') {
+    return repairProtectedToken(filtered.join(''))
+  }
+  return filtered.join('')
+}
+
+/**
  * TASK #2: Validates JWT Base64URL segments and JSON header/payload decode integrity.
  */
 export function validateJwtToken(token) {
@@ -268,8 +338,11 @@ export function validateJwtToken(token) {
   const b64Decode = (seg) => {
     try {
       const padded = seg.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((seg.length + 3) % 4)
-      const bin = typeof atob === 'function' ? atob(padded) : Buffer.from(padded, 'base64').toString('utf8')
-      return JSON.parse(bin)
+      const bytesStr = typeof atob === 'function' ? atob(padded) : Buffer.from(padded, 'base64').toString('binary')
+      const bytes = Uint8Array.from(bytesStr, c => c.charCodeAt(0))
+      const utf8 = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+      if (/[\x00-\x1F\x7F-\x9F\uFFFD]/.test(utf8)) return null
+      return JSON.parse(utf8)
     } catch { return null }
   }
   const header = b64Decode(m[1])
@@ -440,8 +513,9 @@ export function fixFieldConfusables(text) {
     return digits >= 2 && digits / core.length >= 0.6 ? tok.replace(/[Oo]/g, '0').replace(/[lI]/g, '1') : tok
   })
 
-  // Check mark read as square root (safe: never converts √2 or √(x))
-  t = t.replace(/(^|[\s(|:,])√(?=\s|$|\)|\|)/g, '$1✓')
+  // Check mark & cross marks read as square root or XNO (safe: never converts √2 or √(x))
+  t = t.replace(/\bX\s*NO\b/gi, '✗ No')
+  t = t.replace(/(^|[\s(|:,])√(?=\s|$|\)|\||[A-Z])/g, '$1✓')
 
   // Remaining named/statistical OCR confusions from DEFECT 09
   t = t.replace(/\bPh\.D\]/g, 'Ph.D.')

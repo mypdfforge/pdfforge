@@ -309,7 +309,7 @@ function isCodeLine(l) {
   return words <= 4 && /[()[\]{}=:_.]/.test(l.text)
 }
 
-/** Validates brackets & quotes balance inside reconstructed code blocks. */
+/** Validates brackets ((), [], {}, <>) & quotes balance inside reconstructed code blocks. */
 export function validateCodeBrackets(codeText) {
   const stack = []
   const pairs = { '(': ')', '[': ']', '{': '}' }
@@ -324,18 +324,24 @@ export function validateCodeBrackets(codeText) {
     for (let ci = 0; ci < line.length; ci++) {
       const ch = line[ci]
       const prev = ci > 0 ? line[ci - 1] : ''
+      const next = line[ci + 1] || ''
       if (inQuote) {
         if (ch === inQuote && prev !== '\\') inQuote = null
         continue
       }
       if (ch === '"' || ch === "'") {
-        // Ignore triple quotes or handle single quotes cleanly
         inQuote = ch
         continue
       }
-      if (ch === '#' || (ch === '/' && line[ci + 1] === '/')) break
-      if (pairs[ch]) stack.push({ ch, line: li + 1 })
-      else if (closers[ch]) {
+      if (ch === '#' || (ch === '/' && next === '/')) break
+      // Validate paired generic/template angle brackets (e.g. List<str>), ignoring ->, <=, >=, and comparisons
+      if (ch === '<' && next !== '=' && next !== ' ' && /[A-Za-z_/?!]/.test(next)) {
+        stack.push({ ch: '<', line: li + 1 })
+      } else if (ch === '>' && prev !== '-' && prev !== '=' && prev !== ' ' && stack[stack.length - 1]?.ch === '<') {
+        stack.pop()
+      } else if (pairs[ch]) {
+        stack.push({ ch, line: li + 1 })
+      } else if (closers[ch]) {
         const top = stack[stack.length - 1]
         if (!top || top.ch !== closers[ch]) {
           issues.push(`Line ${li + 1}: unexpected "${ch}"`)

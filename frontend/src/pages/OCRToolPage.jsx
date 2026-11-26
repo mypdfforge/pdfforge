@@ -7,7 +7,8 @@ import {
   getPaddleOCREngine, packForLanguage, ocrRawLines, recoverLowConfidence,
   buildPageResult, buildSearchablePdf, buildSidecar, evaluateQualityGates, buildOcrDocxBlob,
 } from '../utils/paddleOcr'
-import { extractNativeLines, isNativeGood, pageHasImages } from '../utils/nativeText'
+import { extractNativeLines, isNativeGood, getPageImageRects } from '../utils/nativeText'
+import { overlap } from '../utils/ocrPostProcess'
 import { reconcileDocumentHeadersFooters } from '../utils/ocrLayoutAnalysis'
 
 /**
@@ -159,16 +160,23 @@ export default function OCRToolPage({
         const height = Math.floor(viewport.height)
 
         let nativeLines = []
+        let imageRects = []
         let useOcr = true
         if (existingMode === 'auto' || existingMode === 'reuse') {
           const nl = await extractNativeLines(page, viewport, pdfjs)
           if (isNativeGood(nl)) {
             nativeLines = nl
-            useOcr = existingMode === 'reuse' ? false : await pageHasImages(page, pdfjs)
+            if (existingMode === 'reuse') {
+              useOcr = false
+            } else {
+              imageRects = await getPageImageRects(page, viewport, pdfjs)
+              useOcr = imageRects.length > 0
+            }
           }
         }
 
         let ocrLines = []
+        let redoneImageBytes = null
         if (useOcr) {
           const engine = await ensureEngine()
           setProgMsg(`Running OCR on page ${p} of ${totalPages}…`)
@@ -177,8 +185,24 @@ export default function OCRToolPage({
           canvas.height = height
           const ctx = canvas.getContext('2d', { willReadFrequently: true })
           await page.render({ canvasContext: ctx, viewport }).promise
-          ocrLines = await ocrRawLines(engine, ctx.getImageData(0, 0, width, height))
-          await recoverLowConfidence(engine, canvas, ocrLines)
+          const rawOcr = await ocrRawLines(engine, ctx.getImageData(0, 0, width, height))
+          await recoverLowConfidence(engine, canvas, rawOcr)
+          // In Smart Hybrid mode over native text, retain OCR ONLY inside actual raster image regions
+          // so valid multilingual native text is never overwritten or duplicated.
+          if (existingMode === 'auto' && nativeLines.length > 0 && imageRects.length > 0) {
+            ocrLines = rawOcr.filter(o => {
+              const xs = (o.box || []).map(pt => pt[0]), ys = (o.box || []).map(pt => pt[1])
+              if (!xs.length) return false
+              const b = { xMin: Math.min(...xs), yMin: Math.min(...ys), xMax: Math.max(...xs), yMax: Math.max(...ys) }
+              return imageRects.some(ir => overlap(b, { xMin: ir.xMin - 8, yMin: ir.yMin - 8, xMax: ir.xMax + 8, yMax: ir.yMax + 8 }).coverA >= 0.45)
+            })
+          } else {
+            ocrLines = rawOcr
+          }
+          if (existingMode === 'redo' && outputMode === 'searchable') {
+            const jpgBlob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92))
+            if (jpgBlob) redoneImageBytes = new Uint8Array(await jpgBlob.arrayBuffer())
+          }
           canvas.width = 0 // release bitmap memory
           canvas.height = 0
         } else nativeOnlyPages++
@@ -186,7 +210,7 @@ export default function OCRToolPage({
 
         const result = buildPageResult({
           nativeLines, ocrLines, width, height,
-          viewportTransform: viewport.transform, ocrSkipped: !useOcr, pageNumber: p,
+          viewportTransform: viewport.transform, ocrSkipped: !useOcr, pageNumber: p, redoneImageBytes,
         })
         pages.push(result)
         await new Promise(r => setTimeout(r, 10)) // let the UI breathe
