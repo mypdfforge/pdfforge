@@ -90,18 +90,25 @@ export function buildPptxFromAst(ast, PptxConstructor = PptxGenJS) {
         const borderColor = (theme.border || 'CBD5E1').replace('#', '');
 
         const pptxTableRows = child.rows.map((row) =>
-          row.cells.map((cell) => ({
-            text: cell.text,
-            options: {
-              bold: row.isHeader || cell.isHeader || cell.bold,
-              color: row.isHeader || cell.isHeader ? 'FFFFFF' : '1E293B',
-              fill: row.isHeader || cell.isHeader ? headerBg : cell.bg ? cell.bg.replace('#', '') : 'FFFFFF',
-              fontSize: cell.fontSize || 9,
-              align: cell.align || (cell.isNumeric ? 'right' : 'left'),
-              valign: 'middle',
-              border: { pt: 0.5, color: borderColor },
-            },
-          }))
+          row.cells.map((cell) => {
+            const fillHex = row.isHeader || cell.isHeader
+              ? headerBg
+              : cell.bg
+              ? cell.bg.replace('#', '')
+              : 'FFFFFF';
+            return {
+              text: cell.text,
+              options: {
+                bold: row.isHeader || cell.isHeader || cell.bold,
+                color: row.isHeader || cell.isHeader ? 'FFFFFF' : '1E293B',
+                fill: { color: fillHex },
+                fontSize: cell.fontSize || 9,
+                align: cell.align || (cell.isNumeric ? 'right' : 'left'),
+                valign: 'middle',
+                border: { pt: 0.5, color: borderColor },
+              },
+            };
+          })
         );
 
         const tableWidth = widthInches - 1.5;
@@ -113,7 +120,7 @@ export function buildPptxFromAst(ast, PptxConstructor = PptxGenJS) {
           x: 0.75,
           y: curYInches,
           w: tableWidth,
-          colWidth: colWidths,
+          colW: colWidths,
           margin: 4,
         });
 

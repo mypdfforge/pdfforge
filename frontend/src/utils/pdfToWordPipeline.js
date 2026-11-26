@@ -157,7 +157,7 @@ export async function convertPdfToDocx(file, opts = {}) {
 // ═════════════════════════════════════════════════════════════════════════════
 //  PASS 1 — ANALYSE ONE PAGE (everything heavy is released before returning)
 // ═════════════════════════════════════════════════════════════════════════════
-async function analyzePage(pdf, pageNum, ctx) {
+export async function analyzePage(pdf, pageNum, ctx) {
   const { pdfjs, hist, mem, warn, cfg } = ctx
   const page = await pdf.getPage(pageNum)
   const model = { pageNum, mode: 'rich', w: 595.28, h: 841.89, lines: [], blocks: [], images: [], pageImage: null, vector: null, topDown: true }
@@ -309,7 +309,7 @@ async function detectImageRects(page, vp, OPS, minPt) {
   return rects
 }
 
-async function renderPageCanvas(page, vp1, mem) {
+export async function renderPageCanvas(page, vp1, mem) {
   const maxDim = mem.lowMem ? 1200 : 2400
   const scale = Math.min(mem.lowMem ? 1 : 2, maxDim / Math.max(vp1.width, vp1.height))
   const vp = page.getViewport({ scale })
@@ -323,9 +323,9 @@ async function renderPageCanvas(page, vp1, mem) {
   return { canvas, scale }
 }
 
-function releaseCanvas(c) { try { c.width = 0; c.height = 0 } catch { /* ignore */ } }
+export function releaseCanvas(c) { try { c.width = 0; c.height = 0 } catch { /* ignore */ } }
 
-async function canvasToImage(src, sx, sy, sw, sh, mem, kind) {
+export async function canvasToImage(src, sx, sy, sw, sh, mem, kind) {
   sx = Math.max(0, Math.floor(sx)); sy = Math.max(0, Math.floor(sy))
   sw = Math.max(1, Math.min(Math.ceil(sw), src.width - sx)); sh = Math.max(1, Math.min(Math.ceil(sh), src.height - sy))
   const c = document.createElement('canvas')
@@ -419,4 +419,4 @@ function slimModel(m) {
   return { ...m, lines: (m.lines || []).map(strip), blocks }
 }
 
-export { MIME_DOCX }
+export { MIME_DOCX, DEFAULTS as ANALYZE_DEFAULTS }

@@ -21,6 +21,7 @@ const STANDALONE = {
   translate: lazy(() => import('./pages/TranslateToolPage')),
   redact:    lazy(() => import('./pages/RedactToolPage')),
   'html-to-pdf': lazy(() => import('./pages/HtmlToPdfPage')),
+  'pdf-to-pptx': lazy(() => import('./features/pdf-to-pptx/ui/PdfToPptxTool')),
 }
 const GenericTool = lazy(() => import('./pages/ToolPage'))
 

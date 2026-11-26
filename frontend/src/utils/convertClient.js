@@ -495,42 +495,19 @@ export { exportAstToXlsx, buildWorkbookFromAst } from './xlsxEmitter.js'
 export { exportAstToPptx, buildPptxFromAst } from './pptxEmitter.js'
 export { runChunkedConversion } from './conversionWorkerClient.js'
 
-export async function pdfToPptx(file, scale = 2, onProgress) {
-  const pdf = await load(file)
-  const pageIndexes = Array.from({ length: pdf.numPages }, (_, idx) => idx + 1)
-  const pagesData = await runChunkedConversion(
-    pageIndexes,
-    async (pageNum) => {
-      const page = await pdf.getPage(pageNum)
-      const layout = await extractPageLayout(page)
-      const vectorGeometry = await extractVectorGeometry(page)
-      return { ...layout, vectorGeometry }
-    },
-    onProgress
-  )
-
-  const hasContent = pagesData.some((p) => p.items && p.items.length > 0)
-  if (hasContent) {
-    const ast = buildDocumentAst(pagesData, { title: file.name || 'PDFForge Presentation' })
-    const pptxBlob = await exportAstToPptx(ast, PptxGenJS)
-    return { data: pptxBlob }
-  }
-
-  // Fallback for purely scanned bitmap PDFs
-  const pptx = new PptxGenJS()
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i), vp = page.getViewport({ scale })
-    const c = document.createElement('canvas')
-    c.width = vp.width; c.height = vp.height
-    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise
-    if (i === 1) {
-      pptx.defineLayout({ name: 'PDF', width: vp.width / scale / 72, height: vp.height / scale / 72 })
-      pptx.layout = 'PDF'
-    }
-    pptx.addSlide().addImage({ data: c.toDataURL('image/jpeg', 0.9), x: 0, y: 0, w: '100%', h: '100%' })
-    c.width = 0
-  }
-  return { data: await pptx.write({ outputType: 'blob' }) }
+export async function pdfToPptx(file, optsOrScale = {}, onProgress) {
+  const opts = typeof optsOrScale === 'object' && optsOrScale !== null
+    ? optsOrScale
+    : { onProgress }
+  const progressCb = opts.onProgress || onProgress
+  const { convertPdfToPptx } = await import('./pdfToPptxPipeline.js')
+  const res = await convertPdfToPptx(file, {
+    mode: opts.mode || 'editable',
+    slideLayout: opts.slideLayout || 'auto',
+    signal: opts.signal,
+    onProgress: progressCb,
+  })
+  return { data: res.blob, warnings: res.warnings, stats: res.stats }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2482,14 +2459,17 @@ export function batchPdfToWord(files, onProgress) {
 }
 
 /** Batch PDF → PowerPoint (.pptx) */
-export function batchPdfToPptx(files, onProgress) {
+export function batchPdfToPptx(files, onProgress, opts) {
   const convertOne = async (file, subP) => {
     subP({ done: 0, total: 1, label: 'Converting slides…' })
-    const result = await pdfToPptx(file)
+    const result = await pdfToPptx(file, {
+      ...opts,
+      onProgress: (p) => subP({ done: p.page || 0, total: p.totalPages || 1, label: p.message || 'Converting slides…' }),
+    })
     subP({ done: 1, total: 1 })
     return result
   }
-  return runBatchConvert(files, convertOne, '.pptx', onProgress)
+  return runBatchConvert(files, convertOne, '.pptx', onProgress, opts)
 }
 
 /** Batch PDF → Excel (.xlsx) */

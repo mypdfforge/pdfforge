@@ -33,7 +33,7 @@ export const TOOLS = [
   { id:'images',       icon:FileImage,     label:'PDF to PNG',       desc:'Export every page as PNG, downloaded as a ZIP.',  category:'convert',  runs:'browser', sub:'from' },
   { id:'pdf-to-jpg',   icon:FileImage,     label:'PDF to JPG',       desc:'Export every page as JPG, downloaded as a ZIP.',  category:'convert',  runs:'browser', sub:'from' },
   { id:'pdf-to-word',  icon:FileText,      label:'PDF to Word',      desc:'Extract text into an editable .docx.',            category:'convert',  runs:'browser', sub:'from' },
-  { id:'pdf-to-pptx',  icon:Presentation,  label:'PDF to PowerPoint',desc:'Turn pages into slides (as images).',             category:'convert',  runs:'browser', sub:'from' },
+  { id:'pdf-to-pptx',  icon:Presentation,  label:'PDF to PowerPoint',desc:'Convert PDFs into editable PowerPoint (.pptx) slides.', category:'convert', runs:'browser', sub:'from' },
   { id:'pdf-to-xlsx',  icon:FileSpreadsheet,label:'PDF to Excel',    desc:'Extract page content into a spreadsheet.',        category:'convert',  runs:'browser', sub:'from' },
   { id:'pdf-to-pdfa',  icon:Archive,       label:'PDF to PDF/A',     desc:'Archive-compliant PDF/A-1b.',                     category:'convert',  runs:'browser', sub:'from' },
   { id:'compress',     icon:Minimize2,     label:'Compress PDF',     desc:'Reduce file size.',                               category:'optimize', runs:'browser' },
