@@ -7,7 +7,6 @@
 import PptxGenJS from 'pptxgenjs'
 import JSZip from 'jszip'
 import * as U from './pdfToWordUtils.js'
-import { wrapUnbrokenStrings } from './pdfLayoutSegmenter.js'
 import { buildDocumentNumbering, stripMarker, parseListMarker } from './pdfNumbering.js'
 
 const MIME_PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
@@ -41,9 +40,8 @@ function isEmptyPageModel(m) {
 }
 
 /**
- * Repairs PptxGenJS 4.0.1 OOXML where multiple <a:pPr> tags are emitted inside a single <a:p>.
- * ECMA-376 allows at most one <a:pPr> as the first child of <a:p>; duplicate mid-paragraph
- * <a:pPr> nodes cause PowerPoint to strip inline baseline/sub/sup/RTL run formatting.
+ * Repairs PptxGenJS 4.0.1 OOXML where multiple <a:pPr> tags are emitted inside a single <a:p>,
+ * and ensures RTL paragraphs enforce right alignment (algn="r") and rtlCol="1".
  */
 export async function normalizePptxXml(blob) {
   try {
@@ -51,16 +49,24 @@ export async function normalizePptxXml(blob) {
     const slidePaths = Object.keys(zip.files).filter((k) => /^ppt\/slides\/slide\d+\.xml$/.test(k))
     for (const path of slidePaths) {
       const xml = await zip.file(path).async('string')
-      const fixed = xml.replace(/<a:p>([\s\S]*?)<\/a:p>/g, (_match, inner) => {
+      let fixed = xml.replace(/<a:p>([\s\S]*?)<\/a:p>/g, (_match, inner) => {
         const pPrMatches = inner.match(/<a:pPr\b[^>]*>(?:[\s\S]*?<\/a:pPr>)?|<a:pPr\b[^>]*\/>/g)
-        if (!pPrMatches || pPrMatches.length <= 1) return `<a:p>${inner}</a:p>`
+        if (!pPrMatches || pPrMatches.length === 0) return `<a:p>${inner}</a:p>`
         let firstPPr = pPrMatches[0]
-        // Hoist rtl="1" if any pPr inside the paragraph carried it
-        if (!/\brtl="1"/.test(firstPPr) && pPrMatches.some((p) => /\brtl="1"/.test(p))) {
-          firstPPr = firstPPr.replace('<a:pPr', '<a:pPr rtl="1"')
+        const hasRtl = pPrMatches.some((p) => /\brtl="1"/.test(p))
+        if (hasRtl) {
+          if (!/\brtl="1"/.test(firstPPr)) firstPPr = firstPPr.replace('<a:pPr', '<a:pPr rtl="1"')
+          if (/\balgn="(?:l|ctr)"/.test(firstPPr)) firstPPr = firstPPr.replace(/\balgn="(?:l|ctr)"/, 'algn="r"')
+          else if (!/\balgn=/.test(firstPPr)) firstPPr = firstPPr.replace('<a:pPr', '<a:pPr algn="r"')
         }
         const withoutAllPPr = inner.replace(/<a:pPr\b[^>]*>(?:[\s\S]*?<\/a:pPr>)?|<a:pPr\b[^>]*\/>/g, '')
         return `<a:p>${firstPPr}${withoutAllPPr}</a:p>`
+      })
+      fixed = fixed.replace(/<a:tc>([\s\S]*?)<\/a:tc>/g, (tcMatch) => {
+        if (!/\brtl="1"/.test(tcMatch)) return tcMatch
+        return tcMatch.replace(/<a:bodyPr\b([^>]*)\/?>/, (bp, attrs) =>
+          /\brtlCol=/.test(attrs) ? bp.replace(/\brtlCol="0"/, 'rtlCol="1"') : `<a:bodyPr${attrs} rtlCol="1"/>`
+        )
       })
       zip.file(path, fixed)
     }
@@ -135,13 +141,16 @@ function hasLongUnbrokenToken(text) {
   return String(text || '').split(/\s+/).some((w) => w.length >= 40)
 }
 
-function prepareDisplayText(text, isCode = false) {
-  const clean = U.cleanText(text)
-  if (!clean || isCode) return clean
-  if (hasLongUnbrokenToken(clean)) {
-    try { return wrapUnbrokenStrings(clean, 60) } catch { return clean }
-  }
-  return clean
+const SUB_MAP = { '0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉','+':'₊','-':'₋','=':'₌','(':'₍',')':'₎' }
+const SUP_MAP = { '0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹','n':'ⁿ','i':'ⁱ','+':'⁺','-':'⁻','=':'⁼','(':'⁽',')':'⁾' }
+
+function toUnicodeScript(text, map) {
+  return [...text].map((ch) => map[ch] || ch).join('')
+}
+
+function prepareDisplayText(text) {
+  // Keep URLs and hashes 100% copy/paste clean (no \u200B soft-break injection)
+  return U.cleanText(text)
 }
 
 function scriptFont(seg, code = false) {
@@ -153,10 +162,12 @@ function scriptFont(seg, code = false) {
 }
 
 function toPptxRuns(text, o, fontScale = 1) {
-  const clean = prepareDisplayText(text, o.code)
+  let clean = prepareDisplayText(text)
   if (!clean) return []
-  const minPt = (o.sup || o.sub) ? 6 : 6.5
-  const pt = clamp((o.size || 11) * fontScale, minPt, 72)
+  if (o.sub) clean = toUnicodeScript(clean, SUB_MAP)
+  else if (o.sup) clean = toUnicodeScript(clean, SUP_MAP)
+  // Keep full run pt size when baseline is set so PowerPoint doesn't double-shrink sub/superscripts
+  const pt = clamp((o.size || 11) * fontScale, 6.5, 72)
   const color = U.normHex(o.color) || '1E293B'
   return U.segmentByScript(clean).map((seg, idx) => {
     const opts = {
@@ -376,6 +387,78 @@ function tryAddFormControl(slide, line, ctx) {
   return null
 }
 
+const LEGAL_CLAUSE_RE = /^(\d+\.\d+\s+[^:]{3,55}:)\s*(.*)$/
+
+function isBulletParagraph(line, ctx) {
+  if (!line || !line.text) return false
+  const t = line.text.trim()
+  if (!t) return false
+  if (ctx.slideIndents?.get(line)?.kind === 'hier') return false
+  if (LEGAL_CLAUSE_RE.test(t) || CITATION_RE.test(t)) return false
+  const li = ctx.numbering?.map?.get(line)
+  return (li?.kind === 'bullet') || BULLET_RE.test(t) || !!line.isListLike
+}
+
+/** Group consecutive bullet items into one unified text frame to prevent horizontal box drift. */
+function addBulletGroupToSlide(slide, lines, ctx, cursorY) {
+  if (!lines.length) return cursorY
+  const { g, tr, numbering, slideIndents, slideDims } = ctx
+  const first = lines[0]
+  const topPt = blockTopPt({ line: first }, ctx.m)
+  const naturalY = topPt != null ? tr.y(topPt) : cursorY
+  const y = Math.max(cursorY, Math.min(naturalY, cursorY + 0.4))
+  const x = tr.x(Number.isFinite(first.x) ? first.x : 54)
+  const w = clamp(slideDims.width - x - 0.35, 1.5, slideDims.width - 0.7)
+
+  const allRuns = []
+  let totalEstLines = 0
+  lines.forEach((line, lIdx) => {
+    const size = line.size || g.bodySize
+    const li = numbering?.map?.get(line)
+    const level = clamp(slideIndents?.get(line)?.level ?? li?.level ?? 0, 0, 6)
+    const rawSpans = line.spans?.length
+      ? line.spans
+      : [{ text: line.text, size, bold: line.isBold, italic: line.isItalic }]
+    const spans = li ? stripMarker(rawSpans, li.marker) : rawSpans
+    const lineRuns = []
+    spans.forEach((sp, sIdx) => {
+      let txt = sp.text
+      if (sIdx === 0 && !li) txt = txt.replace(BULLET_RE, '')
+      lineRuns.push(...toPptxRuns(txt, {
+        size: sp.size || size,
+        bold: sp.bold ?? line.isBold,
+        italic: sp.italic ?? line.isItalic,
+        strike: sp.strike,
+        underline: sp.underline,
+        sup: sp.superScript,
+        sub: sp.subScript,
+        color: sp.color,
+        bullet: sIdx === 0 ? true : undefined,
+      }, tr.fontScale))
+    })
+    if (lineRuns.length) {
+      lineRuns[0].options.indentLevel = level
+      if (lIdx < lines.length - 1) lineRuns[lineRuns.length - 1].options.breakLine = true
+      allRuns.push(...lineRuns)
+      totalEstLines += Math.max(1, Math.ceil((line.text?.length || 1) / 75))
+    }
+  })
+
+  if (!allRuns.length) return cursorY
+  const h = clamp(totalEstLines * 0.25 + 0.16, 0.35, Math.max(0.35, slideDims.height - y - 0.1))
+  slide.addText(allRuns, {
+    x,
+    y,
+    w,
+    h,
+    valign: 'top',
+    margin: 2,
+    wrap: true,
+    paraSpaceAfter: 4,
+  })
+  return y + h + 0.06
+}
+
 function addParagraphToSlide(slide, line, ctx, opts = {}) {
   if (!line || !line.text || !line.text.trim()) return null
   if (!opts.skipFormControls) {
@@ -395,9 +478,10 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
   const trimmed = line.text.trim()
 
   const isHier = slideIndent?.kind === 'hier'
+  const isLegal = !isHier && LEGAL_CLAUSE_RE.test(trimmed)
   const isCitation = CITATION_RE.test(trimmed)
-  const isBullet = !isHier && (!!li?.kind && li.kind === 'bullet' || BULLET_RE.test(trimmed) || !!line.isListLike)
-  const isSimpleNum = !isHier && !isBullet && SIMPLE_NUM_RE.test(trimmed)
+  const isBullet = !isHier && !isLegal && (!!li?.kind && li.kind === 'bullet' || BULLET_RE.test(trimmed) || !!line.isListLike)
+  const isSimpleNum = !isHier && !isLegal && !isBullet && SIMPLE_NUM_RE.test(trimmed)
 
   const rawSpans = line.spans?.length
     ? line.spans
@@ -407,10 +491,15 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
   let bulletOpt
   let spans = rawSpans
   if (isHier) {
-    // Keep exact hierarchical outline prefix (1.1, 1.1.1, 1.2.1.a) intact and bolded
     spans = [
       { text: slideIndent.prefix + ' ', size: size, bold: true, color: level === 0 ? '0F172A' : '1E293B' },
       { text: slideIndent.body, size: size, bold: level <= 1 && line.isBold },
+    ]
+  } else if (isLegal) {
+    const lm = trimmed.match(LEGAL_CLAUSE_RE)
+    spans = [
+      { text: lm[1] + ' ', size, bold: true, color: '0F172A' },
+      { text: lm[2], size, bold: false, color: '1E293B' },
     ]
   } else if (isBullet) {
     bulletOpt = true
@@ -439,7 +528,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
     if (idx === 0 && isBullet && !li) txt = txt.replace(BULLET_RE, '')
     runs.push(...toPptxRuns(txt, {
       size: sp.size || size,
-      bold: sp.bold ?? (line.isBold || isH1 || isH2),
+      bold: sp.bold ?? (isLegal ? false : (line.isBold || isH1 || isH2)),
       italic: sp.italic ?? line.isItalic,
       strike: sp.strike,
       underline: sp.underline,
@@ -453,7 +542,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
   })
   if (!runs.length) return null
 
-  const indentExtraIn = (isHier || isBullet) ? level * 0.22 : (isCitation ? 0.15 : 0)
+  const indentExtraIn = (isHier || isBullet) ? level * 0.22 : (isCitation || isLegal ? 0.12 : 0)
   const xPt = opts.xPt ?? (Number.isFinite(line.x) ? line.x : 48)
   const baseX = opts.xIn ?? tr.x(xPt)
   const x = clamp(baseX + indentExtraIn, 0.1, ctx.slideDims.width - 1.2)
@@ -463,7 +552,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
   const topPt = blockTopPt({ line }, ctx.m)
   const botPt = blockBottomPt({ line }, ctx.m)
   const naturalY = topPt != null ? tr.y(topPt) : cursorY
-  const y = Math.max(cursorY, naturalY)
+  const y = Math.max(cursorY, Math.min(naturalY, cursorY + 0.85))
 
   const hasLong = hasLongUnbrokenToken(trimmed)
   const avgCharIn = ((size * tr.fontScale) / 72) * 0.52
@@ -473,7 +562,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
   const lineHIn = Math.max(0.18, ((size * tr.fontScale * 1.34) / 72))
   const boxH = Math.max(
     botPt != null && topPt != null ? tr.h(botPt - topPt) : 0.22,
-    estLines * lineHIn + (hasLong ? 0.1 : 0.04)
+    estLines * lineHIn + (hasLong ? 0.12 : 0.04)
   )
   const clampedH = Math.min(boxH, Math.max(0.2, ctx.slideDims.height - y - 0.08))
 
@@ -490,7 +579,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
     rtlMode: rtl || undefined,
     indentLevel: isBullet ? clamp(level, 0, 6) : 0,
   })
-  return y + clampedH + (isBullet || isHier ? 0.03 : 0.05)
+  return y + clampedH + (isBullet || isHier ? 0.03 : isLegal ? 0.09 : 0.05)
 }
 
 /** Semantic renderer for Phase 01..05 workflow tables (Slide 12). */
@@ -1027,11 +1116,23 @@ function populateSlide(slide, m, g, slideDims, mode, warn) {
   let cursorY = 0.25
   let blockFailures = 0
 
-  for (const block of m.blocks || []) {
+  const blocks = m.blocks || []
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const block = blocks[bi]
     if (cursorY >= slideDims.height - 0.15) break
     try {
       let nextY = null
-      if (block.type === 'table') nextY = addTableToSlide(slide, block, ctx, cursorY)
+      if (block.type === 'paragraph' && isBulletParagraph(block.line, ctx)) {
+        const groupLines = [block.line]
+        while (
+          bi + 1 < blocks.length &&
+          blocks[bi + 1].type === 'paragraph' &&
+          isBulletParagraph(blocks[bi + 1].line, ctx)
+        ) {
+          groupLines.push(blocks[++bi].line)
+        }
+        nextY = addBulletGroupToSlide(slide, groupLines, ctx, cursorY)
+      } else if (block.type === 'table') nextY = addTableToSlide(slide, block, ctx, cursorY)
       else if (block.type === 'columns') nextY = addColumnsToSlide(slide, block, ctx, cursorY)
       else if (block.type === 'callout') nextY = addCalloutToSlide(slide, block, ctx, cursorY)
       else if (block.type === 'code') nextY = addCodeToSlide(slide, block, ctx, cursorY)

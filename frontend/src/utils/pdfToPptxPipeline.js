@@ -183,6 +183,55 @@ export function normalizeModelForPptx(m) {
       }
     }
 
+    // 3b. Split merged cross-reference / bullet entries (e.g. "• Table 4.1: ... • Table 5.1: ...")
+    if (b.type === 'paragraph' && b.line && !b.line.isCode) {
+      const txt = b.line.text || ''
+      const refMatches = [...txt.matchAll(/(?:•\s*)?(?:Table|Figure|Listing)\s+\d+\.\d+:[\s\S]*?(?=(?:•\s*)?(?:Table|Figure|Listing)\s+\d+\.\d+:|$)/g)]
+        .map((m2) => m2[0].trim())
+        .filter(Boolean)
+      if (refMatches.length > 1) {
+        refMatches.forEach((part, idx) => {
+          blocks.push({
+            type: 'paragraph',
+            line: {
+              ...b.line,
+              text: part,
+              spans: [{ text: part, size: b.line.size, bold: b.line.isBold, italic: b.line.isItalic }],
+              y: (b.line.y ?? 0) - idx * 14,
+              isListLike: true,
+            },
+          })
+        })
+        i++
+        continue
+      }
+    }
+
+    // 3c. Re-attach orphan continuation lines to legal clauses (e.g. "14.1 ..." + "Section 8 (Data Confidentiality).")
+    if (
+      b.type === 'paragraph' &&
+      b.line &&
+      blocks.length > 0 &&
+      blocks[blocks.length - 1].type === 'paragraph' &&
+      /^\d+\.\d+\s+[A-Z]/.test((blocks[blocks.length - 1].line?.text || '').trim())
+    ) {
+      const curTxt = (b.line.text || '').trim()
+      if (
+        curTxt.length <= 80 &&
+        !/^(\d+\.\d+|Section\s+\d+:)/i.test(curTxt) &&
+        /\.\s*$/.test(curTxt) &&
+        !/\.\s*$/.test((blocks[blocks.length - 1].line?.text || '').trim())
+      ) {
+        const prevLine = blocks[blocks.length - 1].line
+        prevLine.text = prevLine.text.trim() + ' ' + curTxt
+        if (Array.isArray(prevLine.spans)) {
+          prevLine.spans.push({ text: ' ' + curTxt, size: prevLine.size, bold: false, italic: false })
+        }
+        i++
+        continue
+      }
+    }
+
     blocks.push(b)
     i++
   }

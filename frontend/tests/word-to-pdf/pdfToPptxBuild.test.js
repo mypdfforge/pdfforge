@@ -151,12 +151,42 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(slide1Xml).toContain('Executive Overview')
     expect(slide1Xml).toContain('baseline="-40000"')
     expect(slide1Xml).toContain('baseline="30000"')
+    expect(slide1Xml).toContain('₂')
+    expect(slide1Xml).toContain('²')
     expect(slide1Xml).toContain('B91C1C') // negative currency styling
     expect(slide1Xml).toContain('rtl="1"') // RTL cell support
+    expect(slide1Xml).toContain('algn="r"') // RTL right-aligned cell
+    expect(slide1Xml).toContain('rtlCol="1"')
     expect(slide1Xml).toContain('Consolas')
     expect(slide1Xml).toContain('0F172A') // dark code container
     expect(slide1Xml).toContain('lvl="1"') // nested bullet level
     expect(zip.file(/^ppt\/media\//).length).toBeGreaterThan(0)
+  })
+
+  it('keeps URLs free of zero-width breaks and splits merged cross-references & legal continuations', async () => {
+    const m = normalizeModelForPptx({
+      pageNum: 1,
+      mode: 'rich',
+      w: 595.28,
+      h: 841.89,
+      lines: [],
+      blocks: [
+        { type: 'paragraph', line: { text: 'https://subdomain.example.com/api/v4/tenants/018f6c43-9821-7299-8231/download', x: 54, y: 720, size: 9 } },
+        { type: 'paragraph', line: { text: '• Table 4.1: First table • Table 5.1: Second table', x: 54, y: 680, size: 10 } },
+        { type: 'paragraph', line: { text: '14.1 Indemnification Obligations: Each party agrees to defend', x: 54, y: 640, size: 10 } },
+        { type: 'paragraph', line: { text: 'Section 8 (Data Confidentiality).', x: 54, y: 626, size: 10 } },
+      ],
+      images: [],
+      vector: { rects: [] },
+    })
+
+    expect(m.blocks.filter((b) => b.type === 'paragraph')).toHaveLength(4)
+    const res = await buildPptxBlob([m], { slideLayout: 'auto' })
+    const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
+    const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
+    expect(xml).not.toContain('\u200B')
+    expect(xml).toContain('https://subdomain.example.com/api/v4/tenants/018f6c43-9821-7299-8231/download')
+    expect(xml).toContain('Section 8 (Data Confidentiality).')
   })
 
   it('converts form controls, hierarchical outlines, workflows, and timelines into native shapes', async () => {
