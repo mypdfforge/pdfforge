@@ -60,15 +60,15 @@ async function extractPage(page, boldFonts) {
   const fontCache = {}
   const fontOf = (name) => {
     if (fontCache[name]) return fontCache[name]
-    let n = ''
-    try { n = page.commonObjs.get(name)?.name || '' } catch { /* not resolved */ }
+    let fontObj = null
+    try { fontObj = page.commonObjs.get(name) } catch { /* not resolved */ }
+    let n = fontObj?.name || ''
     n = n || tc.styles[name]?.fontFamily || ''
-    let loaded = ''
-    try { loaded = page.commonObjs.get(name)?.loadedName || '' } catch {}
+    const loaded = fontObj?.loadedName || ''
     const isBold = (boldFonts && (boldFonts.has(n) || boldFonts.has(loaded) || boldFonts.has(name))) ||
                    /bold|black|heavy|semibold|demi/i.test(n) || /bold|black|heavy|semibold|demi/i.test(loaded) ||
-                   page.commonObjs.get(name)?.bold === true
-    const isItalic = /italic|oblique/i.test(n) || /italic|oblique/i.test(loaded) || page.commonObjs.get(name)?.italic === true
+                   fontObj?.bold === true
+    const isItalic = /italic|oblique/i.test(n) || /italic|oblique/i.test(loaded) || fontObj?.italic === true
     return (fontCache[name] = {
       bold: isBold,
       italic: isItalic,
@@ -364,14 +364,19 @@ const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i)
 // ───────────────────────── 4. TEXT ─────────────────────────
 function dropRedacted(items, rects, W) {
   const dark = rects.filter((r) => lum(r.col) < CFG.REDACT_LUM && r.x1 - r.x0 < W * 0.4)
-  if (!dark.length) return items
-  return items.filter((it) => {
+  if (!dark.length || !items.length) return items
+  const kept = items.filter((it) => {
     const area = Math.max(it.w, 1) * (it.bot - it.top)
     return !dark.some((r) => {
       const ox = Math.min(it.x + it.w, r.x1) - Math.max(it.x, r.x0), oy = Math.min(it.bot, r.y1) - Math.max(it.top, r.y0)
       return ox > 0 && oy > 0 && (ox * oy) / area >= CFG.REDACT_COVER
     })
   })
+  // If dark rects would wipe out all (or >80% of) text on the page, they are theme/background fills, not redactions
+  if (kept.length === 0 || (items.length >= 5 && kept.length < items.length * 0.2)) {
+    return items
+  }
+  return kept
 }
 
 function groupLines(items) {
@@ -463,7 +468,7 @@ async function pageToBlocks(page, opts, boldFonts) {
     blocks.push({ type: 'line', top: l.base - size * 0.8, size, segs })
   }
   blocks.sort((a, b) => a.top - b.top)
-  return { blocks, W: ex.W, H: ex.H, tableCount: tables.length, itemsCount: items.length }
+  return { blocks, W: ex.W, H: ex.H, tableCount: tables.length, itemsCount: items.length, rawItemsCount: ex.items.length }
 }
 
 // stream-mode columns (no ruled tables): gaps in the union of segment x-intervals
@@ -645,7 +650,7 @@ export async function pdfToExcel(file, onProgress, options = {}) {
   for (let i = 1; i <= pdf.numPages; i++) {
     onProgress?.({ done: i, total: pdf.numPages, label: `Extracting table from page ${i} of ${pdf.numPages}…` })
     const pageData = await pageToBlocks(await pdf.getPage(i), options, boldFonts)
-    totalTextItems += (pageData.itemsCount || 0)
+    totalTextItems += Math.max(pageData.itemsCount || 0, pageData.rawItemsCount || 0)
     pages.push(pageData)
   }
 
