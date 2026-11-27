@@ -462,7 +462,7 @@ function addBulletGroupToSlide(slide, lines, ctx, cursorY) {
       let txt = sp.text
       if (sIdx === 0 && !li) txt = txt.replace(BULLET_RE, '')
       lineRuns.push(...toPptxRuns(txt, {
-        size: sp.size || size,
+        size: (sp.superScript || sp.subScript) ? size : (sp.size || size),
         bold: sp.bold ?? line.isBold,
         italic: sp.italic ?? line.isItalic,
         strike: sp.strike,
@@ -491,9 +491,10 @@ function addBulletGroupToSlide(slide, lines, ctx, cursorY) {
     valign: 'top',
     margin: 2,
     wrap: true,
-    paraSpaceAfter: 4,
+    lineSpacingMultiple: 1.15,
+    paraSpaceAfter: 2.5,
   })
-  return y + h + 0.06
+  return y + h + 0.04
 }
 
 function addParagraphToSlide(slide, line, ctx, opts = {}) {
@@ -564,7 +565,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
     let txt = sp.text
     if (idx === 0 && isBullet && !li) txt = txt.replace(BULLET_RE, '')
     runs.push(...toPptxRuns(txt, {
-      size: sp.size || size,
+      size: (sp.superScript || sp.subScript) ? size : (sp.size || size),
       bold: sp.bold ?? (isLegal ? false : (line.isBold || isH1 || isH2)),
       italic: sp.italic ?? line.isItalic,
       strike: sp.strike,
@@ -592,14 +593,14 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
   const y = Math.max(cursorY, Math.min(naturalY, cursorY + 0.85))
 
   const hasLong = hasLongUnbrokenToken(trimmed)
-  const avgCharIn = ((size * tr.fontScale) / 72) * 0.52
+  const avgCharIn = ((size * tr.fontScale) / 72) * 0.45
   const charsPerLine = Math.max(12, Math.floor(w / Math.max(0.05, avgCharIn)))
   const plainLen = runs.reduce((s, r) => s + r.text.length, 0)
   const estLines = Math.max(1, Math.ceil(plainLen / charsPerLine))
-  const lineHIn = Math.max(0.18, ((size * tr.fontScale * 1.34) / 72))
+  const lineHIn = Math.max(0.16, ((size * tr.fontScale * 1.18) / 72))
   const boxH = Math.max(
-    botPt != null && topPt != null ? tr.h(botPt - topPt) : 0.22,
-    estLines * lineHIn + (hasLong ? 0.12 : 0.04)
+    botPt != null && topPt != null ? tr.h(botPt - topPt) : 0.2,
+    estLines * lineHIn + (hasLong ? 0.08 : 0.02)
   )
   const clampedH = Math.min(boxH, Math.max(0.2, ctx.slideDims.height - y - 0.08))
 
@@ -612,11 +613,12 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
     valign: 'top',
     margin: 2,
     wrap: true,
+    lineSpacingMultiple: 1.15,
     fit: hasLong ? 'shrink' : 'none',
     rtlMode: rtl || undefined,
     indentLevel: isBullet ? clamp(level, 0, 6) : 0,
   })
-  return y + clampedH + (isBullet || isHier ? 0.03 : isLegal ? 0.09 : 0.05)
+  return y + clampedH + (isBullet || isHier ? 0.02 : isLegal ? 0.06 : 0.025)
 }
 
 /** Semantic renderer for Phase 01..05 workflow tables (Slide 12). */
@@ -1176,12 +1178,29 @@ function populateSlide(slide, m, g, slideDims, mode, warn) {
     return
   }
 
+  // Collect bounding boxes of native-rendered blocks (tables/callouts/code) so we don't draw duplicate vector rects
+  const nativeBoxes = (m.blocks || [])
+    .filter((b) => b.type === 'table' || b.type === 'callout' || b.type === 'code')
+    .map((b) => {
+      const y0 = blockTopPt(b, m)
+      const y1 = blockBottomPt(b, m)
+      if (y0 == null || y1 == null) return null
+      const x0 = b.type === 'table' && Number.isFinite(b.x0) ? b.x0 : 0
+      const x1 = b.type === 'table' && Number.isFinite(b.x0) && Number.isFinite(b.tableWidth)
+        ? b.x0 + b.tableWidth
+        : tr.pageW
+      return { x0: x0 - 8, y0: y0 - 8, x1: x1 + 8, y1: y1 + 8 }
+    })
+    .filter(Boolean)
+
   // Optional large vector backgrounds (banners/cards) rendered behind text
   for (const r of (m.vector?.rects || []).slice(0, 12)) {
     if (!r.fill && !r.stroke) continue
     if (r.w < 40 || r.h < 16) continue
     if (r.w > tr.pageW * 0.9 && r.h > tr.pageH * 0.9 && U.normHex(r.fill) === 'FFFFFF') continue
     const topY = toTopDownY(r.y + r.h, m)
+    const botY = topY + r.h
+    if (nativeBoxes.some((nb) => r.x < nb.x1 && (r.x + r.w) > nb.x0 && topY < nb.y1 && botY > nb.y0)) continue
     slide.addShape('rect', {
       x: tr.x(r.x),
       y: tr.y(topY),

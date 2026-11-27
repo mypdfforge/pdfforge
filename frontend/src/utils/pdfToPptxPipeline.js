@@ -233,6 +233,42 @@ export function normalizeModelForPptx(m) {
       }
     }
 
+    // 3d. Coalesce wrapped prose continuation lines split across consecutive paragraph blocks
+    if (
+      b.type === 'paragraph' &&
+      b.line &&
+      blocks.length > 0 &&
+      blocks[blocks.length - 1].type === 'paragraph' &&
+      blocks[blocks.length - 1].line
+    ) {
+      const prev = blocks[blocks.length - 1].line
+      const cur = b.line
+      const prevTxt = (prev.text || '').trim()
+      const curTxt = (cur.text || '').trim()
+      const pSz = prev.size || 11
+      const cSz = cur.size || 11
+      const isSpecial = (l, t) =>
+        l.isCode || l.isListLike || l.isRTL ||
+        /^(?:[•●○◦▪■□–—·*‣⁃\-]\s+|\d+(?:\.\d+)*[.)]?\s+|\[\d+\]\s+|(?:Table|Figure|Listing|Section)\s+\d+)/i.test(t)
+      const sameMargin = Number.isFinite(prev.x) && Number.isFinite(cur.x) && Math.abs(prev.x - cur.x) <= 8
+      const closeY = Number.isFinite(prev.y) && Number.isFinite(cur.y) && Math.abs(prev.y - cur.y) <= pSz * 1.75
+      const sameStyle = Math.abs(pSz - cSz) <= 0.8 && !!prev.isBold === !!cur.isBold && !!prev.isItalic === !!cur.isItalic
+      const looksWrapped = !/[.!?:]$/.test(prevTxt) || (prevTxt.length >= 65 && /^[a-z]/.test(curTxt))
+      if (prevTxt && curTxt && !isSpecial(prev, prevTxt) && !isSpecial(cur, curTxt) && sameMargin && closeY && sameStyle && looksWrapped) {
+        prev.text = prevTxt + ' ' + curTxt
+        if (Array.isArray(prev.spans)) {
+          const curSpans = Array.isArray(cur.spans) && cur.spans.length
+            ? cur.spans
+            : [{ text: curTxt, size: cSz, bold: cur.isBold, italic: cur.isItalic }]
+          prev.spans.push({ text: ' ', size: pSz, bold: prev.isBold, italic: prev.isItalic }, ...curSpans)
+        }
+        if (Number.isFinite(cur.yBot)) prev.yBot = cur.yBot
+        if (Number.isFinite(cur.xEnd)) prev.xEnd = Math.max(prev.xEnd || 0, cur.xEnd)
+        i++
+        continue
+      }
+    }
+
     blocks.push(b)
     i++
   }

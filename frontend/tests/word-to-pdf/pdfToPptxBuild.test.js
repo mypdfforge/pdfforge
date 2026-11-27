@@ -325,4 +325,68 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(dims.width).toBeCloseTo(10, 2)
     expect(dims.height).toBeCloseTo(5.625, 2)
   })
+
+  it('skips vector rects overlapping tables, keeps parent size for superscripts, and coalesces wrapped prose', async () => {
+    const coalesced = normalizeModelForPptx({
+      pageNum: 1,
+      mode: 'rich',
+      lines: [],
+      blocks: [
+        { type: 'paragraph', line: { x: 48, y: 700, size: 10.5, text: 'Unbroken character sequences if word-break is' } },
+        { type: 'paragraph', line: { x: 48, y: 686, size: 10.5, text: 'not handled:' } },
+      ],
+    })
+    expect(coalesced.blocks).toHaveLength(1)
+    expect(coalesced.blocks[0].line.text).toBe('Unbroken character sequences if word-break is not handled:')
+
+    const tableModel = {
+      pageNum: 1,
+      mode: 'rich',
+      w: 595.28,
+      h: 841.89,
+      lines: [],
+      blocks: [
+        {
+          type: 'paragraph',
+          line: {
+            x: 48,
+            y: 740,
+            size: 11,
+            text: 'E = mc2',
+            spans: [
+              { text: 'E = mc', size: 11 },
+              { text: '2', size: 7.1, superScript: true },
+            ],
+          },
+        },
+        {
+          type: 'table',
+          x0: 48,
+          yMax: 700,
+          yMin: 600,
+          numCols: 2,
+          tableWidth: 500,
+          rows: [
+            { isHeader: true, cells: [{ text: 'Col A' }, { text: 'Col B' }] },
+            { cells: [{ text: '1' }, { text: '2' }] },
+          ],
+        },
+      ],
+      images: [],
+      vector: {
+        rects: [
+          { x: 48, y: 680, w: 500, h: 20, fill: 'FF00AA' },
+        ],
+      },
+    }
+    const res = await buildPptxBlob([tableModel], { slideLayout: 'auto' })
+    const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
+    const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
+    // Overlapping table header vector rect should be skipped
+    expect(xml).not.toContain('FF00AA')
+    // Line spacing should match Word's 1.15x
+    expect(xml).toContain('spcPct val="115000"')
+    // Superscript run should use parent line size (1100), not double-shrunk 710
+    expect(xml).toContain('sz="1100" baseline="30000"')
+  })
 })
