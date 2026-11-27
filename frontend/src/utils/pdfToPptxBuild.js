@@ -184,7 +184,7 @@ function prepareDisplayText(text) {
   const raw = String(text ?? '')
   const lead = raw.match(/^[ \t]*/)[0]
   const trail = raw.length > lead.length ? raw.match(/[ \t]*$/)[0] : ''
-  const core = U.cleanText(raw).trim()
+  const core = U.cleanText(raw).trim().replace(/\s+([\u064B-\u065F\u0670])/g, '$1')
   return core ? lead + core + trail : ''
 }
 
@@ -472,16 +472,18 @@ function tryAddFormControl(slide, line, ctx) {
 const LEGAL_CLAUSE_RE = /^(\d+\.\d+\s+[^:]{3,55}:)\s*(.*)$/
 
 function isBulletParagraph(line, ctx) {
-  if (!line || !line.text) return false
+  if (!line || !line.text || line.isCode) return false
   const t = line.text.trim()
-  if (!t) return false
-  if (ctx.slideIndents?.get(line)?.kind === 'hier') return false
-  if (LEGAL_CLAUSE_RE.test(t) || CITATION_RE.test(t)) return false
+  if (!t || (line.size || 0) >= (ctx.g?.h1 || 16)) return false
+  if (LEGAL_CLAUSE_RE.test(t) || /^Section\s+\d+/i.test(t)) return false
+  if (ctx.slideIndents?.get(line)?.kind === 'hier') return true
+  if (CITATION_RE.test(t)) return true
+  if (SIMPLE_NUM_RE.test(t)) return true
   const li = ctx.numbering?.map?.get(line)
   return (li?.kind === 'bullet') || BULLET_RE.test(t) || !!line.isListLike
 }
 
-/** Group consecutive bullet items into one unified text frame to prevent horizontal box drift. */
+/** Group consecutive list/outline/citation items into one unified text frame with real lvl & buAutoNum. */
 function addBulletGroupToSlide(slide, lines, ctx, cursorY) {
   if (!lines.length) return cursorY
   const { g, tr, numbering, slideIndents, slideDims } = ctx
@@ -489,23 +491,57 @@ function addBulletGroupToSlide(slide, lines, ctx, cursorY) {
   const topPt = blockTopPt({ line: first }, ctx.m)
   const naturalY = topPt != null ? tr.y(topPt) : cursorY
   const y = Math.max(cursorY, Math.min(naturalY, cursorY + 0.4))
-  const x = tr.x(Number.isFinite(first.x) ? first.x : 54)
+  const minListX = Math.min(...lines.map((l) => (Number.isFinite(l.x) ? l.x : 54)))
+  const x = tr.x(minListX)
   const w = clamp(slideDims.width - x - 0.35, 1.5, slideDims.width - 0.7)
 
   const allRuns = []
   let totalEstLines = 0
   lines.forEach((line, lIdx) => {
     const size = line.size || g.bodySize
+    const t = (line.text || '').trim()
     const li = numbering?.map?.get(line)
-    const level = clamp(slideIndents?.get(line)?.level ?? li?.level ?? 0, 0, 6)
+    const si = slideIndents?.get(line)
+    const level = clamp(si?.level ?? li?.level ?? 0, 0, 6)
     const rawSpans = line.spans?.length
       ? line.spans
       : [{ text: line.text, size, bold: line.isBold, italic: line.isItalic }]
-    const spans = li ? stripMarker(rawSpans, li.marker) : rawSpans
+
+    const isHier = si?.kind === 'hier'
+    const isCit = !isHier && CITATION_RE.test(t)
+    const isSimpleNum = !isHier && !isCit && SIMPLE_NUM_RE.test(t) && !BULLET_RE.test(t) && li?.kind !== 'bullet'
+
+    let spans = rawSpans
+    let bulletOpt = true
+    if (isHier) {
+      bulletOpt = false
+      spans = [
+        { text: si.prefix + ' ', size, bold: true, color: level === 0 ? '0F172A' : '1E293B' },
+        { text: si.body, size, bold: level <= 1 && line.isBold },
+      ]
+    } else if (isCit) {
+      bulletOpt = false
+      const cm = t.match(CITATION_RE)
+      spans = cm
+        ? [{ text: cm[1] + ' ', size, bold: true, color: '1D4ED8' }, { text: cm[2], size, italic: false }]
+        : rawSpans
+    } else if (isSimpleNum) {
+      bulletOpt = { type: 'number' }
+      const nm = t.match(SIMPLE_NUM_RE)
+      spans = li
+        ? stripMarker(rawSpans, li.marker)
+        : (nm ? [{ text: nm[2], size, bold: line.isBold, italic: line.isItalic }] : rawSpans)
+    } else {
+      spans = li ? stripMarker(rawSpans, li.marker) : rawSpans
+    }
+
     const lineRuns = []
     spans.forEach((sp, sIdx) => {
       let txt = sp.text
-      if (sIdx === 0 && !li) txt = txt.replace(BULLET_RE, '')
+      if (sIdx === 0) {
+        if (!isHier && !isCit && !isSimpleNum && !li) txt = txt.replace(BULLET_RE, '')
+        txt = txt.replace(/^[ \t]+/, '')
+      }
       lineRuns.push(...toPptxRuns(txt, {
         size: (sp.superScript || sp.subScript) ? size : (sp.size || size),
         bold: sp.bold ?? line.isBold,
@@ -515,7 +551,7 @@ function addBulletGroupToSlide(slide, lines, ctx, cursorY) {
         sup: sp.superScript,
         sub: sp.subScript,
         color: sp.color,
-        bullet: sIdx === 0 ? true : undefined,
+        bullet: sIdx === 0 && bulletOpt ? bulletOpt : undefined,
       }, tr.fontScale))
     })
     if (lineRuns.length) {
@@ -878,6 +914,46 @@ export function isLikelyHeaderRow(row, rowIndex, rows) {
 function addTableToSlide(slide, block, ctx, cursorY) {
   const { tr, m, slideDims } = ctx
   const numCols = Math.max(1, block.numCols || block.colWidths?.length || 1)
+  const rawRows = block.rows || []
+  if (
+    rawRows.length === 1 &&
+    numCols === 2 &&
+    /^Column\s+1\s*:/i.test((rawRows[0].cells?.[0]?.text || '').trim()) &&
+    /^Column\s+2\s*:/i.test((rawRows[0].cells?.[1]?.text || '').trim())
+  ) {
+    const rawW2 = Number.isFinite(block.tableWidth) && block.tableWidth >= 100
+      ? clamp(block.tableWidth, 100, tr.pageW - 48)
+      : tr.pageW - 72
+    const boxW = clamp(tr.w(rawW2), 2, slideDims.width - 0.4)
+    const x0 = Number.isFinite(block.x0) ? tr.x(block.x0) : Math.max(0.2, (slideDims.width - boxW) / 2)
+    const topPt = blockTopPt(block, m)
+    const botPt = blockBottomPt(block, m)
+    const y0 = Math.max(cursorY, topPt != null ? tr.y(topPt) : cursorY)
+    const colW = boxW / 2
+    const borderHex2 = U.normHex(block.theme?.border) || 'CBD5E1'
+    const c0 = rawRows[0].cells[0]
+    const c1 = rawRows[0].cells[1]
+    const maxLen = Math.max((c0.text || '').length, (c1.text || '').length)
+    const estLines = Math.max(2, Math.ceil(maxLen / Math.max(20, Math.floor((colW * 72) / ((c0.fontSize || 10) * 0.48)))))
+    const h0 = Math.max(botPt != null && topPt != null ? tr.h(botPt - topPt) : 0.6, estLines * 0.18 + 0.16)
+    ;[c0, c1].forEach((c, idx) => {
+      const runs = toPptxRuns(U.cleanText(c.text), { size: c.fontSize || 10, color: U.normHex(c.color) || '1E293B' }, tr.fontScale)
+      slide.addText(runs.length ? runs : U.cleanText(c.text), {
+        x: x0 + idx * colW,
+        y: y0,
+        w: colW,
+        h: h0,
+        fill: { color: U.normHex(c.fill) || 'F8FAFC' },
+        line: { color: borderHex2, width: 0.75 },
+        valign: 'top',
+        margin: 8,
+        wrap: true,
+        lineSpacingMultiple: 1.15,
+      })
+    })
+    return y0 + h0 + 0.1
+  }
+
   const rawW = Number.isFinite(block.tableWidth) && block.tableWidth >= 100
     ? clamp(block.tableWidth, 100, tr.pageW - 48)
     : tr.pageW - 72
@@ -1123,9 +1199,8 @@ function addCalloutToSlide(slide, block, ctx, cursorY) {
   const fill = U.normHex(src?.r.fill) || U.normHex(adm?.bg) || 'F1F5F9'
   const stroke = U.normHex(src?.r.stroke) || 'E2E8F0'
 
-  slide.addShape('rect', { x, y, w, h, fill: { color: fill }, line: { color: stroke, width: clamp(src?.r.lineWidth || 0.75, 0.25, 3) } })
   const accent = U.normHex(adm?.color)
-  if (accent) slide.addShape('rect', { x, y, w: 0.07, h, fill: { color: accent }, line: { color: accent, width: 0 } })
+  const strokeW = clamp(src?.r.lineWidth || 0.75, 0.25, 3)
 
   const sz = block.lines?.[0]?.size || 10
   const fontSize = Math.round(clamp(sz * tr.fontScale, 6.5, 14) * 10) / 10
@@ -1138,7 +1213,21 @@ function addCalloutToSlide(slide, block, ctx, cursorY) {
       ]
     : [{ text: rawText, options: { color: body, fontSize, fontFace: 'Arial' } }]
 
-  slide.addText(runs, { x: x + 0.1, y: y + 0.02, w: w - 0.2, h: h - 0.04, margin: 4, valign: 'middle', wrap: true })
+  if (accent) {
+    slide.addShape('rect', { x, y, w, h, fill: { color: fill }, line: { color: stroke, width: strokeW } })
+    slide.addShape('rect', { x, y, w: 0.07, h, fill: { color: accent }, line: { color: accent, width: 0 } })
+    slide.addText(runs, { x: x + 0.1, y: y + 0.02, w: w - 0.2, h: h - 0.04, margin: 4, valign: 'middle', wrap: true })
+  } else {
+    // Single movable text-box shape with fill + border directly on the box
+    slide.addText(runs, {
+      x, y, w, h,
+      fill: { color: fill },
+      line: { color: stroke, width: strokeW },
+      margin: [4, 8, 4, 8],
+      valign: 'middle',
+      wrap: true,
+    })
+  }
   return y + h + 0.1
 }
 

@@ -106,13 +106,13 @@ export function normalizeModelForPptx(m) {
     }
   }
 
-  // 1. Restore visual-order RTL inside table cells first (using unmutated m.lines for line boundaries)
+  // 1. Restore visual-order RTL inside table cells using cell-local text only
   for (const b of m.blocks) {
     if (b.type === 'table' && Array.isArray(b.rows)) {
       for (const r of b.rows) {
         for (const c of r.cells || []) {
-          if (c.text && VISUAL_RTL_CLUE_RE.test(c.text)) {
-            c.text = restoreVisualRtlText(c.text, m.lines)
+          if (c.text && U.isMostlyRtl(c.text) && VISUAL_RTL_CLUE_RE.test(c.text)) {
+            c.text = restoreVisualRtlText(c.text)
           }
         }
       }

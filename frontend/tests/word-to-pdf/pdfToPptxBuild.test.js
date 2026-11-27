@@ -503,4 +503,70 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(xml).toContain('<a:t>✓</a:t>')
     expect(xml).toContain('<a:t> Included</a:t>')
   })
+
+  it('renders 2-column Column 1/Column 2 layout boxes as independent text boxes instead of a table', async () => {
+    const model = {
+      pageNum: 1,
+      mode: 'rich',
+      w: 595.28,
+      h: 841.89,
+      lines: [],
+      blocks: [
+        {
+          type: 'table',
+          x0: 48,
+          yMax: 700,
+          yMin: 580,
+          numCols: 2,
+          tableWidth: 500,
+          rows: [
+            {
+              cells: [
+                { text: 'Column 1: Left editorial paragraph text.', fontSize: 10 },
+                { text: 'Column 2: Right editorial paragraph text.', fontSize: 10 },
+              ],
+            },
+          ],
+        },
+      ],
+      images: [],
+      vector: { rects: [] },
+    }
+    const res = await buildPptxBlob([model], { slideLayout: 'auto' })
+    const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
+    const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
+    expect(xml).not.toContain('<a:tbl>')
+    expect(xml).toContain('Column 1: Left editorial paragraph text.')
+    expect(xml).toContain('Column 2: Right editorial paragraph text.')
+  })
+
+  it('groups outlines and numbered lists into single boxes with lvl/buAutoNum, trims bullet leading space, joins Arabic tanween, and uses 1 shape per callout', async () => {
+    const arRuns = toPptxRuns('مرحبا ً بكم')
+    expect(arRuns.map((r) => r.text).join('')).toBe('مرحباً بكم')
+
+    const model = {
+      pageNum: 1,
+      mode: 'rich',
+      w: 595.28,
+      h: 841.89,
+      lines: [],
+      blocks: [
+        { type: 'paragraph', line: { x: 48, y: 760, size: 10.5, text: '1. First numbered item' } },
+        { type: 'paragraph', line: { x: 48, y: 742, size: 10.5, text: '2. Second numbered item' } },
+        { type: 'paragraph', line: { x: 48, y: 700, size: 10.5, text: '•   Global Infrastructure Layer', isListLike: true } },
+        { type: 'callout', lines: [{ x: 48, y: 650, size: 10, text: '[NOTE] Neutral box.' }] },
+      ],
+      images: [],
+      vector: {
+        rects: [{ x: 48, y: 635, w: 500, h: 30, fill: 'F8FAFC', stroke: 'CBD5E1' }],
+      },
+    }
+    const res = await buildPptxBlob([model], { slideLayout: 'auto' })
+    const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
+    const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
+    // 1 unified list box (numbered + bullet) + 1 single-shape callout = 2 <p:sp> shapes
+    expect((xml.match(/<p:sp>/g) || [])).toHaveLength(2)
+    expect(xml).toContain('buAutoNum')
+    expect(xml).toContain('<a:t>Global Infrastructure Layer</a:t>')
+  })
 })
