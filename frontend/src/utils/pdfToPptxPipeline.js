@@ -4,7 +4,6 @@
  * vector extraction, image extraction, abortable/timeout watchdogs, and memory budgets)
  * plus PPTX-specific normalization for code blocks, deep lists, and visual-order RTL.
  */
-import { stitchCrossPageTables } from './pdfTableMerge.js'
 import {
   analyzePage,
   renderPageCanvas,
@@ -418,10 +417,7 @@ export async function convertPdfToPptx(file, opts = {}) {
     emit('build', 'Building PowerPoint slides…', 72, 0, n)
     stats.images = models.reduce((s, m) => s + (m.images?.length || 0) + (m.pageImage ? 1 : 0), 0)
 
-    if (cfg.mode !== 'images') {
-      const stitched = stitchCrossPageTables(models)
-      if (stitched) warn(null, 'TABLE_STITCHED', `${stitched} table(s) continued across pages were merged.`, 'info')
-    }
+    // Slides map 1:1 to PDF pages: cross-page table stitching (a Word concern) would drop pages.
 
     const built = await buildPptxBlob(models, {
       bodySize,

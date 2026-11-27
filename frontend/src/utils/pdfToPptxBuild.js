@@ -180,9 +180,20 @@ export function splitScriptChars(text) {
 }
 
 function prepareDisplayText(text) {
-  // Keep URLs and hashes 100% copy/paste clean (no \u200B soft-break injection)
-  return U.cleanText(text)
+  // Preserve leading/trailing spaces on inline spans (e.g. " + 2", " (Sulfuric Acid)")
+  const raw = String(text ?? '')
+  const lead = raw.match(/^[ \t]*/)[0]
+  const trail = raw.length > lead.length ? raw.match(/[ \t]*$/)[0] : ''
+  const core = U.cleanText(raw).trim()
+  return core ? lead + core + trail : ''
 }
+
+// Visual state glyphs (checks, crosses, radios) keep their own symbol font + source color.
+const ICON_GLYPHS = {
+  '✓': null, '✔': null, '✗': null, '✘': null, '✕': null,
+  '●': null, '○': null, '◉': null, '◯': null, '☑': null, '☐': null, '☒': null,
+}
+const ICON_RE = new RegExp(`([${Object.keys(ICON_GLYPHS).join('')}])`)
 
 function scriptFont(seg, code = false) {
   if (code) return 'Consolas'
@@ -217,24 +228,41 @@ export function toPptxRuns(text, o = {}, fontScale = 1) {
     }
     for (const part of splitScriptChars(displayChunk)) {
       const script = part.script || forcedScript
-      for (const seg of U.segmentByScript(part.text)) {
-        const opts = {
-          fontSize: Math.round(pt * 10) / 10,
-          bold: !!o.bold,
-          italic: !!o.italic,
-          strike: !!o.strike,
-          underline: (o.underline || chunk.isUrl) ? { style: 'sng' } : undefined,
-          superscript: script === 'sup',
-          subscript: script === 'sub',
-          color: chunk.isUrl && !o.color ? '1D4ED8' : color,
-          fontFace: scriptFont(seg, o.code),
+      const iconParts = part.text.split(ICON_RE).filter(Boolean)
+      for (const ip of iconParts) {
+        if (ICON_GLYPHS[ip] !== undefined) {
+          runs.push({
+            text: ip,
+            options: {
+              fontSize: Math.round(pt * 10) / 10,
+              bold: !!o.bold,
+              fontFace: 'Segoe UI Symbol',
+              color: ICON_GLYPHS[ip] || color,
+              superscript: script === 'sup',
+              subscript: script === 'sub',
+            },
+          })
+          continue
         }
-        if (chunk.isUrl) opts.hyperlink = { url: chunk.text }
-        if (o.highlight) opts.highlight = o.highlight
-        if (o.smallCaps) opts.smallCaps = true
-        if (o.rtl || seg.script === 'rtl') opts.rtlMode = true
-        if (o.bullet && runs.length === 0) opts.bullet = o.bullet
-        runs.push({ text: seg.text, options: opts })
+        for (const seg of U.segmentByScript(ip)) {
+          const opts = {
+            fontSize: Math.round(pt * 10) / 10,
+            bold: !!o.bold,
+            italic: !!o.italic,
+            strike: !!o.strike,
+            underline: (o.underline || chunk.isUrl) ? { style: 'sng' } : undefined,
+            superscript: script === 'sup',
+            subscript: script === 'sub',
+            color: chunk.isUrl && !o.color ? '1D4ED8' : color,
+            fontFace: scriptFont(seg, o.code),
+          }
+          if (chunk.isUrl) opts.hyperlink = { url: chunk.text }
+          if (o.highlight) opts.highlight = o.highlight
+          if (o.smallCaps) opts.smallCaps = true
+          if (o.rtl || seg.script === 'rtl') opts.rtlMode = true
+          if (o.bullet && runs.length === 0) opts.bullet = o.bullet
+          runs.push({ text: seg.text, options: opts })
+        }
       }
     }
   }
@@ -610,7 +638,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
   const y = Math.max(cursorY, Math.min(naturalY, cursorY + 0.85))
 
   const hasLong = hasLongUnbrokenToken(trimmed)
-  const avgCharIn = ((size * tr.fontScale) / 72) * 0.45
+  const avgCharIn = ((size * tr.fontScale) / 72) * ((isH1 || isH2 || line.isBold) ? 0.56 : 0.47)
   const charsPerLine = Math.max(12, Math.floor(w / Math.max(0.05, avgCharIn)))
   const plainLen = runs.reduce((s, r) => s + r.text.length, 0)
   const estLines = Math.max(1, Math.ceil(plainLen / charsPerLine))
@@ -899,7 +927,23 @@ function addTableToSlide(slide, block, ctx, cursorY) {
 
   const headerRowIndex = rows.findIndex((r, i) => isLikelyHeaderRow(r, i, rows))
   const isDenseTable = rows.length >= 15
-  const maxCellFont = numCols >= 7 ? 9.0 : numCols >= 5 ? 9.5 : 11.5
+  const maxCellFont = 14 // source size wins; no density clamp
+
+  // Feature-matrix icons: ✓/✗ are drawn with a symbol font that has no Unicode in the text layer,
+  // so they vanish at extraction. Rows holding a yes/no state cell get their icons restored.
+  const NEG = /^(no|none|n\/a|not included|disabled)$/i
+  const iconRows = new Set()
+  if (numCols >= 3) {
+    rows.forEach((r, ri) => {
+      if (ri === 0 || !r.cells.slice(1).some((c) => NEG.test(U.cleanText(c.text)) || /^included$/i.test(U.cleanText(c.text)))) return
+      iconRows.add(ri)
+    })
+  }
+  const inferIcon = (text, ri, col) => {
+    const t = U.cleanText(text)
+    if (!iconRows.has(ri) || col === 0 || !t || /[✓✔✗✘]/.test(t)) return text
+    return (NEG.test(t) ? '✗ ' : '✓ ') + t
+  }
 
   const pptxRows = rows.map((r, ri) => {
     const rowLabel = (r.cells?.[0]?.text || '').trim()
@@ -907,6 +951,7 @@ function addTableToSlide(slide, block, ctx, cursorY) {
     const rowCells = []
     for (const slot of gridSlots[ri]) {
       const c = slot.cell
+      const ci0 = slot.col
       if (c.vMerge === 'continue') continue
 
       let rowspan = c.rowSpan || 1
@@ -918,7 +963,7 @@ function addTableToSlide(slide, block, ctx, cursorY) {
         }
       }
 
-      const rawText = U.cleanText(c.text)
+      const rawText = U.cleanText(inferIcon(c.text, ri, ci0))
       const isRtl = U.isMostlyRtl(rawText)
       const isNum = !isRtl && NUMERIC_CELL_RE.test(rawText)
       const isNegCurrency = CURRENCY_NEG_RE.test(rawText)
@@ -1022,6 +1067,24 @@ function addColumnsToSlide(slide, block, ctx, cursorY) {
   return Math.max(y1, y2) + 0.08
 }
 
+/** Best vector rect (original geometry/colors) behind a block's text lines, or null. */
+function sourceRectFor(block, ctx, minWFrac = 0.4) {
+  const { tr, m } = ctx
+  const top = blockTopPt(block, m)
+  const bot = blockBottomPt(block, m)
+  if (top == null || bot == null) return null
+  let best = null
+  let bestOv = 0
+  for (const r of m.vector?.rects || []) {
+    if (!(r.fill || r.stroke) || r.w < tr.pageW * minWFrac || r.h < 10) continue
+    if (r.w > tr.pageW * 0.95 && r.h > tr.pageH * 0.9) continue
+    const rt = toTopDownY(r.y + r.h, m)
+    const ov = Math.min(bot + 4, rt + r.h) - Math.max(top - 4, rt)
+    if (ov > bestOv && ov >= (bot - top) * 0.6) { best = { r, top: rt }; bestOv = ov }
+  }
+  return best
+}
+
 const ADMONITION_PALETTES = {
   NOTE:     { accent: '3B82F6', bg: 'EFF6FF' },
   WARNING:  { accent: 'D97706', bg: 'FFFBEB' },
@@ -1042,45 +1105,40 @@ function addCalloutToSlide(slide, block, ctx, cursorY) {
   const { tr, m, slideDims } = ctx
   const rawText = (block.lines || []).map((l) => U.cleanText(l.text)).filter(Boolean).join('\n')
   if (!rawText) return cursorY
-  const { accent, bg } = calloutPalette(block, rawText)
+  const src = sourceRectFor(block, ctx)
+  const adm = block.admonition
+  // No box in the source and no explicit admonition styling => it was plain text. Keep it plain.
+  if (!src && !adm?.bg && !adm?.color) {
+    let y = cursorY
+    for (const l of block.lines || []) y = addParagraphToSlide(slide, l, { ...ctx, cursorY: y }) ?? y
+    return y
+  }
 
   const topPt = blockTopPt(block, m)
-  const y = Math.max(cursorY, topPt != null ? tr.y(topPt) : cursorY)
-  const x = 0.4
-  const w = slideDims.width - 0.8
+  const y = src ? tr.y(src.top) : Math.max(cursorY, topPt != null ? tr.y(topPt) : cursorY)
+  const x = src ? tr.x(src.r.x) : 0.4
+  const w = src ? tr.w(src.r.w) : slideDims.width - 0.8
   const estLines = Math.max((block.lines || []).length, Math.ceil(rawText.length / 85))
-  const h = clamp(0.22 * estLines + 0.22, 0.48, Math.max(0.48, slideDims.height - y - 0.1))
+  const h = src ? tr.h(src.r.h) : clamp(0.22 * estLines + 0.22, 0.48, Math.max(0.48, slideDims.height - y - 0.1))
+  const fill = U.normHex(src?.r.fill) || U.normHex(adm?.bg) || 'F1F5F9'
+  const stroke = U.normHex(src?.r.stroke) || 'E2E8F0'
 
-  // Background card + prominent left accent stripe
-  slide.addShape('rect', {
-    x, y, w, h,
-    fill: { color: bg },
-    line: { color: 'E2E8F0', width: 0.75 },
-  })
-  slide.addShape('rect', {
-    x, y, w: 0.07, h,
-    fill: { color: accent },
-    line: { color: accent, width: 0 },
-  })
+  slide.addShape('rect', { x, y, w, h, fill: { color: fill }, line: { color: stroke, width: clamp(src?.r.lineWidth || 0.75, 0.25, 3) } })
+  const accent = U.normHex(adm?.color)
+  if (accent) slide.addShape('rect', { x, y, w: 0.07, h, fill: { color: accent }, line: { color: accent, width: 0 } })
 
+  const sz = block.lines?.[0]?.size || 10
+  const fontSize = Math.round(clamp(sz * tr.fontScale, 6.5, 14) * 10) / 10
   const tagMatch = rawText.match(/^(\[[A-Z]+\])\s*([\s\S]*)$/)
-  const fontSize = Math.round(clamp(10 * tr.fontScale, 7.5, 13) * 10) / 10
+  const body = U.normHex(block.lines?.[0]?.color) || '1E293B'
   const runs = tagMatch
     ? [
-        { text: tagMatch[1] + ' ', options: { bold: true, color: accent, fontSize, fontFace: 'Arial' } },
-        { text: tagMatch[2], options: { bold: false, color: '1E293B', fontSize, fontFace: 'Arial' } },
+        { text: tagMatch[1] + ' ', options: { bold: true, color: accent || body, fontSize, fontFace: 'Arial' } },
+        { text: tagMatch[2], options: { bold: false, color: body, fontSize, fontFace: 'Arial' } },
       ]
-    : [{ text: rawText, options: { color: '1E293B', fontSize, fontFace: 'Arial' } }]
+    : [{ text: rawText, options: { color: body, fontSize, fontFace: 'Arial' } }]
 
-  slide.addText(runs, {
-    x: x + 0.14,
-    y: y + 0.04,
-    w: w - 0.22,
-    h: h - 0.08,
-    margin: 4,
-    valign: 'middle',
-    wrap: true,
-  })
+  slide.addText(runs, { x: x + 0.1, y: y + 0.02, w: w - 0.2, h: h - 0.04, margin: 4, valign: 'middle', wrap: true })
   return y + h + 0.1
 }
 
@@ -1118,41 +1176,39 @@ function addCodeToSlide(slide, block, ctx, cursorY) {
   const lines = block.lines || []
   if (!lines.length) return cursorY
   const minX = Math.min(...lines.map((l) => l.x ?? 0))
-  const fontSize = Math.round(clamp((lines.length > 35 ? 8 : 9.5) * tr.fontScale, 7.5, 11) * 10) / 10
+  const srcSize = lines[0].size || 9
+  const fontSize = Math.round(clamp(srcSize * tr.fontScale, 6.5, 14) * 10) / 10
+  const src = sourceRectFor(block, ctx, 0.3)
+  const fill = U.normHex(src?.r.fill) || null
+  const dark = fill ? U.contrastText(fill) === 'FFFFFF' : false
+  const plain = dark ? 'E2E8F0' : (U.normHex(lines[0].color) || '1E293B')
+  // Syntax coloring only when the source itself colors tokens (>1 distinct span color).
+  const spanColors = new Set(lines.flatMap((l) => (l.spans || []).map((sp) => U.normHex(sp.color)).filter(Boolean)))
+  const useSyntax = spanColors.size > 1
 
   const allRuns = []
   lines.forEach((l, idx) => {
     const spaces = Math.max(0, Math.round(((l.x ?? minX) - minX) / (0.55 * (l.size || 9))))
-    // Non-breaking spaces prevent PowerPoint from collapsing leading indentation
     const pad = '\u00A0'.repeat(spaces)
     const raw = U.cleanText(l.text).replace(/^( +)/, (sp) => '\u00A0'.repeat(sp.length))
-    const lineRuns = tokenizeCodeLine(pad + raw, fontSize)
-    if (idx < lines.length - 1 && lineRuns.length) {
-      lineRuns[lineRuns.length - 1].options.breakLine = true
-    }
+    const lineRuns = useSyntax
+      ? tokenizeCodeLine(pad + raw, fontSize)
+      : [{ text: pad + raw, options: { fontFace: 'Consolas', fontSize, color: plain } }]
+    if (idx < lines.length - 1 && lineRuns.length) lineRuns[lineRuns.length - 1].options.breakLine = true
     allRuns.push(...lineRuns)
   })
 
   const topPt = blockTopPt(block, m)
-  const y = Math.max(cursorY, topPt != null ? tr.y(topPt) : cursorY)
-  const x = 0.4
-  const w = slideDims.width - 0.8
-  const h = clamp(0.19 * lines.length + 0.24, 0.55, Math.min(4.2, slideDims.height - y - 0.1))
+  const y = src ? tr.y(src.top) : Math.max(cursorY, topPt != null ? tr.y(topPt) : cursorY)
+  const x = src ? tr.x(src.r.x) : 0.4
+  const w = src ? tr.w(src.r.w) : slideDims.width - 0.8
+  const h = src ? tr.h(src.r.h) : clamp(0.19 * lines.length + 0.24, 0.55, Math.min(4.2, slideDims.height - y - 0.1))
 
   slide.addText(allRuns, {
-    x,
-    y,
-    w,
-    h,
-    fill: { color: '0F172A' },
-    line: { color: '334155', width: 1 },
-    fontFace: 'Consolas',
-    fontSize,
-    color: 'E2E8F0',
-    margin: 8,
-    valign: 'top',
-    wrap: true,
-    fit: 'shrink',
+    x, y, w, h,
+    ...(fill ? { fill: { color: fill } } : {}),
+    ...(src?.r.stroke ? { line: { color: U.normHex(src.r.stroke) || 'CBD5E1', width: clamp(src.r.lineWidth || 0.75, 0.25, 2) } } : {}),
+    fontFace: 'Consolas', fontSize, color: plain, margin: 8, valign: 'top', wrap: true, fit: 'none',
   })
   return y + h + 0.1
 }

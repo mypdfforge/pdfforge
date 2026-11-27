@@ -164,7 +164,7 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(slide1Xml).toContain('rtlCol="1"')
     expect(slide1Xml).not.toContain('<a:bodyPr/ ')
     expect(slide1Xml).toContain('Consolas')
-    expect(slide1Xml).toContain('0F172A') // dark code container
+    expect(slide1Xml).toContain('def run():')
     expect(slide1Xml).toContain('lvl="1"') // nested bullet level
     expect(zip.file(/^ppt\/media\//).length).toBeGreaterThan(0)
   })
@@ -456,5 +456,49 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(rowHs).toHaveLength(25)
     expect(rowHs.reduce((a, b) => a + b, 0) / 914400).toBeLessThanOrEqual(7.5)
     expect(rels).toBeTruthy()
+  })
+
+  it('preserves edge spaces, keeps plain callouts plain, uses source rect for boxed callouts/code, and restores feature matrix icons', async () => {
+    const spacedRuns = toPptxRuns(' (Sulfuric Acid)')
+    expect(spacedRuns[0].text).toBe(' (Sulfuric Acid)')
+
+    const model = {
+      pageNum: 1,
+      mode: 'rich',
+      w: 595.28,
+      h: 841.89,
+      lines: [],
+      blocks: [
+        { type: 'callout', lines: [{ x: 48, y: 760, size: 10, text: 'IMPORTANT: Plain italic note.' }] },
+        { type: 'callout', lines: [{ x: 48, y: 700, size: 10, text: '[NOTE] Boxed admonition.' }] },
+        {
+          type: 'table',
+          x0: 48,
+          yMax: 600,
+          yMin: 500,
+          numCols: 3,
+          tableWidth: 500,
+          rows: [
+            { isHeader: true, cells: [{ text: 'Feature' }, { text: 'Free' }, { text: 'Pro' }] },
+            { cells: [{ text: 'PDF/A' }, { text: 'No' }, { text: 'Included' }] },
+          ],
+        },
+      ],
+      images: [],
+      vector: {
+        rects: [
+          { x: 48, y: 685, w: 500, h: 30, fill: 'F8FAFC', stroke: 'CBD5E1' },
+        ],
+      },
+    }
+    const res = await buildPptxBlob([model], { slideLayout: 'auto' })
+    const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
+    const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
+    expect(xml).toContain('F8FAFC')
+    expect(xml).toContain('Segoe UI Symbol')
+    expect(xml).toContain('<a:t>✗</a:t>')
+    expect(xml).toContain('<a:t> No</a:t>')
+    expect(xml).toContain('<a:t>✓</a:t>')
+    expect(xml).toContain('<a:t> Included</a:t>')
   })
 })
