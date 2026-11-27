@@ -208,7 +208,14 @@ export function toPptxRuns(text, o = {}, fontScale = 1) {
       }))
 
   for (const chunk of urlChunks) {
-    for (const part of splitScriptChars(chunk.text)) {
+    let displayChunk = chunk.text
+    if (chunk.isUrl && chunk.text.length >= 45) {
+      const mp = chunk.text.match(/^(https?:\/\/)(.*)$/i)
+      displayChunk = mp
+        ? mp[1] + mp[2].replace(/([/?&=_-])/g, '$1\u200B')
+        : chunk.text.replace(/([/?&=_-])/g, '$1\u200B')
+    }
+    for (const part of splitScriptChars(displayChunk)) {
       const script = part.script || forcedScript
       for (const seg of U.segmentByScript(part.text)) {
         const opts = {
@@ -628,7 +635,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
     rtlMode: rtl || undefined,
     indentLevel: isBullet ? clamp(level, 0, 6) : 0,
   })
-  return y + clampedH + (isBullet || isHier ? 0.02 : isLegal ? 0.06 : 0.025)
+  return y + clampedH + (isBullet || isHier ? 0.015 : isLegal ? 0.05 : 0.015)
 }
 
 /** Semantic renderer for Phase 01..05 workflow tables (Slide 12). */
@@ -841,11 +848,6 @@ export function isLikelyHeaderRow(row, rowIndex, rows) {
 }
 
 function addTableToSlide(slide, block, ctx, cursorY) {
-  const semanticWf = tryAddWorkflowDiagram(slide, block, ctx, cursorY)
-  if (semanticWf != null) return semanticWf
-  const semanticTl = tryAddIncidentTimeline(slide, block, ctx, cursorY)
-  if (semanticTl != null) return semanticTl
-
   const { tr, m, slideDims } = ctx
   const numCols = Math.max(1, block.numCols || block.colWidths?.length || 1)
   const rawW = Number.isFinite(block.tableWidth) && block.tableWidth >= 100
@@ -923,8 +925,11 @@ function addTableToSlide(slide, block, ctx, cursorY) {
       const isPosPct = POS_PCT_RE.test(rawText)
       const isHdr = !!(r.isHeader || c.isHeader || ri === headerRowIndex)
 
-      const bgHex = isHdr ? hdrBg : (U.normHex(c.fill) || (ri % 2 === 1 ? 'F8FAFC' : 'FFFFFF'))
-      let fgHex = isHdr ? hdrFg : U.contrastText(bgHex)
+      const cellFill = U.normHex(c.fill)
+      const bgHex = (ri > 0 && cellFill)
+        ? cellFill
+        : (isHdr ? hdrBg : (cellFill || (ri % 2 === 1 ? 'F8FAFC' : 'FFFFFF')))
+      let fgHex = (isHdr && !(ri > 0 && cellFill)) ? hdrFg : U.contrastText(bgHex)
       if (!isHdr) {
         if (isNegCurrency) fgHex = 'B91C1C'
         else if (isPosPct) fgHex = '047857'
@@ -932,7 +937,8 @@ function addTableToSlide(slide, block, ctx, cursorY) {
 
       const baseCellFont = Math.min(c.fontSize || densityFont, densityFont)
       const cellPt = clamp(baseCellFont * tr.fontScale, 6.2, 16)
-      const align = isRtl ? 'right' : (isNum ? 'right' : (c.align || 'left'))
+      const isBanner = (c.columnSpan || 1) >= numCols && numCols > 1
+      const align = isRtl ? 'right' : (isBanner ? 'center' : (isNum ? 'right' : (c.align || 'left')))
       const cellRuns = toPptxRuns(rawText, {
         size: baseCellFont,
         bold: !!(c.bold || isHdr || isSummaryRow),
@@ -947,9 +953,9 @@ function addTableToSlide(slide, block, ctx, cursorY) {
         fontSize: Math.round(cellPt * 10) / 10,
         align,
         valign: 'middle',
-        margin: isDenseTable ? [2, 5, 2, 5] : [4, 6, 4, 6],
+        margin: isDenseTable ? [2, 5, 2, 5] : [3, 6, 3, 6],
         rtlMode: isRtl || undefined,
-        border: { pt: 0.5, color: borderHex },
+        border: { pt: clamp(vt?.borderWidth || 0.75, 0.5, 1.5), color: borderHex },
       }
       if ((c.columnSpan || 1) > 1) cellOpts.colspan = c.columnSpan
       if (rowspan > 1) cellOpts.rowspan = rowspan
@@ -969,13 +975,13 @@ function addTableToSlide(slide, block, ctx, cursorY) {
       const span = Math.max(1, c.columnSpan || 1)
       const wIn = colWInches.slice(col, col + span).reduce((a, b) => a + b, 0) || 1
       const font = Math.min(c.fontSize || densityFont, densityFont)
-      const charsPerLine = Math.max(5, Math.floor((wIn * 72) / (font * 0.52)))
+      const charsPerLine = Math.max(5, Math.floor((wIn * 72) / (font * 0.48)))
       maxLines = Math.max(maxLines, Math.ceil((c.text || '').length / charsPerLine))
       col += span
     }
     return isDenseTable
-      ? clamp(0.12 * maxLines + 0.11, 0.21, 0.55)
-      : clamp(0.14 * maxLines + 0.16, 0.24, 0.62)
+      ? clamp(0.115 * maxLines + 0.10, 0.21, 0.55)
+      : clamp(0.13 * maxLines + 0.14, 0.23, 0.62)
   })
 
   const topPt = blockTopPt(block, m)

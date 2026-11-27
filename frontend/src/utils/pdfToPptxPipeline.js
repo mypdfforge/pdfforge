@@ -66,12 +66,42 @@ export function restoreVisualRtlText(text, pageLines = null) {
   return reverseLine(text)
 }
 
+function repairBrokenLongTokens(text) {
+  if (!text || text.length < 40) return text
+  let out = text
+  if (/https?:\/\//i.test(out)) {
+    let prev
+    do {
+      prev = out
+      out = out.replace(/(https?:\/\/\S*?)\s+([a-z0-9\-_./?&=+%]+)/gi, (m, left, right) => {
+        if (/[/?&=_-]$/.test(left) || /[/?&=._]/.test(right) || right.length >= 20) return left + right
+        return m
+      })
+    } while (out !== prev)
+  }
+  out = out.replace(/([A-Za-z0-9+/]{30,})\s+([A-Za-z0-9+/=]{16,})/g, '$1$2')
+  return out
+}
+
 /**
  * Coalesces shattered code blocks and splits accidentally merged list-item paragraphs
  * without altering the shared PDF-to-Word segmentation modules.
  */
 export function normalizeModelForPptx(m) {
   if (!m || m.mode === 'failed' || m.pageImage || !Array.isArray(m.blocks)) return m
+
+  // 0. Repair PDF line-wrap spaces inside long URLs and Base64 strings
+  for (const b of m.blocks) {
+    if (b.type === 'paragraph' && b.line && !b.line.isCode) {
+      const fixed = repairBrokenLongTokens(b.line.text)
+      if (fixed !== b.line.text) {
+        b.line.text = fixed
+        if (Array.isArray(b.line.spans) && b.line.spans.length) {
+          b.line.spans = [{ ...b.line.spans[0], text: fixed }]
+        }
+      }
+    }
+  }
 
   // 1. Restore visual-order RTL inside table cells first (using unmutated m.lines for line boundaries)
   for (const b of m.blocks) {

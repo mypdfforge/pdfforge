@@ -190,8 +190,9 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     const res = await buildPptxBlob([m], { slideLayout: 'auto' })
     const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
     const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
-    expect(xml).not.toContain('\u200B')
-    expect(xml).toContain('https://subdomain.example.com/api/v4/tenants/018f6c43-9821-7299-8231/download')
+    const rels = await zip.file('ppt/slides/_rels/slide1.xml.rels')?.async('string')
+    expect(xml).toContain('https://subdomain.example.com/\u200B')
+    expect(rels).toContain('https://subdomain.example.com/api/v4/tenants/018f6c43-9821-7299-8231/download')
     expect(xml).toContain('Section 8 (Data Confidentiality).')
   })
 
@@ -233,7 +234,8 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(xml).toContain('✓')
     expect(xml).toContain('prst="ellipse"')
     expect(xml).toContain('prst="line"')
-    expect(xml).toContain('prst="downArrow"')
+    expect(xml).toContain('<a:tbl>')
+    expect(xml).toContain('Phase 01: Ingest')
   })
 
   it('restores pre-reversed visual-order RTL and coalesces fragmented code blocks', () => {
@@ -403,9 +405,12 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(urlCoalesced.blocks).toHaveLength(1)
     expect(urlCoalesced.blocks[0].line.text).toContain('data-pipelines/executions/')
 
-    const urlRuns = toPptxRuns('See https://example.com/docs for details')
-    const linkRun = urlRuns.find((r) => r.text === 'https://example.com/docs')
-    expect(linkRun?.options?.hyperlink?.url).toBe('https://example.com/docs')
+    const urlRuns = toPptxRuns('See https://example.com/api/v4/data-pipelines/executions?mode=fast for details')
+    const linkRun = urlRuns.find((r) => r.options?.hyperlink?.url)
+    expect(linkRun?.options?.hyperlink?.url).toBe('https://example.com/api/v4/data-pipelines/executions?mode=fast')
+    expect(linkRun?.text).toContain('/\u200B')
+    expect(linkRun?.text).toContain('?\u200B')
+    expect(linkRun?.text).toContain('=\u200B')
 
     const tocRows = Array.from({ length: 25 }, (_, i) => ({
       cells: [{ text: `${i + 1}. Chapter ${i + 1}` }, { text: `Page ${i + 1}` }],
