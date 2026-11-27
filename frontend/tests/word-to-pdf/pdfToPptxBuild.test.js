@@ -554,7 +554,7 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
         { type: 'paragraph', line: { x: 48, y: 760, size: 10.5, text: '1. First numbered item' } },
         { type: 'paragraph', line: { x: 48, y: 742, size: 10.5, text: '2. Second numbered item' } },
         { type: 'paragraph', line: { x: 48, y: 700, size: 10.5, text: '•   Global Infrastructure Layer', isListLike: true } },
-        { type: 'callout', lines: [{ x: 48, y: 650, size: 10, text: '[NOTE] Neutral box.' }] },
+        { type: 'callout', admonition: { color: '3B82F6' }, lines: [{ x: 48, y: 650, size: 10, text: '[NOTE] Neutral box.' }] },
       ],
       images: [],
       vector: {

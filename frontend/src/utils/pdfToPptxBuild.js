@@ -287,12 +287,14 @@ function buildSlideIndentLevels(m) {
     if (last != null && Math.abs(x - last) <= 4.5) continue
     clusters.push(x)
   }
+  let hasHier = false
   for (const b of m.blocks || []) {
     if (b.type !== 'paragraph' || !b.line) continue
     const l = b.line
     const t = (l.text || '').trim()
     const hier = t.match(HIER_NUM_RE)
     if (hier) {
+      hasHier = true
       const depth = clamp(hier[1].replace(/\.$/, '').split('.').length - 1, 0, 6)
       map.set(l, { kind: 'hier', prefix: hier[1], body: hier[2], level: depth })
       continue
@@ -300,6 +302,17 @@ function buildSlideIndentLevels(m) {
     if (clusters.length > 1 && Number.isFinite(l.x)) {
       const idx = clusters.findIndex((cx) => Math.abs(cx - l.x) <= 4.5)
       if (idx >= 0) map.set(l, { kind: 'xcluster', level: clamp(idx, 0, 6) })
+    }
+  }
+  if (hasHier) {
+    for (const b of m.blocks || []) {
+      if (b.type !== 'paragraph' || !b.line) continue
+      const l = b.line
+      if (map.get(l)?.kind === 'hier') continue
+      const t = (l.text || '').trim()
+      if (/^Section\s+/i.test(t)) continue
+      const sm = t.match(SIMPLE_NUM_RE)
+      if (sm) map.set(l, { kind: 'hier', prefix: sm[1], body: sm[2], level: 0 })
     }
   }
   return map
@@ -1213,7 +1226,7 @@ function addCalloutToSlide(slide, block, ctx, cursorY) {
       ]
     : [{ text: rawText, options: { color: body, fontSize, fontFace: 'Arial' } }]
 
-  if (accent) {
+  if (accent && !src) {
     slide.addShape('rect', { x, y, w, h, fill: { color: fill }, line: { color: stroke, width: strokeW } })
     slide.addShape('rect', { x, y, w: 0.07, h, fill: { color: accent }, line: { color: accent, width: 0 } })
     slide.addText(runs, { x: x + 0.1, y: y + 0.02, w: w - 0.2, h: h - 0.04, margin: 4, valign: 'middle', wrap: true })
