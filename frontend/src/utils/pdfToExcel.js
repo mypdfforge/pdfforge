@@ -120,11 +120,16 @@ async function extractPage(page, boldFonts) {
 
   const items = deduplicateOverlappingText(rawItems)
 
-  const hLines = [], vLines = [], rects = []
-  let ctm = [1, 0, 0, 1, 0, 0], fill = [0, 0, 0], stroke = [0, 0, 0], lw = 1
+  const hLines = [], vLines = [], rects = [], textOps = []
+  let ctm = [1, 0, 0, 1, 0, 0], tlm = [1, 0, 0, 1, 0, 0], fill = [0, 0, 0], stroke = [0, 0, 0], lw = 1
   const stack = []
   let pending = null
   let order = 0
+
+  const recordTextOp = () => {
+    const M = Util.transform(vp.transform, Util.transform(ctm, tlm))
+    textOps.push({ x: M[4], y: M[5], col: [...fill] })
+  }
 
   const commit = (doFill, doStroke) => {
     if (!pending) return
@@ -164,6 +169,20 @@ async function extractPage(page, boldFonts) {
       case OPS.save: stack.push({ ctm: [...ctm], fill: [...fill], stroke: [...stroke], lw }); break
       case OPS.restore: if (stack.length) ({ ctm, fill, stroke, lw } = stack.pop()); break
       case OPS.transform: ctm = Util.transform(ctm, a); break
+      case OPS.paintFormXObjectBegin:
+        stack.push({ ctm: [...ctm], fill: [...fill], stroke: [...stroke], lw })
+        if (Array.isArray(a?.[0])) ctm = Util.transform(ctm, a[0])
+        break
+      case OPS.paintFormXObjectEnd:
+        if (stack.length) ({ ctm, fill, stroke, lw } = stack.pop())
+        break
+      case OPS.beginText: tlm = [1, 0, 0, 1, 0, 0]; break
+      case OPS.setTextMatrix: if (Array.isArray(a) && a.length >= 6) tlm = [...a]; break
+      case OPS.moveText: tlm = Util.transform(tlm, [1, 0, 0, 1, a[0] || 0, a[1] || 0]); break
+      case OPS.setLeadingMoveText: tlm = Util.transform(tlm, [1, 0, 0, 1, a[0] || 0, a[1] || 0]); break
+      case OPS.showText: case OPS.showSpacedText: case OPS.nextLineShowText: case OPS.nextLineSetSpacingShowText:
+        recordTextOp()
+        break
       case OPS.setLineWidth: lw = a[0]; break
       case OPS.setFillRGBColor: {
         const sc = a[0] <= 1 && a[1] <= 1 && a[2] <= 1 && (a[0] > 0 || a[1] > 0 || a[2] > 0) ? 255 : 1
@@ -268,6 +287,18 @@ async function extractPage(page, boldFonts) {
       case OPS.fill: case OPS.eoFill: commit(true, false); break
       case OPS.fillStroke: case OPS.eoFillStroke: case OPS.closeFillStroke: case OPS.closeEOFillStroke: commit(true, true); break
       case OPS.endPath: pending = null; break
+    }
+  }
+  if (textOps.length) {
+    for (const it of items) {
+      let best = null, bestD = 12
+      for (const op of textOps) {
+        const d = Math.hypot(op.x - it.x, op.y - it.base)
+        if (d < bestD) { bestD = d; best = op }
+      }
+      if (best && (best.col[0] > 15 || best.col[1] > 15 || best.col[2] > 15)) {
+        it.color = best.col
+      }
     }
   }
   return { items, hLines, vLines, rects, W: vp.width, H: vp.height }
@@ -413,8 +444,17 @@ function cellText(its, cellW) {
 }
 
 const NUM_RE = /^\d{1,3}(,\d{2,3})*(\.\d+)?$|^\d+(\.\d+)?$/
+const SCI_RE = /^[+-]?\d+(\.\d+)?[eE][+-]?\d+$/
 function parseNum(s) {
   let t = s.trim(), neg = false, cur = ''
+  if (SCI_RE.test(t)) return { v: parseFloat(t), dec: 2, sci: true, cur: '' }
+  if (/%$/.test(t)) {
+    const inner = t.slice(0, -1).trim().replace(/,/g, '')
+    if (/^[+-]?\d+(\.\d+)?$/.test(inner)) {
+      const dec = (inner.split('.')[1] || '').length
+      return { v: parseFloat(inner) / 100, dec: Math.min(dec, 4), pct: true, cur: '' }
+    }
+  }
   if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1).trim() }
   if (/^[-−]/.test(t)) { neg = true; t = t.slice(1).trim() }
   if (/[-−]$/.test(t)) { t = t.replace(/[-−]+$/, '').trim() }
@@ -424,12 +464,46 @@ function parseNum(s) {
   const dec = (t.split('.')[1] || '').length
   return { v: (neg ? -1 : 1) * parseFloat(t.replace(/,/g, '')), dec, comma: t.includes(','), cur: cur.startsWith('R') ? '₹' : cur }
 }
-const numFmt = (n, dec = n.dec) => (n.cur ? `"${n.cur}"` : '') + (dec ? '#,##0.' + '0'.repeat(dec) : n.comma ? '#,##0' : '0')
+const numFmt = (n, dec = n.dec) =>
+  n.sci ? '0.00E+00'
+  : n.pct ? (dec ? '0.' + '0'.repeat(dec) + '%' : '0%')
+  : (n.cur ? `"${n.cur}"` : '') + (dec ? '#,##0.' + '0'.repeat(dec) : n.comma ? '#,##0' : '0')
+
+async function ocrPageItems(page, onProgress, pageNum, totalPages) {
+  if (typeof document === 'undefined') return []
+  const { getPaddleOCREngine, ocrRawLines } = await import('./paddleOcr.js')
+  const { engine, pack } = await getPaddleOCREngine((p) => {
+    onProgress?.({ done: pageNum - 1, total: totalPages, label: p.label || 'Loading OCR engine…' })
+  })
+  onProgress?.({ done: pageNum - 1, total: totalPages, label: `Running free OCR on page ${pageNum} of ${totalPages}…` })
+  const scale = 2
+  const vp = page.getViewport({ scale })
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.floor(vp.width)
+  canvas.height = Math.floor(vp.height)
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  await page.render({ canvasContext: ctx, viewport: vp }).promise
+  const lines = await ocrRawLines(engine, ctx.getImageData(0, 0, canvas.width, canvas.height), { pack })
+  canvas.width = 0; canvas.height = 0
+  return lines
+    .filter((ln) => ln.text && ln.text.trim() && Array.isArray(ln.box) && ln.box.length >= 4)
+    .map((ln) => {
+      const xs = ln.box.map((p) => p[0] / scale), ys = ln.box.map((p) => p[1] / scale)
+      const x = Math.min(...xs), x1 = Math.max(...xs), top = Math.min(...ys), bot = Math.max(...ys)
+      const size = Math.max(bot - top, 7)
+      return { str: ln.text.trim(), x, w: Math.max(x1 - x, 4), base: bot - size * 0.15, size, top, bot, bold: false, italic: false, font: 'Calibri' }
+    })
+}
 
 // ───────────────────────── 5. PAGE -> BLOCKS ─────────────────────────
-async function pageToBlocks(page, opts, boldFonts) {
+async function pageToBlocks(page, opts, boldFonts, onProgress, pageNum, totalPages) {
   const ex = await extractPage(page, boldFonts)
+  let rawCount = ex.items.length
   let items = opts.dropRedacted === false ? ex.items : dropRedacted(ex.items, ex.rects, ex.W)
+  if (items.length === 0 && opts.useOcr) {
+    items = await ocrPageItems(page, onProgress, pageNum, totalPages)
+    rawCount = items.length
+  }
   const tables = findTables(ex.hLines, ex.vLines)
 
   // assign items to tables
@@ -452,7 +526,7 @@ async function pageToBlocks(page, opts, boldFonts) {
     for (const r of ex.rects) { // later-drawn rects win
       const ox = Math.min(k.r, r.x1) - Math.max(k.l, r.x0), oy = Math.min(k.b, r.y1) - Math.max(k.t, r.y0)
       const tableArea = (t.right - t.left) * (t.bottom - t.top)
-      if (ox > 0 && oy > 0 && (ox * oy) / area >= CFG.FILL_MIN && (r.x1 - r.x0) * (r.y1 - r.y0) < tableArea * 0.9 && lum(r.col) >= 0.25 && lum(r.col) < 0.97) k.fill = r.col
+      if (ox > 0 && oy > 0 && (ox * oy) / area >= CFG.FILL_MIN && (r.x1 - r.x0) * (r.y1 - r.y0) < tableArea * 0.9 && lum(r.col) < 0.97) k.fill = r.col
     }
   }
 
@@ -464,11 +538,17 @@ async function pageToBlocks(page, opts, boldFonts) {
       const s = segs[segs.length - 1], last = s && s.items[s.items.length - 1]
       if (s && it.x - (last.x + last.w) <= size * CFG.SEG_GAP) s.items.push(it); else segs.push({ items: [it] })
     }
-    segs.forEach((s) => { s.x = s.items[0].x; s.w = s.items[s.items.length - 1].x + s.items[s.items.length - 1].w - s.x; s.text = joinItems(s.items) })
+    segs.forEach((s) => {
+      s.x = s.items[0].x; s.w = s.items[s.items.length - 1].x + s.items[s.items.length - 1].w - s.x; s.text = joinItems(s.items)
+      const cy = l.base - size * 0.3
+      for (const r of ex.rects) {
+        if (s.x + s.w / 2 >= r.x0 && s.x + s.w / 2 <= r.x1 && cy >= r.y0 && cy <= r.y1 && (r.y1 - r.y0) < size * 4 && lum(r.col) < 0.97) s.fill = r.col
+      }
+    })
     blocks.push({ type: 'line', top: l.base - size * 0.8, size, segs })
   }
   blocks.sort((a, b) => a.top - b.top)
-  return { blocks, W: ex.W, H: ex.H, tableCount: tables.length, itemsCount: items.length, rawItemsCount: ex.items.length }
+  return { blocks, W: ex.W, H: ex.H, tableCount: tables.length, itemsCount: items.length, rawItemsCount: rawCount }
 }
 
 // stream-mode columns (no ruled tables): gaps in the union of segment x-intervals
@@ -520,7 +600,10 @@ function layout(ws, pages) {
         if (n) c.numFmt = numFmt(n)
         const nonSpaceItems = s.items.filter(i => i.str.trim())
         const isBold = nonSpaceItems.length > 0 && nonSpaceItems.some(i => i.bold)
-        c.font = { name: fontName(s.items[0].font), size: fontSize, bold: isBold, italic: s.items.some((i) => i.italic) }
+        const tc = s.items.find((i) => i.color)?.color
+        const fontColor = s.fill && lum(s.fill) < 0.4 ? { color: { argb: 'FFFFFFFF' } } : tc && (!s.fill || lum(tc) < 0.9) ? { color: { argb: argb(tc) } } : {}
+        c.font = { name: fontName(s.items[0].font), size: fontSize, bold: isBold, italic: s.items.some((i) => i.italic), ...fontColor }
+        if (s.fill) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argb(s.fill) } }
         c.alignment = { vertical: 'middle', horizontal: n ? 'right' : 'left' }
       }
       row++; prevBottom = b.top + h
@@ -549,7 +632,9 @@ function layout(ws, pages) {
         const nonSpaceItems = k.items ? k.items.filter(i => i.str.trim()) : []
         const isBold = nonSpaceItems.length > 0 && nonSpaceItems.some(i => i.bold)
         const f = k.items.find((i) => i.size === size) || k.items[0]
-        m.font = { name: fontName(f.font), size: fontSize, bold: isBold, italic: k.items.some((i) => i.italic), ...(k.fill && lum(k.fill) < 0.4 ? { color: { argb: 'FFFFFFFF' } } : {}) }
+        const tc = k.items.find((i) => i.color)?.color
+        const fontColor = k.fill && lum(k.fill) < 0.4 ? { color: { argb: 'FFFFFFFF' } } : tc && (!k.fill || lum(tc) < 0.9) ? { color: { argb: argb(tc) } } : {}
+        m.font = { name: fontName(f.font), size: fontSize, bold: isBold, italic: k.items.some((i) => i.italic), ...fontColor }
         if (k.r0 === k.r1) {
           const colChars = Math.max(8, (cw * 1.3333 - 5) / 7)
           const lines = tx.text.split('\n')
@@ -649,13 +734,15 @@ export async function pdfToExcel(file, onProgress, options = {}) {
   let totalTextItems = 0
   for (let i = 1; i <= pdf.numPages; i++) {
     onProgress?.({ done: i, total: pdf.numPages, label: `Extracting table from page ${i} of ${pdf.numPages}…` })
-    const pageData = await pageToBlocks(await pdf.getPage(i), options, boldFonts)
+    const pageData = await pageToBlocks(await pdf.getPage(i), options, boldFonts, onProgress, i, pdf.numPages)
     totalTextItems += Math.max(pageData.itemsCount || 0, pageData.rawItemsCount || 0)
     pages.push(pageData)
   }
 
   if (totalTextItems === 0) {
-    throw new Error('No selectable text was found in this PDF. It appears to be a scanned document or image. Please use the OCR tool first to make the text selectable.')
+    const err = new Error('No selectable text was found in this PDF. It appears to be a scanned or image-based document.')
+    err.code = 'NO_TEXT_LAYER'
+    throw err
   }
 
   const groups = options.singleSheet ? [pages] : pages.map((p) => [p])

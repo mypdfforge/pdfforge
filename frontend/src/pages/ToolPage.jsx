@@ -41,7 +41,7 @@ const CONFIGS = {
   'html-to-pdf':{ title:'HTML to PDF',       desc:'Convert HTML file to PDF.',             guide:'Renders full CSS3, Flexbox, Grid. Sliced into A4 pages. Sandboxed iframe, zero network. 100% on-device. Upload multiple HTML files to batch-convert.', multi:true, accept:{'text/html':['.html','.htm']}, fields:[], action:(f,v,onP)=>batchHtmlToPdf(f,onP), out:(f)=>f.length>1?'html_to_pdf.zip':'converted.pdf', noPreview:true, clientSide:true },
   'pdf-to-jpg': { title:'PDF to JPG',        desc:'Convert pages to JPG (ZIP).',           guide:'Each page becomes a JPG. Upload multiple PDFs to batch-convert all their pages into one ZIP.', multi:true, fields:[], action:(f,v,onP)=>clientBatchPdfToJpg(f,onP), out:(f)=>'pdf_images_jpg.zip', mime:'application/zip', noPreview:true, clientSide:true },
   'pdf-to-pptx':{ title:'PDF to PowerPoint', desc:'Convert PDFs to editable slides.',       guide:'Extracts text, tables, and images into editable .pptx slides (with automatic image fallback for scanned pages).', multi:true, fields:[], action:(f,v,onP)=>batchPdfToPptx(f,onP), out:(f)=>f.length>1?'pdf_to_pptx.zip':'converted.pptx', mime:(f)=>f.length>1?'application/zip':'application/vnd.openxmlformats-officedocument.presentationml.presentation', noPreview:true, clientSide:true },
-  'pdf-to-xlsx':{ title:'PDF to Excel',      desc:'Extract content to spreadsheet.',       guide:'Preserves column alignment, table grid, numbers, borders, fills, and headers. 100% on-device. Upload multiple PDFs to batch-convert.', multi:true, fields:[{ id:'singleSheet', label:'Combine all pages into a single sheet', type:'checkbox', default:false }], action:(f,v,onP)=>batchPdfToExcel(f,onP,{ singleSheet: !!v.singleSheet }), out:(f)=>f.length>1?'pdf_to_excel.zip':'converted.xlsx', mime:(f)=>f.length>1?'application/zip':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', noPreview:true, clientSide:true },
+  'pdf-to-xlsx':{ title:'PDF to Excel',      desc:'Extract content to spreadsheet.',       guide:'Preserves column alignment, table grid, numbers, borders, fills, and headers. 100% on-device. Upload multiple PDFs to batch-convert.', multi:true, fields:[{ id:'singleSheet', label:'Combine all pages into a single sheet', type:'checkbox', default:false }], action:(f,v,onP)=>batchPdfToExcel(f,onP,{ singleSheet: !!v.singleSheet, useOcr: !!v.useOcr }), out:(f)=>f.length>1?'pdf_to_excel.zip':'converted.xlsx', mime:(f)=>f.length>1?'application/zip':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', noPreview:true, clientSide:true },
   'pdf-to-pdfa':{ title:'PDF to PDF/A',      desc:'Archive-compliant PDF/A-1b.',            guide:'Injects XMP metadata (pdfaid:part + pdfaid:conformance), sRGB OutputIntent, strips JS/launch actions. 100% on-device. Upload multiple PDFs to batch-convert.', multi:true, fields:[], action:(f,v,onP)=>batchPdfToPdfa(f,onP), out:(f)=>f.length>1?'pdf_to_pdfa.zip':'converted_pdfa.pdf', noPreview:true, clientSide:true },
   pagenums:     { title:'Add Page Numbers',  desc:'Add page numbers to every page.',       guide:'Choose position.', fields:[{id:'position',label:'Position',type:'select',options:['bottom-center','bottom-right','top-center','top-right'],default:'bottom-center'}], action:(f,v)=>clientPageNumbers(f[0],v.position||'bottom-center'), out:'numbered.pdf', mime:'application/pdf', clientSide:true },
   crop:         { title:'Crop PDF',          desc:'Trim margins from all pages.',          guide:'Enter margin amounts in points (1pt ≈ 0.35mm).', fields:[{id:'left',label:'Left',placeholder:'0',default:'0'},{id:'top',label:'Top',placeholder:'0',default:'0'},{id:'right',label:'Right',placeholder:'0',default:'0'},{id:'bottom',label:'Bottom',placeholder:'0',default:'0'}], action:(f,v)=>clientCrop(f[0],v), out:'cropped.pdf', mime:'application/pdf', clientSide:true },
@@ -415,6 +415,8 @@ function LegacyToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, sh
   const [isEngineCached, setIsEngineCached] = useState(false)
   const [isIsolated, setIsIsolated] = useState(true)
   const [lastConvertedMode, setLastConvertedMode] = useState(null)
+  const [excelMode, setExcelMode] = useState('standard') // 'standard' | 'ocr'
+  const [excelNoText, setExcelNoText] = useState(false)
 
   // Auto-inspect Word documents for complex layout blockers
   useEffect(() => {
@@ -504,8 +506,8 @@ function LegacyToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, sh
 
   const runWithMode = async (modeOverride) => {
     if (!files.length) return
-    const activeMode = modeOverride || (toolId === 'word-to-pdf' ? wordMode : 'quick')
-    setStatus('loading'); setErrMsg(''); setProgress(null); setDownloadResult(null)
+    const activeMode = modeOverride || (toolId === 'word-to-pdf' ? wordMode : toolId === 'pdf-to-xlsx' ? excelMode : 'quick')
+    setStatus('loading'); setErrMsg(''); setProgress(null); setDownloadResult(null); setExcelNoText(false)
     try {
 
       // Helper: resolve `out` / `mime` — may be a function (f) => string or a plain string
@@ -617,7 +619,8 @@ function LegacyToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, sh
           return
         }
 
-        const res = await cfg.action(files, vals, onP)
+        const actionVals = toolId === 'pdf-to-xlsx' ? { ...vals, useOcr: activeMode === 'ocr' } : vals
+        const res = await cfg.action(files, actionVals, onP)
         // res = { data: blob, errors?: string[] } from converters
         const blob   = res?.data
         const errors = res?.errors   // partial-failure list from batch converters
@@ -663,7 +666,11 @@ function LegacyToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, sh
       setProgress(null)
       setStatus('done')
     } catch(e) {
-      setErrMsg(e.message || e.response?.data?.detail || 'Processing failed')
+      const msg = e.message || e.response?.data?.detail || 'Processing failed'
+      if (toolId === 'pdf-to-xlsx' && (e.code === 'NO_TEXT_LAYER' || /No selectable text was found/i.test(msg))) {
+        setExcelNoText(true)
+      }
+      setErrMsg(msg)
       setStatus('error'); setProgress(null)
     }
   }
@@ -982,6 +989,21 @@ function LegacyToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, sh
             </div>
           )}
           {status==='error' && (
+            toolId === 'pdf-to-xlsx' && excelNoText ? (
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px', flexWrap:'wrap', background:'rgba(34,197,94,0.08)', border:'1px solid rgba(34,197,94,0.35)', borderRadius:'10px', padding:'12px 14px', fontSize:'13px', color:'var(--text)' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:'8px', flex:1, minWidth:'200px' }}>
+                  <Info size={16} color="var(--green)" style={{ flexShrink:0 }}/>
+                  <span>This PDF has no selectable text (scanned or image-based). Convert it with our on-device OCR for <strong>free</strong>?</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setExcelMode('ocr'); runWithMode('ocr') }}
+                  style={{ background:'var(--green)', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 14px', fontSize:'12.5px', fontWeight:700, cursor:'pointer', flexShrink:0 }}
+                >
+                  Convert with OCR (Free)
+                </button>
+              </div>
+            ) : (
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'8px', background:'rgba(229,72,77,0.08)', border:'1px solid rgba(229,72,77,0.25)', borderRadius:'8px', padding:'10px 14px', fontSize:'13px', color:'var(--red)' }}>
               <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
                 <AlertCircle size={15}/> <span>{errMsg}</span>
@@ -1006,6 +1028,7 @@ function LegacyToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, sh
                 </button>
               )}
             </div>
+            )
           )}
           {progress && (
             <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'8px', padding:'12px' }}>
@@ -1025,6 +1048,54 @@ function LegacyToolPageInner({ toolId, onBack, dark, onToggleTheme, onGoHome, sh
               <div style={{ height:'6px', background:'var(--bg3)', borderRadius:'3px', overflow:'hidden' }}>
                 <div style={{ height:'100%', width:`${progress.total ? Math.min(100, Math.round((progress.current / progress.total) * 100)) : 100}%`, background:'var(--accent)', borderRadius:'3px', transition:'width 0.25s ease'}}/>
               </div>
+            </div>
+          )}
+          {toolId === 'pdf-to-xlsx' && (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginTop:'4px' }}>
+              <button
+                type="button"
+                onClick={() => setExcelMode('standard')}
+                disabled={!files.length || status === 'loading'}
+                style={{
+                  padding:'14px', borderRadius:'12px',
+                  border: excelMode === 'standard' ? '2px solid var(--accent)' : '1px solid var(--border)',
+                  background: excelMode === 'standard' ? 'var(--bg2)' : 'var(--bg)',
+                  cursor: !files.length || status === 'loading' ? 'not-allowed' : 'pointer',
+                  opacity: !files.length ? 0.45 : 1, textAlign:'left', display:'flex', flexDirection:'column', gap:'5px',
+                  transition:'all 0.15s ease',
+                }}
+              >
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%' }}>
+                  <span style={{ fontSize:'14px', fontWeight:700, color:'var(--text)' }}>⚡ Standard (Fast)</span>
+                  {excelMode === 'standard' && <span style={{ fontSize:'10px', fontWeight:700, color:'var(--accent)', background:'rgba(91,91,214,0.12)', border:'1px solid rgba(91,91,214,0.3)', borderRadius:'12px', padding:'2px 8px' }}>Selected</span>}
+                </div>
+                <p style={{ margin:0, fontSize:'11.5px', color:'var(--text3)', lineHeight:1.4 }}>
+                  Instant extraction for native PDFs with selectable text, colors &amp; tables.
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setExcelMode('ocr')}
+                disabled={!files.length || status === 'loading'}
+                style={{
+                  padding:'14px', borderRadius:'12px',
+                  border: excelMode === 'ocr' ? '2px solid var(--accent)' : '1px solid var(--border)',
+                  background: excelMode === 'ocr' ? 'var(--bg2)' : 'var(--bg)',
+                  cursor: !files.length || status === 'loading' ? 'not-allowed' : 'pointer',
+                  opacity: !files.length ? 0.45 : 1, textAlign:'left', display:'flex', flexDirection:'column', gap:'5px',
+                  transition:'all 0.15s ease',
+                }}
+              >
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:'100%', gap:'6px' }}>
+                  <span style={{ fontSize:'14px', fontWeight:700, color:'var(--text)' }}>🔍 OCR Mode</span>
+                  <span style={{ fontSize:'10px', fontWeight:700, color:'var(--green)', background:'rgba(34,197,94,0.12)', border:'1px solid rgba(34,197,94,0.3)', borderRadius:'12px', padding:'2px 8px' }}>
+                    {excelMode === 'ocr' ? 'Selected · Free' : 'Free'}
+                  </span>
+                </div>
+                <p style={{ margin:0, fontSize:'11.5px', color:'var(--text3)', lineHeight:1.4 }}>
+                  For scanned or image-based PDFs. Runs 100% on-device for free — no limits.
+                </p>
+              </button>
             </div>
           )}
           {toolId === 'word-to-pdf' ? (
