@@ -255,12 +255,17 @@ export function normalizeModelForPptx(m) {
       const sameStyle = Math.abs(pSz - cSz) <= 0.8 && !!prev.isBold === !!cur.isBold && !!prev.isItalic === !!cur.isItalic
       const looksWrapped = !/[.!?:]$/.test(prevTxt) || (prevTxt.length >= 65 && /^[a-z]/.test(curTxt))
       if (prevTxt && curTxt && !isSpecial(prev, prevTxt) && !isSpecial(cur, curTxt) && sameMargin && closeY && sameStyle && looksWrapped) {
-        prev.text = prevTxt + ' ' + curTxt
+        const lastToken = prevTxt.split(/\s+/).pop() || ''
+        const firstToken = curTxt.split(/\s+/)[0] || ''
+        const isUnbrokenCont = lastToken.length >= 45 && firstToken.length >= 20 && !/[.,;:!?]$/.test(lastToken)
+        const joiner = isUnbrokenCont ? '' : ' '
+        prev.text = prevTxt + joiner + curTxt
         if (Array.isArray(prev.spans)) {
           const curSpans = Array.isArray(cur.spans) && cur.spans.length
             ? cur.spans
             : [{ text: curTxt, size: cSz, bold: cur.isBold, italic: cur.isItalic }]
-          prev.spans.push({ text: ' ', size: pSz, bold: prev.isBold, italic: prev.isItalic }, ...curSpans)
+          if (joiner) prev.spans.push({ text: joiner, size: pSz, bold: prev.isBold, italic: prev.isItalic })
+          prev.spans.push(...curSpans)
         }
         if (Number.isFinite(cur.yBot)) prev.yBot = cur.yBot
         if (Number.isFinite(cur.xEnd)) prev.xEnd = Math.max(prev.xEnd || 0, cur.xEnd)

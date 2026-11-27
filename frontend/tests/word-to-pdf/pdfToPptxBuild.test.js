@@ -389,4 +389,67 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     // Superscript run should use parent line size (1100), not double-shrunk 710
     expect(xml).toContain('sz="1100" baseline="30000"')
   })
+
+  it('joins wrapped URLs without spaces, emits clickable hyperlinks, fits radio options on one row, and compacts dense TOC tables', async () => {
+    const urlCoalesced = normalizeModelForPptx({
+      pageNum: 1,
+      mode: 'rich',
+      lines: [],
+      blocks: [
+        { type: 'paragraph', line: { x: 48, y: 700, size: 9.5, text: 'https://subdomain.enterprise-analytics-platform.internal.corp/api/v4/data-pipelines/e' } },
+        { type: 'paragraph', line: { x: 48, y: 688, size: 9.5, text: 'xecutions/9876543210-abcdef/artifacts/download?export_mode=lz4' } },
+      ],
+    })
+    expect(urlCoalesced.blocks).toHaveLength(1)
+    expect(urlCoalesced.blocks[0].line.text).toContain('data-pipelines/executions/')
+
+    const urlRuns = toPptxRuns('See https://example.com/docs for details')
+    const linkRun = urlRuns.find((r) => r.text === 'https://example.com/docs')
+    expect(linkRun?.options?.hyperlink?.url).toBe('https://example.com/docs')
+
+    const tocRows = Array.from({ length: 25 }, (_, i) => ({
+      cells: [{ text: `${i + 1}. Chapter ${i + 1}` }, { text: `Page ${i + 1}` }],
+    }))
+    const model = {
+      pageNum: 1,
+      mode: 'rich',
+      w: 595.28,
+      h: 841.89,
+      lines: [],
+      blocks: [
+        {
+          type: 'paragraph',
+          line: {
+            x: 48,
+            y: 740,
+            size: 10,
+            text: '( ) Overall Rendering Precision: ( ) 1 - Poor ( ) 2 - Fair ( ) 3 - Good (X) 4 - Excellent ( ) 5 - Flawless',
+          },
+        },
+        {
+          type: 'table',
+          x0: 48,
+          yMax: 700,
+          yMin: 120,
+          numCols: 2,
+          tableWidth: 500,
+          rows: tocRows,
+        },
+      ],
+      images: [],
+      vector: { rects: [] },
+    }
+    const res = await buildPptxBlob([model], { slideLayout: 'auto' })
+    const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
+    const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
+    const rels = await zip.file('ppt/slides/_rels/slide1.xml.rels')?.async('string')
+    // All 5 radio options + label should stay on the same y row (only 1 distinct ellipse y coordinate)
+    const ellipseYs = [...xml.matchAll(/<a:off x="\d+" y="(\d+)"\/><a:ext cx="137160" cy="137160"\/>/g)].map((m) => m[1])
+    expect(new Set(ellipseYs).size).toBe(1)
+    // Compact 25-row TOC total height should be <= 6.2in (5,669,280 EMU)
+    const rowHs = [...xml.matchAll(/<a:tr h="(\d+)">/g)].map((m) => Number(m[1]))
+    expect(rowHs).toHaveLength(25)
+    expect(rowHs.reduce((a, b) => a + b, 0) / 914400).toBeLessThanOrEqual(6.2)
+    expect(rels).toBeTruthy()
+  })
 })

@@ -200,25 +200,35 @@ export function toPptxRuns(text, o = {}, fontScale = 1) {
   const forcedScript = o.sub ? 'sub' : o.sup ? 'sup' : null
   const runs = []
 
-  for (const part of splitScriptChars(clean)) {
-    const script = part.script || forcedScript
-    for (const seg of U.segmentByScript(part.text)) {
-      const opts = {
-        fontSize: Math.round(pt * 10) / 10,
-        bold: !!o.bold,
-        italic: !!o.italic,
-        strike: !!o.strike,
-        underline: o.underline ? { style: 'sng' } : undefined,
-        superscript: script === 'sup',
-        subscript: script === 'sub',
-        color,
-        fontFace: scriptFont(seg, o.code),
+  const urlChunks = o.code
+    ? [{ text: clean, isUrl: false }]
+    : clean.split(/(https?:\/\/[^\s<>()]+)/g).filter(Boolean).map((chunk) => ({
+        text: chunk,
+        isUrl: /^https?:\/\/[^\s<>()]+$/.test(chunk),
+      }))
+
+  for (const chunk of urlChunks) {
+    for (const part of splitScriptChars(chunk.text)) {
+      const script = part.script || forcedScript
+      for (const seg of U.segmentByScript(part.text)) {
+        const opts = {
+          fontSize: Math.round(pt * 10) / 10,
+          bold: !!o.bold,
+          italic: !!o.italic,
+          strike: !!o.strike,
+          underline: (o.underline || chunk.isUrl) ? { style: 'sng' } : undefined,
+          superscript: script === 'sup',
+          subscript: script === 'sub',
+          color: chunk.isUrl && !o.color ? '1D4ED8' : color,
+          fontFace: scriptFont(seg, o.code),
+        }
+        if (chunk.isUrl) opts.hyperlink = { url: chunk.text }
+        if (o.highlight) opts.highlight = o.highlight
+        if (o.smallCaps) opts.smallCaps = true
+        if (o.rtl || seg.script === 'rtl') opts.rtlMode = true
+        if (o.bullet && runs.length === 0) opts.bullet = o.bullet
+        runs.push({ text: seg.text, options: opts })
       }
-      if (o.highlight) opts.highlight = o.highlight
-      if (o.smallCaps) opts.smallCaps = true
-      if (o.rtl || seg.script === 'rtl') opts.rtlMode = true
-      if (o.bullet && runs.length === 0) opts.bullet = o.bullet
-      runs.push({ text: seg.text, options: opts })
     }
   }
   return runs
@@ -273,7 +283,7 @@ function tryAddFormControl(slide, line, ctx) {
   // 1. Checkbox row: "[ ] ..." or "[X] ..." or "☐ ..." / "☑ ..."
   const cbMatch = text.match(/^(\[\s*\]|\[[xX]\]|[☐☑])\s+(.*)$/)
   if (cbMatch) {
-    const checked = /\[[xX]\]|☑/.test(cbMatch[1])
+    const checked = /\[[xX✓]\]|☑/.test(cbMatch[1])
     const boxSize = 0.16
     slide.addShape('rect', {
       x: xBase,
@@ -323,7 +333,7 @@ function tryAddFormControl(slide, line, ctx) {
     for (const tok of radioTokens) {
       const selected = /[xX•●]/.test(tok[1])
       const label = tok[2].trim()
-      const estW = 0.24 + Math.min(2.8, Math.max(0.4, label.length * 0.075))
+      const estW = 0.2 + Math.min(2.2, Math.max(0.35, label.length * 0.062))
       if (curX + estW > slideDims.width - 0.2) {
         curX = xBase + 0.2
         curY += rowH
@@ -360,7 +370,7 @@ function tryAddFormControl(slide, line, ctx) {
           margin: 1,
         })
       }
-      curX += estW + 0.08
+      curX += estW + 0.04
     }
     return curY + rowH + 0.06
   }
@@ -614,7 +624,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
     margin: 2,
     wrap: true,
     lineSpacingMultiple: 1.15,
-    fit: hasLong ? 'shrink' : 'none',
+    fit: 'none',
     rtlMode: rtl || undefined,
     indentLevel: isBullet ? clamp(level, 0, 6) : 0,
   })
@@ -886,7 +896,8 @@ function addTableToSlide(slide, block, ctx, cursorY) {
   })
 
   const headerRowIndex = rows.findIndex((r, i) => isLikelyHeaderRow(r, i, rows))
-  const densityFont = numCols >= 7 ? 8.2 : numCols >= 5 ? 8.8 : 9.5
+  const isDenseTable = rows.length >= 12
+  const densityFont = numCols >= 7 ? 8.2 : numCols >= 5 ? 8.8 : (isDenseTable ? 9.0 : 9.5)
 
   const pptxRows = rows.map((r, ri) => {
     const rowLabel = (r.cells?.[0]?.text || '').trim()
@@ -936,7 +947,7 @@ function addTableToSlide(slide, block, ctx, cursorY) {
         fontSize: Math.round(cellPt * 10) / 10,
         align,
         valign: 'middle',
-        margin: [4, 6, 4, 6],
+        margin: isDenseTable ? [2, 5, 2, 5] : [4, 6, 4, 6],
         rtlMode: isRtl || undefined,
         border: { pt: 0.5, color: borderHex },
       }
@@ -962,7 +973,9 @@ function addTableToSlide(slide, block, ctx, cursorY) {
       maxLines = Math.max(maxLines, Math.ceil((c.text || '').length / charsPerLine))
       col += span
     }
-    return clamp(0.14 * maxLines + 0.16, 0.24, 0.62)
+    return isDenseTable
+      ? clamp(0.12 * maxLines + 0.11, 0.21, 0.55)
+      : clamp(0.14 * maxLines + 0.16, 0.24, 0.62)
   })
 
   const topPt = blockTopPt(block, m)
