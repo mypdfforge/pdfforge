@@ -400,10 +400,12 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
       blocks: [
         { type: 'paragraph', line: { x: 48, y: 700, size: 9.5, text: 'https://subdomain.enterprise-analytics-platform.internal.corp/api/v4/data-pipelines/e' } },
         { type: 'paragraph', line: { x: 48, y: 688, size: 9.5, text: 'xecutions/9876543210-abcdef/artifacts/download?export_mode=lz4' } },
+        { type: 'paragraph', line: { x: 48, y: 650, size: 9.5, text: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3f721N9yX0vH 2rS8G3mN6L8wP1qR4tY7uI9oK0jM2nB 4vC6xZ8lK0jM2nB' } },
       ],
     })
-    expect(urlCoalesced.blocks).toHaveLength(1)
+    expect(urlCoalesced.blocks).toHaveLength(2)
     expect(urlCoalesced.blocks[0].line.text).toContain('data-pipelines/executions/')
+    expect(urlCoalesced.blocks[1].line.text).not.toContain(' ')
 
     const urlRuns = toPptxRuns('See https://example.com/api/v4/data-pipelines/executions?mode=fast for details')
     const linkRun = urlRuns.find((r) => r.options?.hyperlink?.url)

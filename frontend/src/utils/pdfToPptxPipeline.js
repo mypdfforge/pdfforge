@@ -78,7 +78,11 @@ function repairBrokenLongTokens(text) {
       })
     } while (out !== prev)
   }
-  out = out.replace(/([A-Za-z0-9+/]{30,})\s+([A-Za-z0-9+/=]{16,})/g, '$1$2')
+  let b64Prev
+  do {
+    b64Prev = out
+    out = out.replace(/([A-Za-z0-9+/]{24,})\s+([A-Za-z0-9+/=]{12,})/g, '$1$2')
+  } while (out !== b64Prev)
   return out
 }
 
