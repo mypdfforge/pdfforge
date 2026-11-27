@@ -635,7 +635,7 @@ function addParagraphToSlide(slide, line, ctx, opts = {}) {
     rtlMode: rtl || undefined,
     indentLevel: isBullet ? clamp(level, 0, 6) : 0,
   })
-  return y + clampedH + (isBullet || isHier ? 0.015 : isLegal ? 0.05 : 0.015)
+  return y + clampedH + (isBullet || isHier ? 0.025 : isLegal ? 0.06 : 0.035)
 }
 
 /** Semantic renderer for Phase 01..05 workflow tables (Slide 12). */
@@ -898,8 +898,8 @@ function addTableToSlide(slide, block, ctx, cursorY) {
   })
 
   const headerRowIndex = rows.findIndex((r, i) => isLikelyHeaderRow(r, i, rows))
-  const isDenseTable = rows.length >= 12
-  const densityFont = numCols >= 7 ? 8.2 : numCols >= 5 ? 8.8 : (isDenseTable ? 9.0 : 9.5)
+  const isDenseTable = rows.length >= 15
+  const maxCellFont = numCols >= 7 ? 9.0 : numCols >= 5 ? 9.5 : 11.5
 
   const pptxRows = rows.map((r, ri) => {
     const rowLabel = (r.cells?.[0]?.text || '').trim()
@@ -935,7 +935,7 @@ function addTableToSlide(slide, block, ctx, cursorY) {
         else if (isPosPct) fgHex = '047857'
       }
 
-      const baseCellFont = Math.min(c.fontSize || densityFont, densityFont)
+      const baseCellFont = Math.min(c.fontSize || 10, maxCellFont)
       const cellPt = clamp(baseCellFont * tr.fontScale, 6.2, 16)
       const isBanner = (c.columnSpan || 1) >= numCols && numCols > 1
       const align = isRtl ? 'right' : (isBanner ? 'center' : (isNum ? 'right' : (c.align || 'left')))
@@ -953,7 +953,7 @@ function addTableToSlide(slide, block, ctx, cursorY) {
         fontSize: Math.round(cellPt * 10) / 10,
         align,
         valign: 'middle',
-        margin: isDenseTable ? [2, 5, 2, 5] : [3, 6, 3, 6],
+        margin: isDenseTable ? [3, 5, 3, 5] : [4, 6, 4, 6],
         rtlMode: isRtl || undefined,
         border: { pt: clamp(vt?.borderWidth || 0.75, 0.5, 1.5), color: borderHex },
       }
@@ -974,14 +974,14 @@ function addTableToSlide(slide, block, ctx, cursorY) {
     for (const c of r.cells || []) {
       const span = Math.max(1, c.columnSpan || 1)
       const wIn = colWInches.slice(col, col + span).reduce((a, b) => a + b, 0) || 1
-      const font = Math.min(c.fontSize || densityFont, densityFont)
+      const font = Math.min(c.fontSize || 10, maxCellFont)
       const charsPerLine = Math.max(5, Math.floor((wIn * 72) / (font * 0.48)))
       maxLines = Math.max(maxLines, Math.ceil((c.text || '').length / charsPerLine))
       col += span
     }
     return isDenseTable
-      ? clamp(0.115 * maxLines + 0.10, 0.21, 0.55)
-      : clamp(0.13 * maxLines + 0.14, 0.23, 0.62)
+      ? clamp(0.14 * maxLines + 0.14, 0.27, 0.60)
+      : clamp(0.16 * maxLines + 0.19, 0.30, 0.72)
   })
 
   const topPt = blockTopPt(block, m)
