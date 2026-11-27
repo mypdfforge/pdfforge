@@ -1226,20 +1226,17 @@ function addCalloutToSlide(slide, block, ctx, cursorY) {
       ]
     : [{ text: rawText, options: { color: body, fontSize, fontFace: 'Arial' } }]
 
-  if (accent && !src) {
-    slide.addShape('rect', { x, y, w, h, fill: { color: fill }, line: { color: stroke, width: strokeW } })
+  // Box fill + border on the text box itself, plus a thin left accent bar when accented
+  slide.addText(runs, {
+    x, y, w, h,
+    fill: { color: fill },
+    line: { color: stroke, width: strokeW },
+    margin: accent ? [4, 8, 4, 12] : [4, 8, 4, 8],
+    valign: 'middle',
+    wrap: true,
+  })
+  if (accent) {
     slide.addShape('rect', { x, y, w: 0.07, h, fill: { color: accent }, line: { color: accent, width: 0 } })
-    slide.addText(runs, { x: x + 0.1, y: y + 0.02, w: w - 0.2, h: h - 0.04, margin: 4, valign: 'middle', wrap: true })
-  } else {
-    // Single movable text-box shape with fill + border directly on the box
-    slide.addText(runs, {
-      x, y, w, h,
-      fill: { color: fill },
-      line: { color: stroke, width: strokeW },
-      margin: [4, 8, 4, 8],
-      valign: 'middle',
-      wrap: true,
-    })
   }
   return y + h + 0.1
 }

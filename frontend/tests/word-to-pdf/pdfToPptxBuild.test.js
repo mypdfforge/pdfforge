@@ -564,8 +564,9 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     const res = await buildPptxBlob([model], { slideLayout: 'auto' })
     const zip = await JSZip.loadAsync(await res.blob.arrayBuffer())
     const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
-    // 1 unified list box (numbered + bullet) + 1 single-shape callout = 2 <p:sp> shapes
-    expect((xml.match(/<p:sp>/g) || [])).toHaveLength(2)
+    // 1 unified list box (numbered + bullet) + 2 shapes for accented callout (text box + thin left bar) = 3 <p:sp> shapes
+    expect((xml.match(/<p:sp>/g) || [])).toHaveLength(3)
+    expect(xml).toContain('3B82F6')
     expect(xml).toContain('buAutoNum')
     expect(xml).toContain('<a:t>Global Infrastructure Layer</a:t>')
   })
