@@ -125,6 +125,7 @@ async function extractPage(page, boldFonts) {
   const stack = []
   let pending = null
   let order = 0
+  let hasImages = false
 
   const recordTextOp = () => {
     const M = Util.transform(vp.transform, Util.transform(ctm, tlm))
@@ -287,6 +288,8 @@ async function extractPage(page, boldFonts) {
       case OPS.fill: case OPS.eoFill: commit(true, false); break
       case OPS.fillStroke: case OPS.eoFillStroke: case OPS.closeFillStroke: case OPS.closeEOFillStroke: commit(true, true); break
       case OPS.endPath: pending = null; break
+      case OPS.paintImageXObject: case OPS.paintInlineImageXObject: case OPS.paintImageMaskXObject: case OPS.paintJpegXObject:
+        hasImages = true; break
     }
   }
   if (textOps.length) {
@@ -301,7 +304,7 @@ async function extractPage(page, boldFonts) {
       }
     }
   }
-  return { items, hLines, vLines, rects, W: vp.width, H: vp.height }
+  return { items, hLines, vLines, rects, hasImages, W: vp.width, H: vp.height }
 }
 
 // ───────────────────────── 2. HELPERS ─────────────────────────
@@ -397,6 +400,7 @@ function dropRedacted(items, rects, W) {
   const dark = rects.filter((r) => lum(r.col) < CFG.REDACT_LUM && r.x1 - r.x0 < W * 0.4)
   if (!dark.length || !items.length) return items
   const kept = items.filter((it) => {
+    if (it.color && lum(it.color) > 0.5) return true // white/light text on dark header is not redacted
     const area = Math.max(it.w, 1) * (it.bot - it.top)
     return !dark.some((r) => {
       const ox = Math.min(it.x + it.w, r.x1) - Math.max(it.x, r.x0), oy = Math.min(it.bot, r.y1) - Math.max(it.top, r.y0)
@@ -452,7 +456,7 @@ function parseNum(s) {
     const inner = t.slice(0, -1).trim().replace(/,/g, '')
     if (/^[+-]?\d+(\.\d+)?$/.test(inner)) {
       const dec = (inner.split('.')[1] || '').length
-      return { v: parseFloat(inner) / 100, dec: Math.min(dec, 4), pct: true, cur: '' }
+      return { v: Number((parseFloat(inner) / 100).toPrecision(12)), dec: Math.min(dec, 4), pct: true, cur: '' }
     }
   }
   if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1).trim() }
@@ -537,8 +541,18 @@ async function pageToBlocks(page, opts, boldFonts, onProgress, pageNum, totalPag
   const ex = await extractPage(page, boldFonts)
   let rawCount = ex.items.length
   let items = opts.dropRedacted === false ? ex.items : dropRedacted(ex.items, ex.rects, ex.W)
-  if (items.length === 0 && opts.useOcr) {
-    items = await ocrPageItems(page, onProgress, pageNum, totalPages)
+  if (opts.useOcr && (items.length === 0 || ex.hasImages)) {
+    const ocrItems = await ocrPageItems(page, onProgress, pageNum, totalPages)
+    if (items.length === 0) {
+      items = ocrItems
+    } else {
+      // Hybrid merge: keep exact native items; only add non-overlapping OCR items from image regions
+      const extra = ocrItems.filter((o) => !items.some((n) =>
+        Math.min(o.x + o.w, n.x + n.w) - Math.max(o.x, n.x) > 2 &&
+        Math.min(o.bot, n.bot) - Math.max(o.top, n.top) > 2
+      ))
+      items = [...items, ...extra]
+    }
     rawCount = items.length
   }
   const tables = findTables(ex.hLines, ex.vLines)
@@ -678,10 +692,10 @@ function layout(ws, pages) {
           const lines = tx.text.split('\n')
           let totalWrappedLines = 0
           for (const line of lines) {
-            totalWrappedLines += Math.max(1, Math.ceil(line.length / (colChars * 0.85)))
+            totalWrappedLines += Math.max(1, Math.ceil(line.length / (colChars * 0.78)))
           }
-          const lineHeight = Math.max(fontSize * 1.4, 14)
-          need[k.r0] = Math.max(need[k.r0], totalWrappedLines * lineHeight + 8)
+          const lineHeight = Math.max(fontSize * 1.45, 15)
+          need[k.r0] = Math.max(need[k.r0], totalWrappedLines * lineHeight + 12)
         }
       }
       for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
@@ -717,7 +731,7 @@ function layout(ws, pages) {
         if (!spansMultipleCols) {
           let str = ''
           if (typeof cell.value === 'number') {
-            str = cell.value.toLocaleString('en-US', { minimumFractionDigits: 2 })
+            str = (cell.numFmt && /[$€£₹]/.test(cell.numFmt) ? '$' : '') + cell.value.toLocaleString('en-US', { minimumFractionDigits: 2 })
           } else if (cell.value != null) {
             str = String(cell.value)
           }
@@ -729,7 +743,7 @@ function layout(ws, pages) {
       }
     })
     if (maxLen > 0) {
-      col.width = Math.min(Math.max(maxLen + 3, 7), 50)
+      col.width = Math.min(Math.max(maxLen + 5, col.width || 0, 8), 55)
     } else {
       col.width = Math.max(col.width || 0, 8)
     }
