@@ -162,6 +162,7 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(slide1Xml).toContain('rtl="1"') // RTL cell support
     expect(slide1Xml).toContain('algn="r"') // RTL right-aligned cell
     expect(slide1Xml).toContain('rtlCol="1"')
+    expect(slide1Xml).not.toContain('<a:bodyPr/ ')
     expect(slide1Xml).toContain('Consolas')
     expect(slide1Xml).toContain('0F172A') // dark code container
     expect(slide1Xml).toContain('lvl="1"') // nested bullet level

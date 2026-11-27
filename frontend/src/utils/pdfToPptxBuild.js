@@ -74,8 +74,8 @@ export async function normalizePptxXml(blob) {
       let fixed = forceRtlParagraph(xml)
       fixed = fixed.replace(/<a:tc>([\s\S]*?)<\/a:tc>/g, (tcMatch) => {
         if (!/\brtl="1"/.test(tcMatch) && !RTL_CHAR_RE.test(tcMatch)) return tcMatch
-        return tcMatch.replace(/<a:bodyPr\b([^>]*)\/?>/, (bp, attrs) =>
-          /\brtlCol=/.test(attrs) ? bp.replace(/\brtlCol="0"/, 'rtlCol="1"') : `<a:bodyPr${attrs} rtlCol="1"/>`
+        return tcMatch.replace(/<a:bodyPr\b([^>]*?)(\/?)>/, (bp, attrs, slash) =>
+          /\brtlCol=/.test(attrs) ? bp.replace(/\brtlCol="0"/, 'rtlCol="1"') : `<a:bodyPr${attrs} rtlCol="1"${slash}>`
         )
       })
       zip.file(path, fixed)
