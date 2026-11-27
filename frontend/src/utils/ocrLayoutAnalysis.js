@@ -169,7 +169,42 @@ function buildTable(run, medH) {
     }
     prevBottom = rowBottom(r)
   }
+  markRowSpans(rows, nCols)
   return { rows, nCols }
+}
+
+/**
+ * Vertical merges. A body cell spans downward when every row beneath it has a real cell in every
+ * OTHER column but nothing in this cell's columns (classic grouped first column). Header row is
+ * never a rowspan origin and a row needs >= 2 cells, so sparse tables are not mis-merged.
+ */
+function markRowSpans(rows, nCols) {
+  const covered = rows.map(() => new Set())
+  const colsFilled = (row, ri) => {
+    const set = new Set(covered[ri])
+    for (const c of row.cells) for (let k = c.c0; k <= c.c1; k++) set.add(k)
+    return set
+  }
+  for (let ri = 1; ri < rows.length - 1; ri++) {
+    for (const c of rows[ri].cells) {
+      if (c.rowspan > 1 || rows[ri].cells.length < 2 || !c.text.trim()) continue
+      let k = 0
+      for (let rj = ri + 1; rj < rows.length; rj++) {
+        const filled = colsFilled(rows[rj], rj)
+        let slotEmpty = true
+        for (let x = c.c0; x <= c.c1; x++) if (filled.has(x)) slotEmpty = false
+        const othersFull = Array.from({ length: nCols }, (_, x) => x)
+          .filter(x => x < c.c0 || x > c.c1).every(x => filled.has(x))
+        if (!slotEmpty || !othersFull) break
+        k++
+      }
+      if (k >= 1) {
+        c.rowspan = k + 1
+        for (let j = 1; j <= k; j++) for (let x = c.c0; x <= c.c1; x++) covered[ri + j].add(x)
+      }
+    }
+  }
+  rows.forEach((r, i) => { r.covered = covered[i] })
 }
 
 function renderTable(rows, nCols) {
@@ -213,12 +248,12 @@ function renderTable(rows, nCols) {
     let out = ''
     let col = 0
     for (const c of cells) {
-      while (col < c.c0) { out += `<${tag}></${tag}>`; col++ }
+      while (col < c.c0) { if (!r.covered?.has(col)) out += `<${tag}></${tag}>`; col++ }
       const span = c.c1 - c.c0 + 1
-      out += `<${tag}${span > 1 ? ` colspan="${span}"` : ''}>${esc(c.text)}</${tag}>`
+      out += `<${tag}${span > 1 ? ` colspan="${span}"` : ''}${c.rowspan > 1 ? ` rowspan="${c.rowspan}"` : ''}>${esc(c.text)}</${tag}>`
       col = c.c1 + 1
     }
-    while (col < nCols) { out += `<${tag}></${tag}>`; col++ }
+    while (col < nCols) { if (!r.covered?.has(col)) out += `<${tag}></${tag}>`; col++ }
     return `<tr>${out}</tr>`
   }).join('') + '</table>'
 
@@ -230,6 +265,7 @@ function renderTable(rows, nCols) {
       text: c.text,
       col: c.c0,
       colspan: c.c1 - c.c0 + 1,
+      rowspan: c.rowspan || 1,
       align: c.align,
       isHeader: ri === 0,
       bbox: [c.xMin, c.yMin, c.xMax, c.yMax],
@@ -355,7 +391,7 @@ export function validateCodeBrackets(codeText) {
   for (const unclosed of stack) {
     issues.push(`Line ${unclosed.line}: unclosed "${unclosed.ch}"`)
   }
-  return { balanced: issues.length === 0, issues }
+  return { balanced: issues.length === 0, issues, unclosed: stack.map(u => u.ch) }
 }
 
 function evalCodeRun(run) {
@@ -781,9 +817,11 @@ export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight, pageN
   const { header, body: rawBody, footer } = partitionPageZones(enriched, canvasHeight)
   const body = attachStandaloneListMarkers(rawBody, medH)
 
-  const t = detectTables(body, medH)
-  const c = findCodeBlocks(t.rest, medH)
-  const items = [...c.rest, ...t.blocks, ...c.blocks]
+  // Code first: detect shaded/monospace/code-shaped runs BEFORE tables and BEFORE any prose
+  // normalisation, so code is never tabled, spell-fixed or confusable-fixed.
+  const c = findCodeBlocks(body, medH)
+  const t = detectTables(c.rest, medH)
+  const items = [...t.rest, ...t.blocks, ...c.blocks]
   const ordered = xyCut(items, { medH, minGutter: Math.max(15, charW * 2) })
   const rendered = renderItems(ordered, medH, charW)
 

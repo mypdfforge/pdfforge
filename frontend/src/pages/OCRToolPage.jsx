@@ -6,6 +6,7 @@ import { downloadBlob } from '../utils/api'
 import {
   getPaddleOCREngine, packForLanguage, ocrRawLines, recoverLowConfidence,
   buildPageResult, buildSearchablePdf, buildSidecar, evaluateQualityGates, buildOcrDocxBlob,
+  routeScriptPacks, recoverCodeClosers, recoverLeadingSymbols,
 } from '../utils/paddleOcr'
 import { extractNativeLines, isNativeGood, getPageImageRects } from '../utils/nativeText'
 import { overlap } from '../utils/ocrPostProcess'
@@ -37,6 +38,10 @@ const LANGUAGES = [
   { code: 'jpn', label: 'Japanese (pack)' },
   { code: 'kor', label: 'Korean (pack)' },
   { code: 'tha', label: 'Thai (pack)' },
+  { code: 'tam', label: 'Tamil (pack)' },
+  { code: 'tel', label: 'Telugu (pack)' },
+  { code: 'kan', label: 'Kannada (pack)' },
+  { code: 'mal', label: 'Malayalam (pack)' },
 ]
 
 function Section({ title, children }) {
@@ -147,6 +152,8 @@ export default function OCRToolPage({
       }
 
       const pages = []
+      const scriptReport = { rerouted: 0, suspect: 0, suppressed: 0 }
+      const codeReport = { added: 0, inferred: 0, reevaluated: 0 }
       let nativeOnlyPages = 0
 
       for (let p = 1; p <= totalPages; p++) {
@@ -185,8 +192,26 @@ export default function OCRToolPage({
           canvas.height = height
           const ctx = canvas.getContext('2d', { willReadFrequently: true })
           await page.render({ canvasContext: ctx, viewport }).promise
-          const rawOcr = await ocrRawLines(engine, ctx.getImageData(0, 0, width, height))
+          const basePack = engineInfo.fallback ? 'default' : engineInfo.pack
+          const rawOcr = await ocrRawLines(engine, ctx.getImageData(0, 0, width, height), { pack: basePack })
           await recoverLowConfidence(engine, canvas, rawOcr)
+          // Per-region script routing: re-read suspect lines with every installed script pack; unreadable
+          // / unsupported-script crops are flagged and kept out of the text layer (never Latin gibberish).
+          setProgMsg(`Checking scripts on page ${p} of ${totalPages}…`)
+          const rep = await routeScriptPacks(canvas, rawOcr, {
+            basePack,
+            hintPacks: [packForLanguage(language)],
+            getEngine: async pk => {
+              const r = await getPaddleOCREngine(null, pk)
+              return r.fallback ? null : r.engine
+            },
+          })
+          scriptReport.rerouted += rep.rerouted
+          scriptReport.suspect += rep.suspect
+          scriptReport.suppressed += rep.suppressed
+          recoverLeadingSymbols(canvas, rawOcr)
+          const cl = await recoverCodeClosers(engine, canvas, rawOcr)
+          codeReport.added += cl.added; codeReport.inferred += cl.inferred; codeReport.reevaluated += cl.reevaluated
           // In Smart Hybrid mode over native text, retain OCR ONLY inside actual raster image regions
           // so valid multilingual native text is never overwritten or duplicated.
           if (existingMode === 'auto' && nativeLines.length > 0 && imageRects.length > 0) {
@@ -231,6 +256,9 @@ export default function OCRToolPage({
       const sidecar = buildSidecar(pages, { source: file.name, language, mode: existingMode })
       setSidecarJson(JSON.stringify(sidecar, null, 2))
       const gates = sidecar.qualityGates || evaluateQualityGates(pages)
+      if (scriptReport.rerouted) warn.push(`${scriptReport.rerouted} line(s) were re-read with a matching script pack.`)
+      if (scriptReport.suspect) warn.push(`${scriptReport.suspect} line(s) look like a script no installed model reads well (${scriptReport.suppressed} left out of the PDF text layer). See the review queue in the JSON sidecar.`)
+      if (codeReport.added || codeReport.reevaluated) warn.push(`Code: recovered ${codeReport.added} missing closing bracket line(s) (${codeReport.inferred} inferred, flagged for review) and re-read ${codeReport.reevaluated} line(s) at high resolution.`)
       if (gates.unbalancedCodeCount > 0) {
         warn.push(`${gates.unbalancedCodeCount} code block(s) had bracket mismatches — added to review queue in JSON sidecar.`)
       }
@@ -251,7 +279,8 @@ export default function OCRToolPage({
         setProgress(95)
         const { bytes, stats } = await buildSearchablePdf(originalPdfBytes, pages, pr => { if (pr?.label) setProgMsg(pr.label) })
         if (stats.skippedChars > 0) warn.push(`${stats.skippedChars} character(s) have no glyph in the embedded fonts and were left out of the PDF text layer (kept in the text view).`)
-        if (stats.missingFonts.length) warn.push(`Optional font file(s) not found: ${stats.missingFonts.join(', ')}. Add them under /public/fonts to cover those scripts.`)
+        if (stats.unmappedSamples?.length) warn.push(`No font glyph for ${stats.unmappedSamples.join(', ')}; add a covering font under /public/wasm/docx2pdf/fonts/.`)
+        if (stats.missingFonts.length) warn.push(`Optional font file(s) not found: ${stats.missingFonts.join(', ')}. Add them under /public/wasm/docx2pdf/fonts/ to cover those scripts.`)
         setSearchablePdfBytes(bytes)
         setSearchablePdfUrl(URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })))
         setActiveTab('pdf')

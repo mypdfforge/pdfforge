@@ -58,6 +58,22 @@ const SCRIPT_RES = [
   ['arabic', /\p{Script=Arabic}/u],
   ['devanagari', /\p{Script=Devanagari}/u],
   ['thai', /\p{Script=Thai}/u],
+  ['bengali', /\p{Script=Bengali}/u],
+  ['gujarati', /\p{Script=Gujarati}/u],
+  ['gurmukhi', /\p{Script=Gurmukhi}/u],
+  ['odia', /\p{Script=Oriya}/u],
+  ['tamil', /\p{Script=Tamil}/u],
+  ['telugu', /\p{Script=Telugu}/u],
+  ['kannada', /\p{Script=Kannada}/u],
+  ['malayalam', /\p{Script=Malayalam}/u],
+  ['sinhala', /\p{Script=Sinhala}/u],
+  ['georgian', /\p{Script=Georgian}/u],
+  ['armenian', /\p{Script=Armenian}/u],
+  ['ethiopic', /\p{Script=Ethiopic}/u],
+  ['khmer', /\p{Script=Khmer}/u],
+  ['lao', /\p{Script=Lao}/u],
+  ['myanmar', /\p{Script=Myanmar}/u],
+  ['tibetan', /\p{Script=Tibetan}/u],
   ['cjk', /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u],
   ['emoji', /\p{Extended_Pictographic}/u],
 ]
@@ -76,6 +92,30 @@ export function detectScript(text) {
   return best
 }
 
+/**
+ * Fine-grained script inventory (han / japanese-kana / hangul kept apart, unlike detectScript's
+ * 'cjk' bucket). Used for OCR pack routing and PDF/DOCX font coverage. Returns a Set of names.
+ */
+const FINE_SCRIPT_RES = [
+  ['latin', /\p{Script=Latin}/u], ['cyrillic', /\p{Script=Cyrillic}/u], ['greek', /\p{Script=Greek}/u],
+  ['hebrew', /\p{Script=Hebrew}/u], ['arabic', /\p{Script=Arabic}/u], ['thai', /\p{Script=Thai}/u],
+  ['devanagari', /\p{Script=Devanagari}/u], ['bengali', /\p{Script=Bengali}/u], ['gujarati', /\p{Script=Gujarati}/u],
+  ['gurmukhi', /\p{Script=Gurmukhi}/u], ['odia', /\p{Script=Oriya}/u], ['tamil', /\p{Script=Tamil}/u],
+  ['telugu', /\p{Script=Telugu}/u], ['kannada', /\p{Script=Kannada}/u], ['malayalam', /\p{Script=Malayalam}/u],
+  ['sinhala', /\p{Script=Sinhala}/u], ['georgian', /\p{Script=Georgian}/u], ['armenian', /\p{Script=Armenian}/u],
+  ['ethiopic', /\p{Script=Ethiopic}/u], ['khmer', /\p{Script=Khmer}/u], ['lao', /\p{Script=Lao}/u],
+  ['myanmar', /\p{Script=Myanmar}/u], ['tibetan', /\p{Script=Tibetan}/u],
+  ['han', /\p{Script=Han}/u], ['kana', /[\p{Script=Hiragana}\p{Script=Katakana}]/u], ['hangul', /\p{Script=Hangul}/u],
+]
+export function scriptsInText(text) {
+  const out = new Set()
+  for (const ch of text || '') {
+    if (/[\s\d\p{P}\p{S}]/u.test(ch)) continue
+    for (const [name, re] of FINE_SCRIPT_RES) if (re.test(ch)) { out.add(name); break }
+  }
+  return out
+}
+
 export function isRtlText(text) {
   let rtl = 0
   let letters = 0
@@ -84,6 +124,32 @@ export function isRtlText(text) {
     else if (/\p{L}/u.test(ch)) letters++
   }
   return letters > 0 && rtl / letters > 0.5
+}
+
+const MIRROR = { '(': ')', ')': '(', '[': ']', ']': '[', '{': '}', '}': '{', '<': '>', '>': '<', '«': '»', '»': '«' }
+const LTR_RUN_RE = /[\p{Script=Latin}\p{Script=Cyrillic}\p{Script=Greek}\p{Nd}]/u
+
+/**
+ * Visual -> logical order for one RTL line emitted by a recognizer that outputs glyphs
+ * left-to-right as printed (PaddleOCR's Arabic/Hebrew heads do; esearch-ocr does not undo it).
+ * Reverses the whole line, mirrors brackets, then re-reverses embedded LTR/number runs so
+ * "عام 2024 ok" keeps "2024" and "ok" readable. Pure and idempotent-safe only when applied once.
+ */
+export function visualToLogicalRtl(text) {
+  if (!text) return text
+  const chars = Array.from(text).reverse().map(c => MIRROR[c] || c)
+  const out = []
+  for (let i = 0; i < chars.length;) {
+    if (LTR_RUN_RE.test(chars[i])) {
+      let j = i
+      // digits may carry . , : / - joiners between them (1,234.50  12:30  2024-11-26)
+      while (j < chars.length && (LTR_RUN_RE.test(chars[j]) ||
+        (/[.,:/\-]/.test(chars[j]) && j + 1 < chars.length && LTR_RUN_RE.test(chars[j + 1]) && j > i))) j++
+      out.push(...chars.slice(i, j).reverse())
+      i = j
+    } else { out.push(chars[i]); i++ }
+  }
+  return out.join('')
 }
 
 export function normalizeForCompare(s) {
@@ -266,6 +332,8 @@ export function classifyTokenType(t) {
   if (/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/.test(t)) return 'jwt'
   if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(t)) return 'uuid'
   if (/\b[0-9a-fA-F]{32,128}\b/.test(t)) return 'hash'
+  // Vendor-prefixed secrets/API keys: sk-…, pk_live_…, ghp_…, AKIA…, AIza…, xox?-…, glpat-…
+  if (/\b(?:sk|pk|rk)[-_](?:live|test|proj|ant)?[-_]?[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bglpat-[A-Za-z0-9_-]{16,}/.test(t)) return 'apikey'
   if (/(?:^|\s)[A-Za-z0-9+/_=-]{24,}(?:\s|$)/.test(t)) return 'base64'
   if (/\S+@\S+\.\S+/.test(t)) return 'email'
   if (/^\s*(def|class|import|from|return|const|let|var|if|elif|else|for|while|try|except|with|async|await|raise)\b/.test(t) || /[{}();=]{2,}/.test(t)) return 'code'
@@ -288,6 +356,7 @@ export function decodeWithCtcMultiChar(charMatrix, mode = 'prose') {
     jwt: /^[A-Za-z0-9_.-]$/,
     url: /^[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]$/,
     uuid: /^[0-9a-fA-F-]$/,
+    apikey: /^[A-Za-z0-9_-]$/,
   }[mode]
 
   const filtered = charMatrix.map(cands => {
@@ -357,8 +426,8 @@ export function validateJwtToken(token) {
 
 /**
  * TASK #1: Syntax-aware repair for CODE regions (never runs on prose or protected tokens).
- * Fixes f-string brace mismatches ({ident) -> {ident}), trailing argument period vs comma,
- * and common Python keyword OCR confusions.
+ * Fixes f-string brace mismatches ({ident) -> {ident}) and trailing argument period vs comma.
+ * Never rewrites identifiers/keywords (no spell correction inside code).
  */
 export function repairCodeSyntax(codeText) {
   if (!codeText) return codeText
@@ -370,14 +439,7 @@ export function repairCodeSyntax(codeText) {
     let line = lines[i]
     const nextLine = (lines[i + 1] || '').trim()
 
-    // 1. Common code-region OCR word/identifier confusions
-    line = line
-      .replace(/\bretum\b/g, 'return')
-      .replace(/\bmaqic\b/g, 'magic')
-      .replace(/\baqainst\b/g, 'against')
-      .replace(/\bbvtes\b/g, 'bytes')
-      .replace(/\bdetected format(?=\s*=)/g, 'detected_format')
-      .replace(/\blayout tree\b/g, 'layout_tree')
+    // (no identifier/word substitution here: code is never spell-corrected; only syntax fixes below)
 
     // 2. f-string / interpolation brace mismatch: {detected_format) -> {detected_format}
     line = line.replace(/(["'`][^"'`\n]*)\{([A-Za-z_][A-Za-z0-9_.]*)\)/g, '$1{$2}')
@@ -490,9 +552,19 @@ export function repairDescenderSplits(text) {
 }
 
 /** Context-constrained fixes (DEFECT 09). Only touches patterns that are unambiguous. */
+/** Syntax-shaped single lines must never get prose confusable fixes (a = 0.05 in code is not α). */
+export function looksLikeCodeLine(t) {
+  const s = String(t || '')
+  return /^\s*(?:(?:def|class|import|from\s+\S+\s+import|const|let|var|function|return|elif|else|for|while|try|except|finally|async|await|raise)\b|print\()/.test(s) ||
+    /(?:=>|:=|==|!=|===|\+=|-=|\*=|\/=|&&|\|\||::)/.test(s) ||
+    /[;{}]\s*$/.test(s) || /^\s*[)\]}]+[;,]?\s*$/.test(s) ||
+    /\b[A-Za-z_]\w*\([^)]*\)\s*[;:{]\s*$/.test(s)
+}
+
 export function fixFieldConfusables(text) {
   if (!text) return text
   let t = repairProtectedToken(text)
+  if (looksLikeCodeLine(t)) return t
   if (isProtectedText(t)) return t
 
   // Euro read as E: "(E3,120,000.00)" and "E3,120"
