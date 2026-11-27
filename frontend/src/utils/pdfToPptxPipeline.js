@@ -29,15 +29,16 @@ export function restoreVisualRtlText(text, pageLines = null) {
   if (!text || !U.isMostlyRtl(text) || !VISUAL_RTL_CLUE_RE.test(text)) return text
 
   const reverseLine = (s) => {
+    const mirror = { '(':')', ')':'(', '[':']', ']':'[', '{':'}', '}':'{' }
     // Reverse character order across RTL segments while keeping embedded ASCII numbers/words intact
     const chars = [...s.trim()].reverse()
     let out = chars.join('')
     // Un-reverse embedded LTR/digit runs that were flipped by full-string reversal
-    out = out.replace(/[A-Za-z0-9][A-Za-z0-9.,:/_-]*[A-Za-z0-9]|[A-Za-z0-9]/g, (m) =>
+    out = out.replace(/[A-Za-z0-9][A-Za-z0-9.,:/_@#%+\-]*[A-Za-z0-9]|[A-Za-z0-9]/g, (m) =>
       m.length > 1 ? [...m].reverse().join('') : m
     )
-    // Fix mirrored parentheses after reversal
-    out = out.replace(/[()]/g, (ch) => (ch === '(' ? ')' : '('))
+    // Fix mirrored parentheses/brackets after reversal
+    out = out.replace(/[()[\]{}]/g, (ch) => mirror[ch] || ch)
     return out
   }
 

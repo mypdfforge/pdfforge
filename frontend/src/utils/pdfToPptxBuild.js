@@ -39,9 +39,31 @@ function isEmptyPageModel(m) {
   return !(m.blocks || []).some((b) => b.type !== 'paragraph' || (b.line?.text && b.line.text.trim()))
 }
 
+const RTL_CHAR_RE = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/
+
+/**
+ * Normalize <a:p> elements: keep strictly one <a:pPr> first child, and enforce rtl="1" + algn="r"
+ * whenever RTL characters are present or rtl="1" is already set.
+ */
+export function forceRtlParagraph(xml) {
+  return xml.replace(/<a:p>([\s\S]*?)<\/a:p>/g, (_match, inner) => {
+    const pPrMatches = inner.match(/<a:pPr\b[^>]*>(?:[\s\S]*?<\/a:pPr>)?|<a:pPr\b[^>]*\/>/g)
+    const hasRtl = RTL_CHAR_RE.test(inner) || (pPrMatches && pPrMatches.some((p) => /\brtl="1"/.test(p)))
+    if (!pPrMatches?.length && !hasRtl) return `<a:p>${inner}</a:p>`
+    let firstPPr = pPrMatches?.[0] || '<a:pPr/>'
+    if (hasRtl) {
+      if (!/\brtl="1"/.test(firstPPr)) firstPPr = firstPPr.replace('<a:pPr', '<a:pPr rtl="1"')
+      if (/\balgn="(?:l|ctr)"/.test(firstPPr)) firstPPr = firstPPr.replace(/\balgn="(?:l|ctr)"/, 'algn="r"')
+      else if (!/\balgn=/.test(firstPPr)) firstPPr = firstPPr.replace('<a:pPr', '<a:pPr algn="r"')
+    }
+    const withoutAllPPr = inner.replace(/<a:pPr\b[^>]*>(?:[\s\S]*?<\/a:pPr>)?|<a:pPr\b[^>]*\/>/g, '')
+    return `<a:p>${firstPPr}${withoutAllPPr}</a:p>`
+  })
+}
+
 /**
  * Repairs PptxGenJS 4.0.1 OOXML where multiple <a:pPr> tags are emitted inside a single <a:p>,
- * and ensures RTL paragraphs enforce right alignment (algn="r") and rtlCol="1".
+ * and ensures RTL paragraphs & table cells enforce right alignment (algn="r") and rtlCol="1".
  */
 export async function normalizePptxXml(blob) {
   try {
@@ -49,21 +71,9 @@ export async function normalizePptxXml(blob) {
     const slidePaths = Object.keys(zip.files).filter((k) => /^ppt\/slides\/slide\d+\.xml$/.test(k))
     for (const path of slidePaths) {
       const xml = await zip.file(path).async('string')
-      let fixed = xml.replace(/<a:p>([\s\S]*?)<\/a:p>/g, (_match, inner) => {
-        const pPrMatches = inner.match(/<a:pPr\b[^>]*>(?:[\s\S]*?<\/a:pPr>)?|<a:pPr\b[^>]*\/>/g)
-        if (!pPrMatches || pPrMatches.length === 0) return `<a:p>${inner}</a:p>`
-        let firstPPr = pPrMatches[0]
-        const hasRtl = pPrMatches.some((p) => /\brtl="1"/.test(p))
-        if (hasRtl) {
-          if (!/\brtl="1"/.test(firstPPr)) firstPPr = firstPPr.replace('<a:pPr', '<a:pPr rtl="1"')
-          if (/\balgn="(?:l|ctr)"/.test(firstPPr)) firstPPr = firstPPr.replace(/\balgn="(?:l|ctr)"/, 'algn="r"')
-          else if (!/\balgn=/.test(firstPPr)) firstPPr = firstPPr.replace('<a:pPr', '<a:pPr algn="r"')
-        }
-        const withoutAllPPr = inner.replace(/<a:pPr\b[^>]*>(?:[\s\S]*?<\/a:pPr>)?|<a:pPr\b[^>]*\/>/g, '')
-        return `<a:p>${firstPPr}${withoutAllPPr}</a:p>`
-      })
+      let fixed = forceRtlParagraph(xml)
       fixed = fixed.replace(/<a:tc>([\s\S]*?)<\/a:tc>/g, (tcMatch) => {
-        if (!/\brtl="1"/.test(tcMatch)) return tcMatch
+        if (!/\brtl="1"/.test(tcMatch) && !RTL_CHAR_RE.test(tcMatch)) return tcMatch
         return tcMatch.replace(/<a:bodyPr\b([^>]*)\/?>/, (bp, attrs) =>
           /\brtlCol=/.test(attrs) ? bp.replace(/\brtlCol="0"/, 'rtlCol="1"') : `<a:bodyPr${attrs} rtlCol="1"/>`
         )
@@ -76,7 +86,7 @@ export async function normalizePptxXml(blob) {
   }
 }
 
-function resolveSlideDims(models, slideLayout = 'auto') {
+export function resolveSlideDims(models, slideLayout = 'auto') {
   if (slideLayout === '16:9') return { layoutName: 'LAYOUT_16x9', width: 10, height: 5.625, custom: false }
   if (slideLayout === '4:3') return { layoutName: 'LAYOUT_4x3', width: 10, height: 7.5, custom: false }
 
@@ -141,11 +151,32 @@ function hasLongUnbrokenToken(text) {
   return String(text || '').split(/\s+/).some((w) => w.length >= 40)
 }
 
-const SUB_MAP = { '0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉','+':'₊','-':'₋','=':'₌','(':'₍',')':'₎' }
-const SUP_MAP = { '0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹','n':'ⁿ','i':'ⁱ','+':'⁺','-':'⁻','=':'⁼','(':'⁽',')':'⁾' }
+const SUB_TO_ASCII = {
+  '₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','₅':'5','₆':'6','₇':'7','₈':'8','₉':'9',
+  '₊':'+','₋':'-','₌':'=','₍':'(','₎':')',
+}
+const SUP_TO_ASCII = {
+  '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
+  'ⁿ':'n','ⁱ':'i','⁺':'+','⁻':'-','⁼':'=','⁽':'(','⁾':')',
+}
 
-function toUnicodeScript(text, map) {
-  return [...text].map((ch) => map[ch] || ch).join('')
+export function splitScriptChars(text) {
+  const out = []
+  let buf = ''
+  let mode = null
+  const flush = () => {
+    if (buf) out.push({ text: buf, script: mode })
+    buf = ''
+  }
+  for (const ch of [...text]) {
+    const next = SUB_TO_ASCII[ch] !== undefined ? 'sub'
+      : SUP_TO_ASCII[ch] !== undefined ? 'sup'
+      : null
+    if (next !== mode) { flush(); mode = next }
+    buf += SUB_TO_ASCII[ch] ?? SUP_TO_ASCII[ch] ?? ch
+  }
+  flush()
+  return out
 }
 
 function prepareDisplayText(text) {
@@ -161,30 +192,36 @@ function scriptFont(seg, code = false) {
   return 'Arial'
 }
 
-function toPptxRuns(text, o, fontScale = 1) {
-  let clean = prepareDisplayText(text)
+export function toPptxRuns(text, o = {}, fontScale = 1) {
+  const clean = prepareDisplayText(text)
   if (!clean) return []
-  if (o.sub) clean = toUnicodeScript(clean, SUB_MAP)
-  else if (o.sup) clean = toUnicodeScript(clean, SUP_MAP)
-  // Keep full run pt size when baseline is set so PowerPoint doesn't double-shrink sub/superscripts
   const pt = clamp((o.size || 11) * fontScale, 6.5, 72)
   const color = U.normHex(o.color) || '1E293B'
-  return U.segmentByScript(clean).map((seg, idx) => {
-    const opts = {
-      fontSize: Math.round(pt * 10) / 10,
-      bold: !!o.bold,
-      italic: !!o.italic,
-      strike: !!o.strike,
-      underline: o.underline ? { style: 'sng' } : undefined,
-      superscript: !!o.sup,
-      subscript: !!o.sub,
-      color,
-      fontFace: scriptFont(seg, o.code),
+  const forcedScript = o.sub ? 'sub' : o.sup ? 'sup' : null
+  const runs = []
+
+  for (const part of splitScriptChars(clean)) {
+    const script = part.script || forcedScript
+    for (const seg of U.segmentByScript(part.text)) {
+      const opts = {
+        fontSize: Math.round(pt * 10) / 10,
+        bold: !!o.bold,
+        italic: !!o.italic,
+        strike: !!o.strike,
+        underline: o.underline ? { style: 'sng' } : undefined,
+        superscript: script === 'sup',
+        subscript: script === 'sub',
+        color,
+        fontFace: scriptFont(seg, o.code),
+      }
+      if (o.highlight) opts.highlight = o.highlight
+      if (o.smallCaps) opts.smallCaps = true
+      if (o.rtl || seg.script === 'rtl') opts.rtlMode = true
+      if (o.bullet && runs.length === 0) opts.bullet = o.bullet
+      runs.push({ text: seg.text, options: opts })
     }
-    if (o.rtl || seg.script === 'rtl') opts.rtlMode = true
-    if (o.bullet && idx === 0) opts.bullet = o.bullet
-    return { text: seg.text, options: opts }
-  })
+  }
+  return runs
 }
 
 /** Cluster distinct list x-offsets on a slide into clean 0..6 indentation levels. */
@@ -780,6 +817,17 @@ function tryAddIncidentTimeline(slide, block, ctx, cursorY) {
   return y + 0.04
 }
 
+export function isLikelyHeaderRow(row, rowIndex, rows) {
+  if (row.isHeader) return true
+  if (rowIndex !== 0) return false
+  const cells = (row.cells || []).map((c) => (c.text || '').trim())
+  if (cells.length < 3) return false
+  const allCaps = cells.every((t) => t && t === t.toUpperCase() && /[A-Z]/.test(t))
+  const allBold = (row.cells || []).every((c) => c.bold)
+  const numericNext = (rows[1]?.cells || []).filter((c) => /^[\d($€£¥+\-]/.test((c.text || '').trim())).length
+  return allCaps || allBold || numericNext >= 2
+}
+
 function addTableToSlide(slide, block, ctx, cursorY) {
   const semanticWf = tryAddWorkflowDiagram(slide, block, ctx, cursorY)
   if (semanticWf != null) return semanticWf
@@ -835,6 +883,9 @@ function addTableToSlide(slide, block, ctx, cursorY) {
     return out
   })
 
+  const headerRowIndex = rows.findIndex((r, i) => isLikelyHeaderRow(r, i, rows))
+  const densityFont = numCols >= 7 ? 8.2 : numCols >= 5 ? 8.8 : 9.5
+
   const pptxRows = rows.map((r, ri) => {
     const rowLabel = (r.cells?.[0]?.text || '').trim()
     const isSummaryRow = /^(gross operating margin|net ebitda margin|total\b)/i.test(rowLabel)
@@ -857,7 +908,7 @@ function addTableToSlide(slide, block, ctx, cursorY) {
       const isNum = !isRtl && NUMERIC_CELL_RE.test(rawText)
       const isNegCurrency = CURRENCY_NEG_RE.test(rawText)
       const isPosPct = POS_PCT_RE.test(rawText)
-      const isHdr = !!(r.isHeader || c.isHeader)
+      const isHdr = !!(r.isHeader || c.isHeader || ri === headerRowIndex)
 
       const bgHex = isHdr ? hdrBg : (U.normHex(c.fill) || (ri % 2 === 1 ? 'F8FAFC' : 'FFFFFF'))
       let fgHex = isHdr ? hdrFg : U.contrastText(bgHex)
@@ -866,10 +917,11 @@ function addTableToSlide(slide, block, ctx, cursorY) {
         else if (isPosPct) fgHex = '047857'
       }
 
-      const cellPt = clamp((c.fontSize || 9.5) * tr.fontScale, 6.5, 18)
+      const baseCellFont = Math.min(c.fontSize || densityFont, densityFont)
+      const cellPt = clamp(baseCellFont * tr.fontScale, 6.2, 16)
       const align = isRtl ? 'right' : (isNum ? 'right' : (c.align || 'left'))
       const cellRuns = toPptxRuns(rawText, {
-        size: c.fontSize || 9.5,
+        size: baseCellFont,
         bold: !!(c.bold || isHdr || isSummaryRow),
         color: fgHex,
         rtl: isRtl,
@@ -897,6 +949,20 @@ function addTableToSlide(slide, block, ctx, cursorY) {
     return rowCells.length ? rowCells : [{ text: '' }]
   })
 
+  const rowH = rows.map((r) => {
+    let maxLines = 1
+    let col = 0
+    for (const c of r.cells || []) {
+      const span = Math.max(1, c.columnSpan || 1)
+      const wIn = colWInches.slice(col, col + span).reduce((a, b) => a + b, 0) || 1
+      const font = Math.min(c.fontSize || densityFont, densityFont)
+      const charsPerLine = Math.max(5, Math.floor((wIn * 72) / (font * 0.52)))
+      maxLines = Math.max(maxLines, Math.ceil((c.text || '').length / charsPerLine))
+      col += span
+    }
+    return clamp(0.14 * maxLines + 0.16, 0.24, 0.62)
+  })
+
   const topPt = blockTopPt(block, m)
   const x = Number.isFinite(block.x0) ? tr.x(block.x0) : Math.max(0.2, (slideDims.width - slideTableW) / 2)
   const y = Math.max(cursorY, topPt != null ? tr.y(topPt) : cursorY)
@@ -906,11 +972,11 @@ function addTableToSlide(slide, block, ctx, cursorY) {
     y,
     w: slideTableW,
     colW: colWInches,
+    rowH,
     autoPage: false,
   })
 
-  const estRowH = clamp(0.32 * tr.fontScale, 0.24, 0.45)
-  return y + Math.max(0.45, rows.length * estRowH) + 0.1
+  return y + Math.max(0.45, rowH.reduce((a, b) => a + b, 0)) + 0.1
 }
 
 function addColumnsToSlide(slide, block, ctx, cursorY) {
@@ -935,12 +1001,27 @@ function addColumnsToSlide(slide, block, ctx, cursorY) {
   return Math.max(y1, y2) + 0.08
 }
 
+const ADMONITION_PALETTES = {
+  NOTE:     { accent: '3B82F6', bg: 'EFF6FF' },
+  WARNING:  { accent: 'D97706', bg: 'FFFBEB' },
+  CRITICAL: { accent: 'DC2626', bg: 'FEF2F2' },
+  SUCCESS:  { accent: '059669', bg: 'ECFDF5' },
+}
+
+export function calloutPalette(block, rawText) {
+  const tag = String(rawText || '').match(/^\[([A-Z]+)\]/)?.[1]
+  const pal = ADMONITION_PALETTES[tag] || {}
+  return {
+    accent: U.normHex(block?.admonition?.color) || pal.accent || '3B82F6',
+    bg: U.normHex(block?.admonition?.bg) || pal.bg || 'F1F5F9',
+  }
+}
+
 function addCalloutToSlide(slide, block, ctx, cursorY) {
   const { tr, m, slideDims } = ctx
-  const accent = U.normHex(block.admonition?.color) || '3B82F6'
-  const bg = U.normHex(block.admonition?.bg) || 'F1F5F9'
   const rawText = (block.lines || []).map((l) => U.cleanText(l.text)).filter(Boolean).join('\n')
   if (!rawText) return cursorY
+  const { accent, bg } = calloutPalette(block, rawText)
 
   const topPt = blockTopPt(block, m)
   const y = Math.max(cursorY, topPt != null ? tr.y(topPt) : cursorY)
@@ -982,21 +1063,23 @@ function addCalloutToSlide(slide, block, ctx, cursorY) {
   return y + h + 0.1
 }
 
-/** Lightweight syntax token highlighter for code blocks. */
+/** Lightweight syntax token highlighter for code blocks (Python/JS/SQL/YAML/JSON). */
 function tokenizeCodeLine(lineText, fontSize) {
-  const commentIdx = lineText.indexOf('#')
+  const hashIdx = lineText.indexOf('#')
+  const slashIdx = lineText.indexOf('//')
+  const commentIdx = hashIdx >= 0 && slashIdx >= 0 ? Math.min(hashIdx, slashIdx) : Math.max(hashIdx, slashIdx)
   const codePart = commentIdx >= 0 ? lineText.slice(0, commentIdx) : lineText
   const commentPart = commentIdx >= 0 ? lineText.slice(commentIdx) : ''
   const runs = []
 
-  const tokenRe = /("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\b(?:def|class|import|from|export|const|let|var|if|elif|else|for|while|with|as|return|raise|try|except|finally|in|not|and|or|True|False|None|await|async)\b|\b\d+(?:\.\d+)?\b)/g
+  const tokenRe = /("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`|\b(?:def|class|import|from|export|const|let|var|if|elif|else|for|while|with|as|return|raise|try|except|finally|in|not|and|or|True|False|None|null|true|false|await|async|SELECT|FROM|WHERE|JOIN|GROUP|ORDER|INSERT|UPDATE|DELETE|CREATE|ALTER|BEGIN|COMMIT|ROLLBACK)\b|\b\d+(?:\.\d+)?\b)/g
   let last = 0
   for (const m of codePart.matchAll(tokenRe)) {
     if (m.index > last) {
       runs.push({ text: codePart.slice(last, m.index), options: { fontFace: 'Consolas', fontSize, color: 'E2E8F0' } })
     }
     const tok = m[0]
-    const color = /^["']/.test(tok) ? '86EFAC' : /^\d/.test(tok) ? 'FCD34D' : '93C5FD'
+    const color = /^["'`]/.test(tok) ? '86EFAC' : /^\d/.test(tok) ? 'FCD34D' : '93C5FD'
     runs.push({ text: tok, options: { fontFace: 'Consolas', fontSize, color, bold: color === '93C5FD' } })
     last = m.index + tok.length
   }
@@ -1014,7 +1097,7 @@ function addCodeToSlide(slide, block, ctx, cursorY) {
   const lines = block.lines || []
   if (!lines.length) return cursorY
   const minX = Math.min(...lines.map((l) => l.x ?? 0))
-  const fontSize = Math.round(clamp(9.5 * tr.fontScale, 8.5, 12) * 10) / 10
+  const fontSize = Math.round(clamp((lines.length > 35 ? 8 : 9.5) * tr.fontScale, 7.5, 11) * 10) / 10
 
   const allRuns = []
   lines.forEach((l, idx) => {
@@ -1056,7 +1139,10 @@ function addCodeToSlide(slide, block, ctx, cursorY) {
 function addImageToSlide(slide, img, tr, fullSlide = false, slideDims = null) {
   const data = imageDataUri(img)
   if (fullSlide && slideDims) {
-    slide.addImage({ data, x: 0, y: 0, w: slideDims.width, h: slideDims.height, sizing: { type: 'contain', w: slideDims.width, h: slideDims.height } })
+    const scale = Math.min(slideDims.width / Math.max(1, img.w), slideDims.height / Math.max(1, img.h))
+    const w = img.w * scale
+    const h = img.h * scale
+    slide.addImage({ data, x: (slideDims.width - w) / 2, y: (slideDims.height - h) / 2, w, h })
     return
   }
   const x = tr.x(img.x)

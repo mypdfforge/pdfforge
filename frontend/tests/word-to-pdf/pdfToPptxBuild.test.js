@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
-import { buildPptxBlob } from '../../src/utils/pdfToPptxBuild.js'
+import {
+  buildPptxBlob,
+  forceRtlParagraph,
+  toPptxRuns,
+  isLikelyHeaderRow,
+  calloutPalette,
+  resolveSlideDims,
+} from '../../src/utils/pdfToPptxBuild.js'
 import { normalizeModelForPptx, restoreVisualRtlText } from '../../src/utils/pdfToPptxPipeline.js'
 import { convertPdfToPptx } from '../../src/features/pdf-to-pptx/engine/engineHost.js'
 
@@ -151,8 +158,6 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     expect(slide1Xml).toContain('Executive Overview')
     expect(slide1Xml).toContain('baseline="-40000"')
     expect(slide1Xml).toContain('baseline="30000"')
-    expect(slide1Xml).toContain('₂')
-    expect(slide1Xml).toContain('²')
     expect(slide1Xml).toContain('B91C1C') // negative currency styling
     expect(slide1Xml).toContain('rtl="1"') // RTL cell support
     expect(slide1Xml).toContain('algn="r"') // RTL right-aligned cell
@@ -289,5 +294,34 @@ describe('PDF to PowerPoint hardened builder & engineHost', () => {
     ctl.abort()
     const validishPdf = new File(['%PDF-1.4'], 'deck.pdf', { type: 'application/pdf' })
     await expect(convertPdfToPptx(validishPdf, { signal: ctl.signal })).rejects.toMatchObject({ code: 'ABORTED' })
+  })
+
+  it('splits Unicode sub/superscripts, repairs RTL cells, infers headers, maps callouts, and resolves dims', () => {
+    const chemRuns = toPptxRuns('H₂SO₄')
+    expect(chemRuns.map((r) => ({ t: r.text, sub: r.options.subscript }))).toEqual([
+      { t: 'H', sub: false },
+      { t: '2', sub: true },
+      { t: 'SO', sub: false },
+      { t: '4', sub: true },
+    ])
+
+    const fixedTc = forceRtlParagraph('<a:tc><a:txBody><a:p><a:pPr algn="l"/><a:r><a:t>مرحباً</a:t></a:r></a:p></a:txBody></a:tc>')
+    expect(fixedTc).toContain('rtl="1"')
+    expect(fixedTc).toContain('algn="r"')
+
+    const rows = [
+      { cells: [{ text: 'ID' }, { text: 'Host' }, { text: 'CPU' }, { text: 'RAM' }] },
+      { cells: [{ text: '1' }, { text: 'srv-1' }, { text: '35%' }, { text: '52%' }] },
+    ]
+    expect(isLikelyHeaderRow(rows[0], 0, rows)).toBe(true)
+    expect(isLikelyHeaderRow({ cells: [{ text: 'Version' }, { text: '1.0' }] }, 0, [])).toBe(false)
+
+    expect(calloutPalette({}, '[CRITICAL] Danger').accent).toBe('DC2626')
+    expect(calloutPalette({}, '[WARNING] Caution').accent).toBe('D97706')
+    expect(calloutPalette({}, '[SUCCESS] Passed').accent).toBe('059669')
+
+    const dims = resolveSlideDims([{ w: 720, h: 405 }], 'auto')
+    expect(dims.width).toBeCloseTo(10, 2)
+    expect(dims.height).toBeCloseTo(5.625, 2)
   })
 })
