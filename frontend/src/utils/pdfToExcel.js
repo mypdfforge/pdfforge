@@ -469,6 +469,27 @@ const numFmt = (n, dec = n.dec) =>
   : n.pct ? (dec ? '0.' + '0'.repeat(dec) + '%' : '0%')
   : (n.cur ? `"${n.cur}"` : '') + (dec ? '#,##0.' + '0'.repeat(dec) : n.comma ? '#,##0' : '0')
 
+function sampleBoxColors(imgData, x0, y0, x1, y1) {
+  const { data, width, height } = imgData
+  const px = (x, y) => {
+    const cx = Math.max(0, Math.min(width - 1, Math.round(x))), cy = Math.max(0, Math.min(height - 1, Math.round(y)))
+    const i = (cy * width + cx) * 4
+    return [data[i], data[i + 1], data[i + 2]]
+  }
+  const bgPts = [px(x0 + 1, y0 + 1), px(x1 - 1, y0 + 1), px(x0 + 1, y1 - 1), px(x1 - 1, y1 - 1)]
+  const bg = [0, 1, 2].map((c) => Math.round(bgPts.reduce((s, p) => s + p[c], 0) / 4))
+  let fg = null, bestD = 35
+  const stepX = Math.max(1, Math.floor((x1 - x0) / 14)), stepY = Math.max(1, Math.floor((y1 - y0) / 6))
+  for (let y = y0 + 1; y < y1; y += stepY) {
+    for (let x = x0 + 1; x < x1; x += stepX) {
+      const p = px(x, y)
+      const d = Math.abs(p[0] - bg[0]) + Math.abs(p[1] - bg[1]) + Math.abs(p[2] - bg[2])
+      if (d > bestD) { bestD = d; fg = p }
+    }
+  }
+  return { fill: lum(bg) < 0.97 ? bg : null, color: fg }
+}
+
 async function ocrPageItems(page, onProgress, pageNum, totalPages) {
   if (typeof document === 'undefined') return []
   const { getPaddleOCREngine, ocrRawLines } = await import('./paddleOcr.js')
@@ -476,23 +497,39 @@ async function ocrPageItems(page, onProgress, pageNum, totalPages) {
     onProgress?.({ done: pageNum - 1, total: totalPages, label: p.label || 'Loading OCR engine…' })
   })
   onProgress?.({ done: pageNum - 1, total: totalPages, label: `Running free OCR on page ${pageNum} of ${totalPages}…` })
-  const scale = 2
+  const baseVp = page.getViewport({ scale: 1 })
+  const scale = Math.min(2.5, 2800 / Math.max(baseVp.width, baseVp.height, 1))
   const vp = page.getViewport({ scale })
   const canvas = document.createElement('canvas')
   canvas.width = Math.floor(vp.width)
   canvas.height = Math.floor(vp.height)
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   await page.render({ canvasContext: ctx, viewport: vp }).promise
-  const lines = await ocrRawLines(engine, ctx.getImageData(0, 0, canvas.width, canvas.height), { pack })
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const lines = await ocrRawLines(engine, imgData, { pack })
   canvas.width = 0; canvas.height = 0
-  return lines
-    .filter((ln) => ln.text && ln.text.trim() && Array.isArray(ln.box) && ln.box.length >= 4)
-    .map((ln) => {
-      const xs = ln.box.map((p) => p[0] / scale), ys = ln.box.map((p) => p[1] / scale)
-      const x = Math.min(...xs), x1 = Math.max(...xs), top = Math.min(...ys), bot = Math.max(...ys)
-      const size = Math.max(bot - top, 7)
-      return { str: ln.text.trim(), x, w: Math.max(x1 - x, 4), base: bot - size * 0.15, size, top, bot, bold: false, italic: false, font: 'Calibri' }
-    })
+  const out = []
+  for (const ln of lines) {
+    if (!ln.text || !ln.text.trim() || !Array.isArray(ln.box) || ln.box.length < 4) continue
+    const xs = ln.box.map((p) => p[0]), ys = ln.box.map((p) => p[1])
+    const px0 = Math.min(...xs), px1 = Math.max(...xs), py0 = Math.min(...ys), py1 = Math.max(...ys)
+    const { fill, color } = sampleBoxColors(imgData, px0, py0, px1, py1)
+    const x = px0 / scale, boxW = Math.max((px1 - px0) / scale, 4), top = py0 / scale, bot = py1 / scale
+    const size = Math.max(bot - top, 7)
+    const raw = ln.text.trim(), parts = raw.split(/\s{2,}/)
+    if (parts.length > 1) {
+      let off = 0
+      for (const part of parts) {
+        const idx = raw.indexOf(part, off)
+        const sx = x + (idx / raw.length) * boxW, sw = Math.max((part.length / raw.length) * boxW, 4)
+        out.push({ str: part, x: sx, w: sw, base: bot - size * 0.15, size, top, bot, bold: false, italic: false, font: 'Calibri', fill, color })
+        off = idx + part.length
+      }
+    } else {
+      out.push({ str: raw, x, w: boxW, base: bot - size * 0.15, size, top, bot, bold: false, italic: false, font: 'Calibri', fill, color })
+    }
+  }
+  return out
 }
 
 // ───────────────────────── 5. PAGE -> BLOCKS ─────────────────────────
@@ -544,6 +581,7 @@ async function pageToBlocks(page, opts, boldFonts, onProgress, pageNum, totalPag
       for (const r of ex.rects) {
         if (s.x + s.w / 2 >= r.x0 && s.x + s.w / 2 <= r.x1 && cy >= r.y0 && cy <= r.y1 && (r.y1 - r.y0) < size * 4 && lum(r.col) < 0.97) s.fill = r.col
       }
+      if (!s.fill) s.fill = s.items.find((i) => i.fill)?.fill || null
     })
     blocks.push({ type: 'line', top: l.base - size * 0.8, size, segs })
   }

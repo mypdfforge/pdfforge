@@ -1893,6 +1893,25 @@ export async function xlsxToPdf(file, onProgress) {
           const imgData = canvas.toDataURL('image/jpeg', 0.94)
           jspdf.addImage(imgData, 'JPEG', 0, 0, PAGE_W_MM, PAGE_H_MM, undefined, 'FAST')
 
+          // Overlay invisible selectable text layer so PDF-to-Excel works natively without OCR
+          const hostRect = pageEl.getBoundingClientRect()
+          if (hostRect.width > 0 && hostRect.height > 0 && typeof document.createTreeWalker === 'function') {
+            const sx = PAGE_W_MM / hostRect.width, sy = PAGE_H_MM / hostRect.height
+            const walker = document.createTreeWalker(pageEl, NodeFilter.SHOW_TEXT)
+            let node
+            while ((node = walker.nextNode())) {
+              const txt = node.nodeValue?.trim()
+              if (!txt) continue
+              const range = document.createRange()
+              range.selectNodeContents(node)
+              const r = range.getBoundingClientRect()
+              if (r.width <= 0 || r.height <= 0) continue
+              const fs = parseFloat(getComputedStyle(node.parentElement).fontSize) || 11
+              jspdf.setFontSize(Math.max(4, Math.min(fs * sy * 2.83465, 24)))
+              jspdf.text(txt, (r.left - hostRect.left) * sx, (r.bottom - hostRect.top - 1) * sy, { renderingMode: 'invisible' })
+            }
+          }
+
           canvas.width = 0
           canvas.height = 0
 
