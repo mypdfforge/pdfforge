@@ -13,7 +13,7 @@ import { reconstructPageLayout, enrichLineGeometry } from './ocrLayoutAnalysis.j
 import {
   routeRegions, dedupeLines, lineWords, isRtlText, detectScript, overlap,
   isFragmentOverlap, similarity, classifyTokenType, validateJwtToken, decodeWithCtcMultiChar,
-  scriptsInText, visualToLogicalRtl,
+  scriptsInText, visualToLogicalRtl, isLikelyGibberish,
 } from './ocrPostProcess.js'
 
 /* ───────────── ONNX runtime from CDN (keeps Cloudflare asset < 25 MiB) ───────────── */
@@ -217,7 +217,7 @@ export async function routeScriptPacks(canvas, lines, {
   const report = { rerouted: 0, suspect: 0, suppressed: 0, packsTried: [], packsMissing: [] }
   if (!canvas || !lines?.length || typeof getEngine !== 'function') return report
   const suspects = lines.filter(l => l.source === 'ocr' && l.text && !l.recovered &&
-    ((l.mean ?? 1) < suspectBelow || scriptsInText(l.text).size >= 3)).slice(0, max)
+    ((l.mean ?? 1) < suspectBelow || scriptsInText(l.text).size >= 3 || isLikelyGibberish(l.text))).slice(0, max)
   if (!suspects.length) return report
 
   const cands = []
@@ -244,7 +244,8 @@ export async function routeScriptPacks(canvas, lines, {
         if (fit >= 0.6 && (!best || score > best.score)) best = { pk, text, mean, score, rtl: r.some(t => t.rtlReordered) }
       } catch { /* pack failed on this crop */ }
     }
-    if (best && best.mean >= (l.mean ?? 0) + 0.08 && best.mean >= 0.6) {
+    const gib = isLikelyGibberish(l.text)
+    if (best && best.mean >= 0.6 && (gib || best.mean >= (l.mean ?? 0) + 0.08)) {
       l.text = best.text; l.mean = best.mean; l.pack = best.pk; l.rerouted = true
       if (best.rtl) l.rtlReordered = true
       report.rerouted++
@@ -522,6 +523,69 @@ export async function recoverCodeClosers(engine, canvas, lines, { maxProbe = 12 
   return out
 }
 
+
+/**
+ * Emoji / pictograph clusters that det+rec read as junk ("l≤ □Q o□ Y qCheck"). The line crop is split
+ * into glyph blobs left to right; leading blobs are silhouette-matched against locally rendered
+ * candidates (SYMBOL_CANDIDATES). Only blobs above minIoU are accepted, a miss stops the scan, and the
+ * line is flagged for review. The remaining words keep the recognizer's reading from the first
+ * 3-letter word on. Needs a canvas, so it is browser-only.
+ */
+export function recoverSymbolClusters(canvas, lines, { minIoU = 0.72 } = {}) {
+  if (!canvas || !lines?.length) return 0
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return 0
+  const tpls = getTemplates()
+  let n = 0
+  for (const l of lines) {
+    if (l.source !== 'ocr' || !l.text || !(isLikelyGibberish(l.text) || /[□▯�]/.test(l.text))) continue
+    const xs = l.box.map(p => p[0]), ys = l.box.map(p => p[1])
+    const x0 = Math.max(0, Math.floor(Math.min(...xs))), y0 = Math.max(0, Math.floor(Math.min(...ys)))
+    const w = Math.min(canvas.width - x0, Math.ceil(Math.max(...xs)) - x0), h = Math.min(canvas.height - y0, Math.ceil(Math.max(...ys)) - y0)
+    if (w < 8 || h < 6) continue
+    const d = ctx.getImageData(x0, y0, w, h).data
+    const ink = new Array(w).fill(0)
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+      const sat = Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2])
+      if (lum < 150 || sat > 60) ink[x]++
+    }
+    const gap = Math.max(2, Math.round(h * 0.18))
+    const blobs = []
+    for (let x = 0; x < w;) {
+      if (!ink[x]) { x++; continue }
+      let e = x, miss = 0
+      while (e < w && miss <= gap) { if (ink[e]) miss = 0; else miss++; e++ }
+      blobs.push([x, e - miss])
+      x = e
+    }
+    const glyphs = []
+    let lastEnd = 0
+    for (const [bx0, bx1] of blobs) {
+      const bw = bx1 - bx0
+      if (bw < h * 0.45 || bw > h * 1.9) break
+      const c = document.createElement('canvas'); c.width = bw; c.height = h
+      const cx = c.getContext('2d', { willReadFrequently: true })
+      cx.putImageData(ctx.getImageData(x0 + bx0, y0, bw, h), 0, 0)
+      const sil = silhouette(cx, bw, h)
+      let best = null
+      for (const t of tpls) { const v = silhouetteIoU(sil, t.sil); if (!best || v > best.v) best = { ch: t.ch, v } }
+      if (!best || best.v < minIoU) break
+      glyphs.push(best.ch); lastEnd = bx1
+    }
+    if (!glyphs.length) continue
+    const m = l.text.match(/[A-Za-z]{3,}/)
+    const rest = m ? l.text.slice(m.index) : ''
+    l.rawText = l.text
+    l.text = (glyphs.join(' ') + ' ' + rest).trim()
+    l.symbolRecovered = glyphs.join('')
+    l.flagged = true
+    n++
+  }
+  return n
+}
+
 /**
  * Leading glyph recovery for markers det/rec cannot read (emoji, ✓ ✗ ☑ ☒ ☐ ○ ◉). The dictionary has no
  * pictographs, so a crop of an emoji decodes as junk (√ ? □ a AO XNO). Silhouette-match the blob left
@@ -677,8 +741,9 @@ export function evaluateQualityGates(pages) {
         const reason = a.inferredCloser ? 'inferred_code_closer'
           : a.suppressLayer ? 'unreadable_or_unsupported_script_not_in_text_layer'
           : a.suspectScript ? 'possible_unsupported_script'
-          : a.symbolRecovered ? 'symbol_template_match' : 'low_confidence'
-        reviewQueue.push({ page: pIdx + 1, text: a.text, confidence: a.confidence, bbox: a.bbox, reason })
+          : a.symbolRecovered ? 'symbol_template_match'
+          : a.tokenRepaired ? 'long_string_repaired_verify_against_image' : 'low_confidence'
+        reviewQueue.push({ page: pIdx + 1, text: a.text, rawText: a.rawText, confidence: a.confidence, bbox: a.bbox, reason })
       }
       for (let j = i + 1; j < ls.length; j++) {
         const b = ls[j]

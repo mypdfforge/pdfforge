@@ -19,11 +19,46 @@ import {
   shouldJoinWithoutSpace,
   normalizeForCompare,
   repairCodeSyntax,
+  repairProtectedString,
+  quarantineGibberish,
 } from './ocrPostProcess.js'
 
 const median = arr => {
   const a = arr.filter(x => x > 0).sort((x, y) => x - y)
   return a.length ? a[Math.floor(a.length / 2)] : 0
+}
+
+/**
+ * Wrapped URL / JWT / Base64 lines are repaired as ONE string (same length, confusable classes only)
+ * and split back, so the PDF text layer carries the corrected token and wrapping is untouched.
+ */
+export function repairProtectedLines(lines) {
+  const tok = l => l.source !== 'native' && !l.unreadable && l.text && !/\s/.test(l.text.trim()) && l.text.trim().length >= 20 && /[A-Za-z0-9]/.test(l.text)
+  const sorted = lines.filter(tok).sort((a, b) => a.yMin - b.yMin || a.xMin - b.xMin)
+  let group = []
+  const flush = () => {
+    if (group.length) {
+      const joined = group.map(l => l.text.trim()).join('')
+      const fixed = repairProtectedString(joined)
+      if (fixed !== joined && fixed.length === joined.length) {
+        let pos = 0
+        for (const l of group) {
+          const n = l.text.trim().length
+          l.text = fixed.slice(pos, pos + n)
+          l.tokenRepaired = true
+          l.flagged = true
+          pos += n
+        }
+      }
+    }
+    group = []
+  }
+  for (const l of sorted) {
+    const prev = group[group.length - 1]
+    if (prev && (l.yMin - prev.yMax > prev.height * 1.6 || Math.abs(l.xMin - prev.xMin) > prev.height * 3)) flush()
+    group.push(l)
+  }
+  flush()
 }
 
 export function enrichLineGeometry(rawLines, pageNumber = 1) {
@@ -43,7 +78,7 @@ export function enrichLineGeometry(rawLines, pageNumber = 1) {
       source: src,
       origin: src === 'native' ? 'source-text' : 'recognized',
       confidence: conf,
-      flagged: src !== 'native' && conf < 0.85,
+      flagged: !!line.flagged || (src !== 'native' && conf < 0.85),
       script: line.script || detectScript(line.text),
       originalIndex: index,
       xMin, xMax, yMin, yMax,
@@ -99,6 +134,11 @@ function looksLikeProseColumns(multiRows) {
   const avg = cells.reduce((s, c) => s + c.text.length, 0) / cells.length
   if (avg < 24 || multiRows.length < 4) return false
   const nCols = Math.max(...multiRows.map(r => r.length))
+  // term | definition tables: one column of short labels next to long text is a table, not prose columns
+  for (let c = 0; c < nCols; c++) {
+    const col = multiRows.map(r => r[c]?.text.length).filter(Boolean)
+    if (col.length >= 3 && col.reduce((a, b) => a + b, 0) / col.length < 0.5 * avg && Math.max(...col) < 40) return false
+  }
   for (let c = 0; c < nCols; c++) {
     const w = multiRows.map(r => r[c]?.width).filter(Boolean)
     if (w.length >= 4 && median(w) / Math.max(...w) < 0.75) return false
@@ -138,7 +178,7 @@ function buildTable(run, medH) {
     const gap = prevBottom == null ? Infinity : rowTop(r) - prevBottom
     const cells = r.map(c => {
       const [c0, c1] = colsOf(c)
-      return { c0, c1, text: c.text.trim(), xMin: c.xMin, xMax: c.xMax, yMin: c.yMin, yMax: c.yMax }
+      return { c0, c1, text: c.text.trim(), xMin: c.xMin, xMax: c.xMax, yMin: c.yMin, yMax: c.yMax, src: [c] }
     })
 
     // Wrapped continuation inside a cell:
@@ -157,6 +197,7 @@ function buildTable(run, medH) {
         const host = prevRow.cells.find(p => p.c0 <= cell.c0 && p.c1 >= cell.c0)
         if (host) {
           host.text += (shouldJoinWithoutSpace(host.text, cell.text) ? '' : ' ') + cell.text
+          host.src.push(...cell.src)
           host.yMax = Math.max(host.yMax, cell.yMax)
           host.xMax = Math.max(host.xMax, cell.xMax)
           host.xMin = Math.min(host.xMin, cell.xMin)
@@ -208,7 +249,7 @@ function markRowSpans(rows, nCols) {
 }
 
 function renderTable(rows, nCols) {
-  const clean = t => fixFieldConfusables(t).replace(/\s+/g, ' ').trim()
+  const clean = t => normalizePunctuation(fixFieldConfusables(t)).replace(/\s+/g, ' ').trim()
   rows.forEach(r => r.cells.forEach(c => {
     c.text = clean(c.text)
     if (/^\(?\s*[+\-€$£¥]?\s*[\d,.]+%?\s*\)?$/.test(c.text)) c.align = 'right'
@@ -232,6 +273,13 @@ function renderTable(rows, nCols) {
         rows.some(r => r.cells.some(rc => /[μσ±]/.test(rc.text))) ? `${p}α${s}` : m
       )
     }
+  }
+
+  // PDF text layer + JSON read the LINE objects, so every cell correction is written back to them
+  for (const r of rows) for (const c of r.cells) {
+    const live = c.src.filter(l => !l.unreadable)
+    if (c.src.length === 1 && live.length) c.src[0].text = c.text
+    else for (const l of live) l.text = clean(l.text)
   }
 
   const md = rows.map(r => {
@@ -324,7 +372,8 @@ function detectTables(lines, medH) {
     if (multi.length >= 2 && !looksLikeProseColumns(multi)) {
       const { rows: trows, nCols } = buildTable(run, medH)
       const t = renderTable(trows, nCols)
-      const flat = run.flat().map(l => ({ ...l, regionType: 'TABLE' }))
+      const flat = run.flat()
+      flat.forEach(l => { l.regionType = 'TABLE' })
       run.flat().forEach(l => used.add(l))
       blocks.push(pseudo('isTable', flat, { table: t, regionType: 'TABLE' }))
     }
@@ -410,6 +459,7 @@ function evalCodeRun(run) {
   const adv = median(cpw) || median(run.map(l => l.width / Math.max(1, l.text.length))) || 7
   const minX = Math.min(...run.map(l => l.xMin))
   const out = []
+  const outIdx = []
   let prev = null
   for (const l of run) {
     if (prev) {
@@ -420,12 +470,15 @@ function evalCodeRun(run) {
     let sp = Math.round((l.xMin - minX) / adv)
     const snapped = Math.round(sp / 4) * 4
     if (Math.abs(sp - snapped) <= 1) sp = snapped // 4-space grid
+    outIdx.push(out.length)
     out.push(' '.repeat(Math.max(0, sp)) + l.text.trim())
     prev = l
   }
   const codeText = repairCodeSyntax(out.join('\n'))
   const validation = validateCodeBrackets(codeText)
-  const tagged = run.map(l => ({ ...l, regionType: 'CODE', noCorrect: true }))
+  const fixedLines = codeText.split('\n')
+  // syntax repairs go back onto the line objects so the PDF text layer matches the exported code
+  const tagged = run.map((l, i) => ({ ...l, text: (fixedLines[outIdx[i]] ?? l.text).trim(), regionType: 'CODE', noCorrect: true }))
   return pseudo('isCode', tagged, { codeText, regionType: 'CODE', bracketValidation: validation })
 }
 
@@ -812,6 +865,8 @@ export function reconstructPageLayout(rawLines, canvasWidth, canvasHeight, pageN
   if (!rawLines || rawLines.length === 0) return empty
 
   const enriched = enrichLineGeometry(rawLines, pageNumber)
+  quarantineGibberish(enriched)
+  repairProtectedLines(enriched)
   const medH = median(enriched.map(l => l.height)) || 14
   const charW = Math.max(5, medH * 0.55)
   const { header, body: rawBody, footer } = partitionPageZones(enriched, canvasHeight)

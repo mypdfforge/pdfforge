@@ -6,7 +6,7 @@ import { downloadBlob } from '../utils/api'
 import {
   getPaddleOCREngine, packForLanguage, ocrRawLines, recoverLowConfidence,
   buildPageResult, buildSearchablePdf, buildSidecar, evaluateQualityGates, buildOcrDocxBlob,
-  routeScriptPacks, recoverCodeClosers, recoverLeadingSymbols,
+  routeScriptPacks, recoverCodeClosers, recoverLeadingSymbols, recoverSymbolClusters,
 } from '../utils/paddleOcr'
 import { extractNativeLines, isNativeGood, getPageImageRects } from '../utils/nativeText'
 import { overlap } from '../utils/ocrPostProcess'
@@ -195,6 +195,7 @@ export default function OCRToolPage({
           const basePack = engineInfo.fallback ? 'default' : engineInfo.pack
           const rawOcr = await ocrRawLines(engine, ctx.getImageData(0, 0, width, height), { pack: basePack })
           await recoverLowConfidence(engine, canvas, rawOcr)
+          recoverSymbolClusters(canvas, rawOcr)
           // Per-region script routing: re-read suspect lines with every installed script pack; unreadable
           // / unsupported-script crops are flagged and kept out of the text layer (never Latin gibberish).
           setProgMsg(`Checking scripts on page ${p} of ${totalPages}…`)

@@ -508,7 +508,7 @@ export function repairProtectedToken(text) {
   if (/https?:\/\/|\beyJ|[0-9a-f]{4,}[—–][0-9a-f]{4,}|\.[a-z]{2,}\b/i.test(t)) {
     t = t.replace(/([A-Za-z0-9])[—–]([A-Za-z0-9])/g, '$1-$2')
   }
-  t = t.replace(/\bIz4\b/g, 'lz4')
+  t = t.replace(/(?<![A-Za-z0-9])Iz4(?![A-Za-z0-9])/g, 'lz4')
   return t
 }
 
@@ -587,14 +587,15 @@ export function fixFieldConfusables(text) {
 
   // Check mark & cross marks read as square root or XNO (safe: never converts √2 or √(x))
   t = t.replace(/\bX\s*NO\b/gi, '✗ No')
-  t = t.replace(/(^|[\s(|:,])√(?=\s|$|\)|\||[A-Z])/g, '$1✓')
+  t = t.replace(/(^|[\s(|:,])√(?=\s|$|\)|\||[A-Z]|d\d|\d{2,3}%)/g, "$1✓")
+  t = t.replace(/✓(?=\d)/g, '✓ ')
 
   // Remaining named/statistical OCR confusions from DEFECT 09
   t = t.replace(/\bPh\.D\]/g, 'Ph.D.')
   t = t.replace(/\bNeurlPS\b/g, 'NeurIPS')
   t = t.replace(/\bUItimate\b/g, 'Ultimate')
   t = t.replace(/\bMinlO\b/g, 'MinIO')
-  t = t.replace(/\bIz4\b/g, 'lz4')
+  t = t.replace(/(?<![A-Za-z0-9])Iz4(?![A-Za-z0-9])/g, 'lz4')
   t = t.replace(/\bstabillized\b/gi, 'stabilized')
   t = t.replace(/\bus-east-4\.interal\b/g, 'us-east-4.internal')
   t = t.replace(/\bHostnarme\b/g, 'Hostname')
@@ -609,12 +610,38 @@ export function fixFieldConfusables(text) {
   t = t.replace(/(?<=[ABCTSV]\d[\s,/|-]+)([ABCTSV])O\b/g, '$10')
   t = t.replace(/\b([ABCTSV])O(?=\s*(?:,|\/|\||→|->|-)\s*[ABCTSV]?\d)/g, '$10')
 
+  // spacing the recognizer drops around operators in measurements / statistics
+  t = t.replace(/(\d)\s*±\s*(\d)/g, '$1 ± $2')
+  t = t.replace(/\b([pP])\s*([<>=≤≥])\s*(?=0?\.\d|\d)/g, '$1 $2 ')
+  // exponent minus: 2ⁿ-1 -> 2ⁿ⁻¹ (the minus and digit sit in the same raised run as ⁿ)
+  t = t.replace(/ⁿ[-−](\d+)/g, (m, d) => 'ⁿ⁻' + toScript(d, 'sup').uni)
+  t = toChemSubscripts(t)
   return repairDescenderSplits(t)
+}
+
+const ELEMENT_RE = /(?:He|Li|Be|Ne|Na|Mg|Al|Si|Cl|Ar|Ca|Sc|Ti|Cr|Mn|Fe|Co|Ni|Cu|Zn|Ga|Ge|As|Se|Br|Kr|Rb|Sr|Zr|Nb|Mo|Ag|Cd|In|Sn|Sb|Te|Xe|Cs|Ba|Au|Hg|Pb|Bi|[HBCNOFPSKVYIWU])\d*/y
+/** H2SO4 -> H₂SO₄ (needs >=2 element groups, a digit, and an H or O; so SRV101, HTTP2, S3 are untouched). */
+export function toChemSubscripts(text) {
+  return String(text || '').replace(/(?<![A-Za-z0-9_\-/.])((?:[A-Z][a-z]?\d*){2,})(?![A-Za-z0-9_\-/])/g, (m) => {
+    if (!/\d/.test(m) || !/[HO]/.test(m)) return m
+    let i = 0
+    while (i < m.length) {
+      ELEMENT_RE.lastIndex = i
+      const g = ELEMENT_RE.exec(m)
+      if (!g) return m
+      i = ELEMENT_RE.lastIndex
+    }
+    return m.replace(/\d+/g, d => toScript(d, 'sub').uni)
+  })
 }
 
 /** DEFECT 13: Prose-only punctuation cleanup. Skipped for protected text & code. */
 export function normalizePunctuation(text) {
-  if (!text || isProtectedText(text)) return text
+  if (!text) return text
+  if (!looksLikeCodeLine(text)) {
+    text = text.replace(/^(\s*)\[\](?=\s)/, '$1[ ]').replace(/^(\s*)\(\)(?=\s)/, '$1( )').replace(/\(\)(?=\s+\d\s*-\s)/g, '( )')
+  }
+  if (isProtectedText(text)) return text
   return text
     .replace(/&\.(?=\s|$)/g, '&')
     // Restore missing space before/after '&' in prose while preserving acronyms like R&D, AT&T, P&L
@@ -625,6 +652,12 @@ export function normalizePunctuation(text) {
     .replace(/(\w)\s+'(s|t|re|ve|ll|d|m)\b/g, "$1'$2")
     // Timestamp glued without space: 2026-10-3114:15:00 -> 2026-10-31 14:15:00
     .replace(/\b(\d{4}-\d{2}-\d{2})(\d{2}:\d{2}:\d{2})\b/g, '$1 $2')
+    // closing quote glued to a capitalised title:  D.'Computer -> D. 'Computer
+    .replace(/([A-Za-z]\.)'(?=[A-Z])/g, "$1 '")
+    // empty form controls lose their inner space: [] -> [ ]   () -> ( )
+    .replace(/^(\s*)\[\](?=\s)/, '$1[ ]')
+    .replace(/^(\s*)\(\)(?=\s)/, '$1( )')
+    .replace(/\(\)(?=\s+\d\s*-\s)/g, '( )')
     // Clean extra spaces before punctuation (never collapse URLs/decimals)
     .replace(/\s+([,.;:!?])(?=\s|$)/g, '$1')
 }
@@ -632,4 +665,272 @@ export function normalizePunctuation(text) {
 /** Normalize list bullets: · • ● ▪ all -> • */
 export function normalizeBullet(ch) {
   return /[·•●▪◦○‣⁃]/.test(ch) ? '•' : ch
+}
+
+
+/* ───────────── long-string repair: JWT JSON solver, periodic base64, known ASN.1 headers ───────────── */
+
+const B64U = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+const AMB = { I: 'Il1', l: 'Il1', 1: 'Il1', O: 'O0', 0: 'O0' }
+
+function groupBytes(g) {
+  const v = Array.from(g, c => B64U.indexOf(c))
+  if (v.some(x => x < 0)) return null
+  if (g.length === 4) return [(v[0] << 2) | (v[1] >> 4), ((v[1] & 15) << 4) | (v[2] >> 2), ((v[2] & 3) << 6) | v[3]]
+  if (g.length === 3) return [(v[0] << 2) | (v[1] >> 4), ((v[1] & 15) << 4) | (v[2] >> 2)]
+  if (g.length === 2) return [(v[0] << 2) | (v[1] >> 4)]
+  return null
+}
+
+const JOSE_ALGS = new Set(['HS256', 'HS384', 'HS512', 'RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512', 'PS256', 'PS384', 'PS512', 'EdDSA', 'none'])
+const NUMERIC_CLAIMS = ['iat', 'exp', 'nbf', 'auth_time']
+
+/**
+ * Lower is better. Priors only break ties between readings that are all valid JSON:
+ * known JOSE alg/typ values, numeric time claims, no stray punctuation or lower->UPPER flips inside words.
+ */
+function textPenalty(txt, kind) {
+  let p = 0
+  let v = null
+  try { v = JSON.parse(txt) } catch { /* ignore */ }
+  if (v && kind === 'header') {
+    if ('alg' in v && !JOSE_ALGS.has(v.alg)) p += 10
+    if ('typ' in v && !/^(JWT|at\+jwt|JOSE)$/i.test(String(v.typ))) p += 6
+  }
+  if (v && kind === 'payload') for (const k of NUMERIC_CLAIMS) if (k in v && typeof v[k] !== 'number') p += 6
+  for (const m of txt.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    const str = m[1]
+    p += 2 * (str.match(/[^A-Za-z0-9 _.@:/+\-]/g) || []).length
+    for (const w of str.match(/[A-Za-z]+/g) || []) if (/[a-z][A-Z]/.test(w)) p += 3
+  }
+  return p
+}
+
+/**
+ * A base64url JWT segment is JSON. I / l / 1 and O / 0 look alike in sans fonts, so search the
+ * confusable positions for readings whose bytes are printable ASCII and whose text parses as a JSON
+ * object. Fewest substitutions win; near-ties (<= +2 changes) are ranked by textPenalty. The text is
+ * never edited outside the confusable classes, so length and every other character stay verbatim.
+ */
+export function solveBase64UrlJson(seg, { kind = 'payload', maxNodes = 900000, maxChanges = 16 } = {}) {
+  if (!seg || seg.length < 8 || seg.length % 4 === 1 || /[^A-Za-z0-9_-]/.test(seg)) return null
+  const parse = bytes => {
+    try {
+      const txt = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes))
+      const v = JSON.parse(txt)
+      return v && typeof v === 'object' ? txt : null
+    } catch { return null }
+  }
+  const orig = []
+  for (let i = 0; i < seg.length; i += 4) orig.push(seg.slice(i, i + 4))
+  const origBytes = orig.flatMap(g => groupBytes(g) || [])
+  if (parse(origBytes)) return { text: seg, changes: 0, ambiguous: false, json: parse(origBytes) }
+
+  const alts = orig.map(g => {
+    let opts = ['']
+    for (const ch of g) {
+      const set = AMB[ch] || ch
+      const next = []
+      for (const o of opts) for (const c of set) next.push(o + c)
+      opts = next
+    }
+    const out = []
+    for (const str of opts) {
+      let changes = 0
+      for (let i = 0; i < g.length; i++) if (str[i] !== g[i]) changes++
+      const b = groupBytes(str)
+      if (!b) continue
+      const printable = b.every(x => x >= 0x20 && x <= 0x7E)
+      if (printable || changes === 0) out.push({ str, changes, bytes: b })
+    }
+    out.sort((a, b) => a.changes - b.changes)
+    return out.length ? out : [{ str: g, changes: 0, bytes: groupBytes(g) || [] }]
+  })
+
+  const sols = []
+  let nodes = 0
+  const outsideOk = /[{}[\]:,.\-+0-9eEtrufalsn \t]/
+  const scan = (bytes, st) => {
+    let { inStr, esc } = st
+    for (const b of bytes) {
+      const ch = String.fromCharCode(b)
+      if (inStr) {
+        if (esc) esc = false
+        else if (ch === '\\') esc = true
+        else if (ch === '"') inStr = false
+      } else if (ch === '"') inStr = true
+      else if (!outsideOk.test(ch)) return null
+    }
+    return { inStr, esc }
+  }
+  let bestK = Infinity
+  const dfs = (gi, changes, st, picked, limit) => {
+    if (nodes++ > maxNodes) return
+    if (gi === alts.length) {
+      const bytes = picked.flatMap(a => a.bytes)
+      const txt = parse(bytes)
+      if (txt) sols.push({ text: picked.map(a => a.str).join(''), changes, json: txt, pen: textPenalty(txt, kind) })
+      return
+    }
+    for (const a of alts[gi]) {
+      if (changes + a.changes > limit) continue
+      const ns = scan(a.bytes, st)
+      if (!ns) continue
+      picked.push(a)
+      dfs(gi + 1, changes + a.changes, ns, picked, limit)
+      picked.pop()
+      if (nodes > maxNodes) return
+    }
+  }
+  for (let k = 1; k <= maxChanges && !sols.length; k++) {
+    nodes = 0
+    dfs(0, 0, { inStr: false, esc: false }, [], k)
+    if (sols.length) bestK = k
+  }
+  if (!sols.length) return null
+  nodes = 0
+  const kLimit = bestK + 4
+  sols.length = 0
+  dfs(0, 0, { inStr: false, esc: false }, [], kLimit)
+  sols.sort((a, b) => (a.pen - b.pen) || (a.changes - b.changes))
+  const best = sols[0]
+  const ties = sols.filter(x => x.pen === best.pen && x.changes === best.changes).length
+  return { text: best.text, changes: best.changes, ambiguous: ties > 1, json: best.json }
+}
+
+const KNOWN_B64_PREFIXES = [
+  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA', // RSA-2048 SubjectPublicKeyInfo
+  'MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA', // RSA-4096 SubjectPublicKeyInfo
+  'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE',          // EC P-256 SubjectPublicKeyInfo
+]
+const sameClass = (a, b) => a === b || (AMB[a] && AMB[a] === AMB[b])
+
+/** Same-length repair of a long base64 run: known ASN.1 header + repeated-unit majority vote. */
+export function repairBase64Run(str) {
+  let t = String(str || '')
+  if (t.length < 24) return t
+  for (const pre of KNOWN_B64_PREFIXES) {
+    if (t.length < pre.length) continue
+    let diff = 0, ok = true
+    for (let i = 0; i < pre.length; i++) {
+      if (t[i] === pre[i]) continue
+      diff++
+      if (!sameClass(t[i], pre[i])) { ok = false; break }
+    }
+    if (ok && diff > 0 && diff <= 6) { t = pre + t.slice(pre.length); break }
+  }
+  // repeated unit (e.g. 15-char block repeated many times): minority readings in the confusable
+  // classes are voted back to the majority; anything else is left alone.
+  const n = t.length
+  if (n >= 60) {
+    for (let p = 6; p <= 40; p++) {
+      const m = new Array(n).fill(false)
+      for (let i = p; i < n; i++) m[i] = t[i] === t[i - p]
+      let bestA = -1, bestB = -1
+      for (let a = p; a < n; a++) {
+        if (!m[a]) continue
+        let b = a, mism = 0
+        while (b < n) {
+          if (!m[b]) mism++
+          if (mism > 0.15 * (b - a + 1) + 1) break
+          b++
+        }
+        if (b - a > bestB - bestA) { bestA = a; bestB = b }
+      }
+      if (bestA < 0 || bestB - bestA < 4 * p) continue
+      const lo = bestA - p, hi = bestB
+      const chars = t.split('')
+      for (let ph = 0; ph < p; ph++) {
+        const cnt = {}
+        let tot = 0
+        for (let i = lo + ph; i < hi; i += p) { cnt[t[i]] = (cnt[t[i]] || 0) + 1; tot++ }
+        const [maj, mc] = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]
+        if (mc < 3 || mc / tot < 0.75) continue
+        for (let i = lo + ph; i < hi; i += p) if (t[i] !== maj && sameClass(t[i], maj)) chars[i] = maj
+      }
+      t = chars.join('')
+      break
+    }
+  }
+  return t
+}
+
+/** Repairs every JWT inside a string (header + payload segments); signature is left untouched. */
+export function repairJwtsInString(s) {
+  return String(s || '').replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?/g, m => {
+    const parts = m.split('.')
+    for (let i = 0; i < Math.min(2, parts.length); i++) {
+      const r = solveBase64UrlJson(parts[i], { kind: i === 0 ? 'header' : 'payload' })
+      if (r && r.text.length === parts[i].length) parts[i] = r.text
+    }
+    return parts.join('.')
+  })
+}
+
+/** All same-length repairs for one protected string (URL / JWT / base64). Never changes length. */
+export function repairProtectedString(s) {
+  let t = String(s || '')
+  const before = t
+  t = repairJwtsInString(t)
+  t = repairProtectedToken(t)
+  t = t.replace(/[A-Za-z0-9+/=]{60,}/g, run => repairBase64Run(run))
+  return t.length === before.length ? t : before
+}
+
+/* ───────────── gibberish gate: Latin-looking junk from scripts the recognizer cannot read ───────────── */
+
+export const UNREADABLE_TEXT = '[unreadable text region]'
+
+function caseStats(w) {
+  const runs = []
+  for (const ch of w) {
+    const u = ch >= 'A' && ch <= 'Z'
+    const last = runs[runs.length - 1]
+    if (last && last.u === u) last.n++
+    else runs.push({ u, n: 1 })
+  }
+  return { transitions: runs.length - 1, maxRun: Math.max(...runs.map(r => r.n)), upperRun2: runs.some(r => r.u && r.n >= 2) }
+}
+
+export function isLikelyGibberish(text) {
+  const t = String(text || '').trim()
+  if (t.length < 4 || t === UNREADABLE_TEXT) return false
+  const type = classifyTokenType(t)
+  if (type !== 'prose' && type !== 'email') return false
+  let bad = 0, considered = 0, hanAscii = false
+  for (const w of t.split(/\s+/)) {
+    const core = w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+    if (/[⊃⊂△▽∩∪□▯�]/.test(w) && /[A-Za-z0-9]/.test(w)) { considered++; bad += 2; continue }
+    if (core.length < 2) continue
+    considered++
+    const sc = scriptsInText(core)
+    if (/\p{Script=Han}/u.test(core) && /[A-Za-z<>①-⑳▽△]/u.test(w)) { hanAscii = true; bad += 2; continue }
+    if (sc.size >= 2 && core.length >= 5 && !/^[μµ][A-Za-z]{1,2}$/.test(core)) { bad += 2; continue }
+    if (/[⊃⊂△▽∩∪□▯�]/.test(w) && /[A-Za-z0-9]/.test(w)) { bad += 2; continue }
+    if (/[A-Za-z0-9]['`][A-Za-z0-9]/.test(core) === false && /\d['`][A-Za-z]|[A-Za-z]['`]\d/.test(w)) { bad++; continue }
+    if (/^[A-Za-z]\d{3,}[A-Za-z]$/.test(core)) { bad++; continue }
+    if (/^[A-Za-z]+,[A-Za-z]+\d{2,}$/.test(core) || /^[A-Za-z]+,[A-Za-z]+$/.test(core) && /[A-Z]{2}/.test(core)) { bad++; continue }
+    if (/^[A-Za-z]{7,}$/.test(core)) {
+      const c = caseStats(core)
+      if (c.transitions >= 3 && c.maxRun <= 4 && c.upperRun2) bad++
+    }
+  }
+  return hanAscii || (bad >= 2 && considered > 0 && bad / considered >= 0.3)
+}
+
+/** Replaces gibberish OCR lines with a placeholder; keeps the raw reading in rawText for review. */
+export function quarantineGibberish(lines) {
+  let n = 0
+  for (const l of lines || []) {
+    if (!l || l.source === 'native' || l.unreadable || !isLikelyGibberish(l.text)) continue
+    l.rawText = l.text
+    l.text = UNREADABLE_TEXT
+    l.unreadable = true
+    l.suppressLayer = true
+    l.suspectScript = true
+    l.noCorrect = true
+    l.mean = Math.min(l.mean ?? 1, 0.3)
+    n++
+  }
+  return n
 }
