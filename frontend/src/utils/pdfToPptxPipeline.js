@@ -1,35 +1,243 @@
 /**
- * pdfToPptxPipeline.js — client-side PDF → .pptx converter.
- * Uses the previous Universal Document AST layout engine:
- *   extractPageLayout + extractVectorGeometry → buildDocumentAst → exportAstToPptx (PptxGenJS),
- * with automatic raster slide fallback for scanned PDFs and explicit 'images' mode.
+ * pdfToPptxPipeline.js — hardened, per-page-isolated PDF → .pptx converter.
+ * 100% client-side. Reuses the PDF-to-Word analysis layer (analyzePage, table stitching,
+ * vector extraction, image extraction, abortable/timeout watchdogs, and memory budgets)
+ * plus PPTX-specific normalization for code blocks, deep lists, and visual-order RTL.
  */
-import PptxGenJS from 'pptxgenjs'
-import { extractPageLayout } from './pdfLayoutSegmenter.js'
-import { extractVectorGeometry } from './pdfVectorExtractor.js'
-import { buildDocumentAst } from './documentLayoutAnalysis.js'
-import { exportAstToPptx } from './pptxEmitter.js'
-import { convertPdfToPptxV2 } from './pptx/v2Pipeline.js'
+import { stitchCrossPageTables } from './pdfTableMerge.js'
 import {
+  analyzePage,
   renderPageCanvas,
   canvasToImage,
   releaseCanvas,
   ANALYZE_DEFAULTS,
 } from './pdfToWordPipeline.js'
+import { buildPptxBlob } from './pdfToPptxBuild.js'
 import * as U from './pdfToWordUtils.js'
 
 export { ConversionError } from './pdfToWordUtils.js'
 
 const MIME_PPTX = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
-function uint8ToDataUri(bytes, type = 'jpeg') {
-  let bin = ''
-  const chunk = 0x8000
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk))
+const VISUAL_RTL_CLUE_RE = /(?:^|[\s,(])[ךםןףץ][\u0590-\u05FF]|(?:^|[\s,(])[ًٌٍةى][\u0600-\u06FF]/
+
+/**
+ * Restores pre-reversed visual-order RTL strings (e.g. from PDF generators that emit
+ * Arabic/Hebrew glyphs left-to-right) back into logical reading order.
+ */
+export function restoreVisualRtlText(text, pageLines = null) {
+  if (!text || !U.isMostlyRtl(text) || !VISUAL_RTL_CLUE_RE.test(text)) return text
+
+  const reverseLine = (s) => {
+    // Reverse character order across RTL segments while keeping embedded ASCII numbers/words intact
+    const chars = [...s.trim()].reverse()
+    let out = chars.join('')
+    // Un-reverse embedded LTR/digit runs that were flipped by full-string reversal
+    out = out.replace(/[A-Za-z0-9][A-Za-z0-9.,:/_-]*[A-Za-z0-9]|[A-Za-z0-9]/g, (m) =>
+      m.length > 1 ? [...m].reverse().join('') : m
+    )
+    // Fix mirrored parentheses after reversal
+    out = out.replace(/[()]/g, (ch) => (ch === '(' ? ')' : '('))
+    return out
   }
-  const mime = type === 'png' ? 'image/png' : 'image/jpeg'
-  return `data:${mime};base64,${btoa(bin)}`
+
+  // If the cell text spans multiple original PDF lines, extract RTL runs per PDF line in top-to-bottom order
+  if (Array.isArray(pageLines) && pageLines.length > 0) {
+    const rtlRuns = []
+    const orderedLines = [...pageLines].sort((a, b) => (b.y ?? 0) - (a.y ?? 0))
+    for (const l of orderedLines) {
+      if (!l.text) continue
+      // Extract RTL-dominant spans/chunks from lines that may also contain other columns
+      const matches = l.text.match(/[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF][^\nA-Za-z]{2,}/g) || []
+      for (const m of matches) {
+        const seg = m.trim()
+        if (seg.length >= 3 && text.includes(seg) && !rtlRuns.includes(seg)) {
+          rtlRuns.push(seg)
+        }
+      }
+    }
+    if (rtlRuns.length > 1) {
+      const joined = rtlRuns.map((seg) => reverseLine(seg)).join(' ')
+      if (joined.length >= text.length * 0.7) return joined
+    }
+  }
+
+  return reverseLine(text)
+}
+
+/**
+ * Coalesces shattered code blocks and splits accidentally merged list-item paragraphs
+ * without altering the shared PDF-to-Word segmentation modules.
+ */
+export function normalizeModelForPptx(m) {
+  if (!m || m.mode === 'failed' || m.pageImage || !Array.isArray(m.blocks)) return m
+
+  // 1. Restore visual-order RTL inside table cells first (using unmutated m.lines for line boundaries)
+  for (const b of m.blocks) {
+    if (b.type === 'table' && Array.isArray(b.rows)) {
+      for (const r of b.rows) {
+        for (const c of r.cells || []) {
+          if (c.text && VISUAL_RTL_CLUE_RE.test(c.text)) {
+            c.text = restoreVisualRtlText(c.text, m.lines)
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Restore visual-order RTL in lines
+  for (const l of m.lines || []) {
+    if (l.text && VISUAL_RTL_CLUE_RE.test(l.text)) {
+      l.text = restoreVisualRtlText(l.text)
+      if (Array.isArray(l.spans) && l.spans.length === 1) l.spans[0].text = l.text
+    }
+  }
+
+  // 3. Coalesce fragmented code blocks (when wrapped/commented lines lost isCode)
+  const blocks = []
+  const rawBlocks = m.blocks
+  let i = 0
+  while (i < rawBlocks.length) {
+    const b = rawBlocks[i]
+    if (b.type === 'code') {
+      // Find the furthest code block connected via small-font non-section/non-checkbox lines
+      let endIdx = i
+      for (let j = i + 1; j < rawBlocks.length; j++) {
+        const nb = rawBlocks[j]
+        if (nb.type === 'code') { endIdx = j; continue }
+        if (nb.type === 'paragraph' && nb.line) {
+          const t = (nb.line.text || '').trim()
+          const sz = nb.line.size || 10
+          if (sz <= 10.5 && !/^Section\s+\d+/i.test(t) && !nb.line.checkbox && !nb.line.admonition) {
+            continue
+          }
+        }
+        break
+      }
+
+      if (endIdx > i) {
+        const codeLines = []
+        for (let k = i; k <= endIdx; k++) {
+          const kb = rawBlocks[k]
+          if (kb.type === 'code') codeLines.push(...(kb.lines || []))
+          else if (kb.type === 'paragraph' && kb.line) codeLines.push(kb.line)
+        }
+        // Re-join sub-lines that share the same PDF y coordinate (split by column detector)
+        const byY = []
+        const sorted = [...codeLines].sort((a, b) => (b.y ?? 0) - (a.y ?? 0) || (a.x ?? 0) - (b.x ?? 0))
+        for (const cl of sorted) {
+          const last = byY[byY.length - 1]
+          if (last && Math.abs((last.y ?? 0) - (cl.y ?? 0)) <= 2.5) {
+            last.parts.push(cl)
+          } else {
+            byY.push({ y: cl.y, parts: [cl] })
+          }
+        }
+        const rebuiltLines = byY.map((row) => {
+          row.parts.sort((a, b) => (a.x ?? 0) - (b.x ?? 0))
+          const first = row.parts[0]
+          let text = ''
+          let prevEnd = first.x ?? 0
+          for (let pi = 0; pi < row.parts.length; pi++) {
+            const part = row.parts[pi]
+            if (pi > 0) {
+              const gap = Math.max(1, Math.round(((part.x ?? prevEnd) - prevEnd) / 4.8))
+              text += ' '.repeat(Math.min(gap, 16))
+            }
+            text += (part.text || '').trim()
+            prevEnd = part.xEnd ?? ((part.x ?? 0) + (part.text?.length || 0) * 5)
+          }
+          return { ...first, text, isCode: true }
+        })
+        blocks.push({ type: 'code', lines: rebuiltLines })
+        i = endIdx + 1
+        continue
+      }
+    }
+
+    // 3. Split merged multi-item list paragraphs (e.g., 7-level bullet hierarchy with wide vertical gaps)
+    if (b.type === 'paragraph' && b.line && Array.isArray(b.line.spans) && b.line.spans.length >= 4) {
+      const yTop = b.line.yTop ?? b.line.y
+      const yBot = b.line.yBot ?? b.line.y
+      const lo = Math.min(yTop, yBot) - 2
+      const hi = Math.max(yTop, yBot) + 2
+      const matching = (m.lines || [])
+        .filter((l) => Number.isFinite(l.y) && l.y >= lo && l.y <= hi && (l.text || '').trim())
+        .sort((a, b2) => b2.y - a.y)
+      if (matching.length >= 4) {
+        const gaps = []
+        for (let gi = 1; gi < matching.length; gi++) {
+          gaps.push(Math.abs(matching[gi - 1].y - matching[gi].y))
+        }
+        const minGap = Math.min(...gaps)
+        const sz = b.line.size || 10
+        const hasPeriodEndings = matching.filter((l) => /\.\s*$/.test(l.text.trim())).length
+        // Wide vertical line gap (>= 1.85x font size) + unpunctuated items indicates list items, not wrapped prose
+        if (minGap >= sz * 1.85 && hasPeriodEndings <= Math.floor(matching.length * 0.25)) {
+          for (const ml of matching) {
+            blocks.push({ type: 'paragraph', line: { ...ml, isListLike: true } })
+          }
+          i++
+          continue
+        }
+      }
+    }
+
+    // 3b. Split merged cross-reference / bullet entries (e.g. "• Table 4.1: ... • Table 5.1: ...")
+    if (b.type === 'paragraph' && b.line && !b.line.isCode) {
+      const txt = b.line.text || ''
+      const refMatches = [...txt.matchAll(/(?:•\s*)?(?:Table|Figure|Listing)\s+\d+\.\d+:[\s\S]*?(?=(?:•\s*)?(?:Table|Figure|Listing)\s+\d+\.\d+:|$)/g)]
+        .map((m2) => m2[0].trim())
+        .filter(Boolean)
+      if (refMatches.length > 1) {
+        refMatches.forEach((part, idx) => {
+          blocks.push({
+            type: 'paragraph',
+            line: {
+              ...b.line,
+              text: part,
+              spans: [{ text: part, size: b.line.size, bold: b.line.isBold, italic: b.line.isItalic }],
+              y: (b.line.y ?? 0) - idx * 14,
+              isListLike: true,
+            },
+          })
+        })
+        i++
+        continue
+      }
+    }
+
+    // 3c. Re-attach orphan continuation lines to legal clauses (e.g. "14.1 ..." + "Section 8 (Data Confidentiality).")
+    if (
+      b.type === 'paragraph' &&
+      b.line &&
+      blocks.length > 0 &&
+      blocks[blocks.length - 1].type === 'paragraph' &&
+      /^\d+\.\d+\s+[A-Z]/.test((blocks[blocks.length - 1].line?.text || '').trim())
+    ) {
+      const curTxt = (b.line.text || '').trim()
+      if (
+        curTxt.length <= 80 &&
+        !/^(\d+\.\d+|Section\s+\d+:)/i.test(curTxt) &&
+        /\.\s*$/.test(curTxt) &&
+        !/\.\s*$/.test((blocks[blocks.length - 1].line?.text || '').trim())
+      ) {
+        const prevLine = blocks[blocks.length - 1].line
+        prevLine.text = prevLine.text.trim() + ' ' + curTxt
+        if (Array.isArray(prevLine.spans)) {
+          prevLine.spans.push({ text: ' ' + curTxt, size: prevLine.size, bold: false, italic: false })
+        }
+        i++
+        continue
+      }
+    }
+
+    blocks.push(b)
+    i++
+  }
+
+  m.blocks = blocks
+  return m
 }
 
 /**
@@ -43,21 +251,13 @@ function uint8ToDataUri(bytes, type = 'jpeg') {
  * @returns {Promise<{blob:Blob, warnings:object[], stats:object}>}
  */
 export async function convertPdfToPptx(file, opts = {}) {
-  const engineParam =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('engine')
-      : null
-  const useV1 = opts.engine === 'v1' || engineParam === 'v1'
-  if (!useV1 && opts.mode !== 'images') {
-    return convertPdfToPptxV2(file, opts)
-  }
   const cfg = { ...ANALYZE_DEFAULTS, mode: 'editable', slideLayout: 'auto', ...opts }
   const { signal, onProgress } = cfg
   const warnings = []
   const warn = (page, code, message, level = 'warn') => warnings.push({ page, code, message, level })
   const vel = U.makeVelocityTracker()
   const slice = U.createSlicer(8)
-  const stats = { pages: 0, rich: 0, plain: 0, image: 0, failed: 0, images: 0, packMode: 'ast', elapsedMs: 0 }
+  const stats = { pages: 0, rich: 0, plain: 0, image: 0, failed: 0, images: 0, packMode: 'rich', elapsedMs: 0 }
   const t0 = U.now()
 
   const emit = (stage, message, percent, page, total) => {
@@ -97,101 +297,125 @@ export async function convertPdfToPptx(file, opts = {}) {
     stats.pages = n
     if (!n) throw new U.ConversionError('EMPTY', 'This PDF has no pages.')
 
-    const title = (cfg.title || file.name || 'PDFForge Presentation').replace(/\.pdf$/i, '')
-
-    if (cfg.mode !== 'images') {
-      const pagesData = []
-      for (let p = 1; p <= n; p++) {
-        U.throwIfAborted(signal)
-        emit('analyze', `Analyzing page ${p} of ${n}…`, 2 + 70 * ((p - 1) / n), p - 1, n)
-        const page = await pdf.getPage(p)
-        try {
-          const layout = await U.abortable(
-            U.withTimeout(extractPageLayout(page), cfg.pageTimeoutMs, `Page ${p}`),
-            signal
-          )
-          let vectorGeometry = null
-          try {
-            vectorGeometry = await extractVectorGeometry(page)
-          } catch {
-            vectorGeometry = null
-          }
-          pagesData.push({ ...layout, vectorGeometry })
-        } catch (e) {
-          if (e?.code === 'ABORTED') throw e
-          warn(p, 'PAGE_FAILED', `Page ${p} layout extraction failed (${e?.message || e}).`)
-          pagesData.push({ items: [], pageWidth: 595.28, pageHeight: 841.89, vectorGeometry: null })
-        } finally {
-          try { page.cleanup() } catch { /* ignore */ }
-        }
-        if (p % 10 === 0) { try { pdf.cleanup() } catch { /* ignore */ } }
-        await slice(true)
-      }
-
-      const hasContent = pagesData.some((p) => p.items && p.items.length > 0)
-      if (hasContent) {
-        emit('build', 'Building PowerPoint slides…', 80, n, n)
-        const ast = buildDocumentAst(pagesData, { title })
-        emit('pack', 'Packaging PowerPoint (.pptx)…', 92, n, n)
-        const blob = await exportAstToPptx(ast, PptxGenJS)
-        stats.rich = n
-        stats.elapsedMs = Math.round(U.now() - t0)
-        emit('done', 'Done', 100, n, n)
-        return { blob, warnings, stats }
-      }
-      warn(null, 'SCANNED_FALLBACK', 'No extractable text found; rendered pages as slide images.', 'info')
-    }
-
-    // Raster slide-image mode (or fallback for purely scanned bitmap PDFs)
+    const hist = new Map()
     const mem = { imageBytes: 0, lowMem: false, skipImages: false }
-    const pptx = new PptxGenJS()
-    pptx.author = 'PDFForge'
-    pptx.title = U.cleanText(title)
+    const models = new Array(n)
 
     for (let p = 1; p <= n; p++) {
       U.throwIfAborted(signal)
-      emit('analyze', `Rendering slide ${p} of ${n}…`, 2 + 85 * ((p - 1) / n), p - 1, n)
-      const page = await pdf.getPage(p)
-      const vp = page.getViewport({ scale: 1 })
-      let rendered = null
+      emit('analyze', `Analyzing page ${p} of ${n}…`, 2 + 68 * ((p - 1) / n), p - 1, n)
       try {
-        if (p === 1) {
-          if (cfg.slideLayout === '16:9') pptx.layout = 'LAYOUT_16x9'
-          else if (cfg.slideLayout === '4:3') pptx.layout = 'LAYOUT_4x3'
-          else {
-            pptx.defineLayout({ name: 'PDF', width: vp.width / 72, height: vp.height / 72 })
-            pptx.layout = 'PDF'
+        if (cfg.mode === 'images') {
+          models[p - 1] = await U.abortable(
+            U.withTimeout(renderPageAsSlideModel(pdf, p, mem), cfg.pageTimeoutMs, `Page ${p}`),
+            signal
+          )
+        } else {
+          const m = await U.abortable(
+            U.withTimeout(analyzePage(pdf, p, { pdfjs, hist, mem, warn, cfg }), cfg.pageTimeoutMs, `Page ${p}`),
+            signal
+          )
+          normalizeModelForPptx(m)
+          const hasAnyContent = (m.blocks && m.blocks.length > 0) || (m.images && m.images.length > 0) || m.pageImage
+          if (!hasAnyContent && typeof document !== 'undefined' && !mem.skipImages) {
+            try {
+              const fallbackImg = await renderPageAsSlideModel(pdf, p, mem)
+              m.pageImage = fallbackImg.pageImage
+              m.mode = 'image'
+            } catch { /* keep empty/minimal model */ }
           }
+          models[p - 1] = m
         }
-        rendered = await renderPageCanvas(page, vp, mem)
-        const img = await canvasToImage(rendered.canvas, 0, 0, rendered.canvas.width, rendered.canvas.height, mem, 'jpeg')
-        mem.imageBytes += img.data.byteLength
-        if (mem.imageBytes > cfg.imageBudgetSoft) mem.lowMem = true
-        pptx.addSlide().addImage({
-          data: uint8ToDataUri(img.data, 'jpeg'),
-          x: 0,
-          y: 0,
-          w: '100%',
-          h: '100%',
-        })
-        stats.image++
-        stats.images++
-      } finally {
-        if (rendered) releaseCanvas(rendered.canvas)
-        try { page.cleanup() } catch { /* ignore */ }
+      } catch (e) {
+        if (e?.code === 'ABORTED') throw e
+        warn(p, 'PAGE_FAILED', `Page ${p} could not be analysed (${e?.message || e}).`)
+        models[p - 1] = { pageNum: p, mode: 'failed', w: 720, h: 405, lines: [], blocks: [], images: [], vector: null }
       }
+
+      if (mem.imageBytes > cfg.imageBudgetSoft && !mem.lowMem) {
+        mem.lowMem = true
+        warn(null, 'LOW_MEMORY', 'Large images detected — remaining images are downscaled to keep the browser stable.', 'info')
+      }
+      if (mem.imageBytes > cfg.imageBudgetHard) mem.skipImages = true
+      if (p % 10 === 0) { try { pdf.cleanup() } catch { /* ignore */ } }
       await slice(true)
     }
 
-    emit('pack', 'Packaging PowerPoint (.pptx)…', 94, n, n)
-    const blob = await pptx.write({ outputType: 'blob' })
-    stats.packMode = 'images'
+    const bodySize = U.dominantSize(hist, 11)
+    const title = (cfg.title || file.name || 'Converted Presentation').replace(/\.pdf$/i, '')
+    emit('build', 'Building PowerPoint slides…', 72, 0, n)
+    stats.images = models.reduce((s, m) => s + (m.images?.length || 0) + (m.pageImage ? 1 : 0), 0)
+
+    if (cfg.mode !== 'images') {
+      const stitched = stitchCrossPageTables(models)
+      if (stitched) warn(null, 'TABLE_STITCHED', `${stitched} table(s) continued across pages were merged.`, 'info')
+    }
+
+    const built = await buildPptxBlob(models, {
+      bodySize,
+      title,
+      slideLayout: cfg.slideLayout,
+      warn,
+      yieldFn: slice,
+      isAborted: () => !!signal?.aborted,
+      onProgress: (i, total) =>
+        emit(
+          i >= total ? 'pack' : 'build',
+          i >= total ? 'Packaging PowerPoint (.pptx)…' : `Building slide ${i + 1} of ${total}…`,
+          i >= total ? 92 : 72 + 19 * (i / Math.max(1, total)),
+          i,
+          total
+        ),
+    })
+
+    stats.packMode = built.packMode
+    for (const mode of built.modes) {
+      if (mode === 'image') stats.image++
+      else if (mode === 'failed') stats.failed++
+      else if (mode === 'rich') stats.rich++
+      else stats.plain++
+    }
+
+    for (const m of models) {
+      m.images = null
+      m.pageImage = null
+      m.blocks = null
+      m.lines = null
+      m.vector = null
+    }
+
     stats.elapsedMs = Math.round(U.now() - t0)
     emit('done', 'Done', 100, n, n)
-    return { blob, warnings, stats }
+    return { blob: built.blob, warnings, stats }
   } finally {
     try { await pdf.cleanup?.() } catch { /* ignore */ }
     try { await task?.destroy?.() } catch { /* ignore */ }
+  }
+}
+
+async function renderPageAsSlideModel(pdf, pageNum, mem) {
+  const page = await pdf.getPage(pageNum)
+  const vp = page.getViewport({ scale: 1 })
+  let rendered = null
+  try {
+    rendered = await renderPageCanvas(page, vp, mem)
+    const img = await canvasToImage(rendered.canvas, 0, 0, rendered.canvas.width, rendered.canvas.height, mem, 'jpeg')
+    mem.imageBytes += img.data.byteLength
+    return {
+      pageNum,
+      mode: 'image',
+      w: vp.width,
+      h: vp.height,
+      lines: [],
+      blocks: [],
+      images: [],
+      pageImage: { ...img, w: vp.width, h: vp.height },
+      vector: null,
+      topDown: true,
+    }
+  } finally {
+    if (rendered) releaseCanvas(rendered.canvas)
+    try { page.cleanup() } catch { /* ignore */ }
   }
 }
 
